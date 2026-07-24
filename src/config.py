@@ -17,22 +17,22 @@ CACHE_DIR = os.path.join(DATA_DIR, "_cache")
 DOCS_DIR = os.path.join(ROOT_DIR, "docs")
 
 PRICE_CACHE_PATH = os.path.join(CACHE_DIR, "price_window.json")
-SECTOR_CACHE_PATH = os.path.join(CACHE_DIR, "sector_window.json")
 
-# Rolling internal calc-buffer windows (NOT chart history — see cache.py docstring)
-PRICE_WINDOW_DAYS = 280      # covers 252-trading-day 52w hi/lo + 20d moves with margin
-SECTOR_WINDOW_DAYS = 25      # only need trailing 20 trading days + margin
+# Rolling internal calc-buffer window (NOT chart history — see cache.py docstring).
+# Sized as CHART_BACKFILL_DAYS + NEW_HIGH_LOW_WINDOW so that even the OLDEST day
+# we backfill into the charts still has a full, accurate trailing 252-day lookback
+# for the 52-week-high/low calc — not just the most recent ~28 days of it.
+CHART_BACKFILL_DAYS = 252    # ~1 trading year of real chart history (1W..6M/YTD all work)
+NEW_HIGH_LOW_WINDOW = 252    # ~52 trading weeks
+PRICE_WINDOW_DAYS = CHART_BACKFILL_DAYS + NEW_HIGH_LOW_WINDOW + 20  # + small margin
 
 # Breadth internals thresholds
-NEW_HIGH_LOW_WINDOW = 252    # ~52 trading weeks
 PCT_MOVE_LOOKBACK_DAYS = 5
 PCT_MOVE_THRESHOLDS = [20, 30]  # "% up/down 20%+ / 30%+ in the last 5 days"
 
-FMP_SECTORS = [
-    "Basic Materials", "Communication Services", "Consumer Cyclical",
-    "Consumer Defensive", "Energy", "Financial Services", "Healthcare",
-    "Industrials", "Real Estate", "Technology", "Utilities",
-]
+# Sector/industry performance lookback windows (in trading days) reported per group
+GROUP_CHG_WINDOWS = {"chg_1d": 1, "chg_5d": 5, "chg_20d": 20}
+MIN_GROUP_MEMBERS = 5  # drop sectors/industries too small to be a meaningful bucket
 
 COUNTRIES = {
     "US": {
@@ -43,7 +43,6 @@ COUNTRIES = {
             "sp500": "^GSPC",
             "russell2000": "^RUT",
         },
-        "sectors": FMP_SECTORS,
     },
 }
 

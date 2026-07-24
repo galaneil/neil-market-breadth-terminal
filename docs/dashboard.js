@@ -65,14 +65,18 @@
   }
 
   // ---------- Timeframe filtering ----------
-  const TIMEFRAMES = ["1W", "1M", "YTD", "ALL"];
+  const TIMEFRAMES = ["1W", "1M", "3M", "6M", "YTD", "ALL"];
+  const TIMEFRAME_DAYS = { "1W": 7, "1M": 30, "3M": 91, "6M": 182 };
   function filterByTimeframe(rows, tf) {
     if (!rows.length || tf === "ALL") return rows;
     const lastDate = new Date(rows[rows.length - 1].date);
     let cutoff = null;
-    if (tf === "1W") { cutoff = new Date(lastDate); cutoff.setDate(cutoff.getDate() - 7); }
-    else if (tf === "1M") { cutoff = new Date(lastDate); cutoff.setDate(cutoff.getDate() - 30); }
-    else if (tf === "YTD") { cutoff = new Date(lastDate.getFullYear(), 0, 1); }
+    if (tf === "YTD") {
+      cutoff = new Date(lastDate.getFullYear(), 0, 1);
+    } else if (TIMEFRAME_DAYS[tf]) {
+      cutoff = new Date(lastDate);
+      cutoff.setDate(cutoff.getDate() - TIMEFRAME_DAYS[tf]);
+    }
     if (!cutoff) return rows;
     return rows.filter(function (r) { return new Date(r.date) >= cutoff; });
   }

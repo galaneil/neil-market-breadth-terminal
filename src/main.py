@@ -1,13 +1,17 @@
 """
 main.py — daily pipeline orchestration.
 
-Order: build universe -> backfill/update price cache -> compute index + breadth
-metrics -> backfill/update sector cache -> compute sector ranks -> compute
-industry ranks (TradingView) -> append everything to data/*.jsonl -> render
-docs/index.html.
+Every run recomputes the FULL trailing CHART_BACKFILL_DAYS window for every
+panel (not just today) and upserts all of it via store.py, which is idempotent
+per date — re-writing an unchanged historical day is harmless. This means the
+pipeline is self-healing (a missed day, a widened backfill window, or a
+one-off local re-run all just work) without needing separate "first run only"
+backfill logic.
 
-Idempotent: safe to re-run on the same day (store.py upserts by date instead
-of duplicating rows; cache.py backfill only pulls tickers not already cached).
+Order: build universe -> backfill/update price cache -> pull TradingView
+classification (industry + sector tags) -> backfill index/breadth/sector/
+industry history from the cache -> upsert into data/*.jsonl -> render
+docs/index.html.
 """
 
 import os
@@ -20,8 +24,9 @@ import cache as cache_mod
 import universe
 import store
 import render
+import tv_industry
 from fmp_client import FMPClient
-from metrics import indices, sectors, breadth, industries
+from metrics import indices, sectors, industries, breadth, groups as groups_mod
 
 
 def log(msg):
@@ -49,7 +54,8 @@ def main():
     price_cache = cache_mod.load(config.PRICE_CACHE_PATH)
     missing = [t for t in all_price_tickers if t not in price_cache]
     if missing:
-        log(f"Backfilling price history for {len(missing)} new tickers (one-time cost)...")
+        log(f"Backfilling price history for {len(missing)} new tickers "
+            f"(up to {config.PRICE_WINDOW_DAYS} trading days each, one-time cost)...")
         for i, ticker in enumerate(missing):
             hist = client.historical_eod(ticker)[:config.PRICE_WINDOW_DAYS]
             for row in hist:
@@ -68,40 +74,48 @@ def main():
     cache_mod.save(price_cache, config.PRICE_CACHE_PATH)
     log("Price cache updated.")
 
+    n_days = config.CHART_BACKFILL_DAYS
+
     # ---------- Indices ----------
-    log("Computing index metrics...")
-    index_records = indices.compute_all(price_cache, country_cfg["index_tickers"], today)
-    for key, record in index_records.items():
-        if record:
+    log("Backfilling index history (EMA10/20/50)...")
+    for key, ticker in country_cfg["index_tickers"].items():
+        records = indices.backfill_index_history(price_cache, ticker, n_days)
+        for record in records:
             store.write_index(key, record)
-    log("Index metrics written.")
+        log(f"  {key}: {len(records)} days written")
 
     # ---------- Breadth ----------
-    log("Computing breadth internals...")
-    breadth_record = breadth.compute_breadth(price_cache, stock_tickers, today)
-    store.write_breadth(breadth_record)
-    log(f"Breadth: adv={breadth_record['advancers']} decl={breadth_record['decliners']} "
-        f"new_hi={breadth_record['new_highs']} new_lo={breadth_record['new_lows']}")
+    log("Backfilling breadth internals...")
+    breadth_records = breadth.backfill_breadth_history(price_cache, stock_tickers, n_days)
+    for record in breadth_records:
+        store.write_breadth(record)
+    log(f"Breadth: {len(breadth_records)} days written "
+        f"(today: adv={breadth_records[-1]['advancers']} decl={breadth_records[-1]['decliners']} "
+        f"new_hi={breadth_records[-1]['new_highs']} new_lo={breadth_records[-1]['new_lows']})")
 
-    # ---------- Sectors ----------
-    log("Updating sector performance cache...")
-    sector_cache = cache_mod.load(config.SECTOR_CACHE_PATH)
-    sectors.backfill_sector_cache(
-        sector_cache, client, country_cfg["sectors"], country_cfg["exchanges"],
-        on_progress=lambda d, t: log(f"  sector backfill {d}/{t}") if d % 10 == 0 else None,
-    )
-    sectors.append_today_snapshot(sector_cache, client, country_cfg["exchanges"], today)
-    cache_mod.save(sector_cache, config.SECTOR_CACHE_PATH)
+    # ---------- Sector / industry classification (one TradingView pull, shared) ----------
+    log("Fetching TradingView classification (sector + industry tags)...")
+    industry_df = tv_industry.fetch_industry_classification()
+    ticker_to_sector, sector_caps = sectors.extract_classification(industry_df)
+    ticker_to_industry, industry_caps = industries.extract_classification(industry_df)
+    log(f"Classified {len(industry_df)} stocks: "
+        f"{industry_df['sector'].nunique()} sectors, {industry_df['industry'].nunique()} industries")
 
-    sector_ranks = sectors.compute_sector_ranks(sector_cache, country_cfg["sectors"], country_cfg["exchanges"])
-    store.write_sector_ranks(today, sector_ranks.to_dict(orient="records"))
-    log(f"Sector ranks written ({len(sector_ranks)} sectors).")
+    dates = groups_mod.trading_calendar(price_cache, country_cfg["index_tickers"]["sp500"], n_days)
 
-    # ---------- Industries (TradingView) ----------
-    log("Fetching TradingView industry performance...")
-    industry_ranks = industries.compute_industry_ranks()
-    store.write_industry_ranks(today, industry_ranks)
-    log(f"Industry ranks written ({len(industry_ranks)} industries).")
+    log("Backfilling sector performance/rank...")
+    sector_history = sectors.backfill_sector_history(price_cache, ticker_to_sector, sector_caps, dates)
+    for d, records in sector_history.items():
+        if records:
+            store.write_sector_ranks(d, records)
+    log(f"Sector ranks: {sum(1 for r in sector_history.values() if r)} days written")
+
+    log("Backfilling industry performance/rank...")
+    industry_history = industries.backfill_industry_history(price_cache, ticker_to_industry, industry_caps, dates)
+    for d, records in industry_history.items():
+        if records:
+            store.write_industry_ranks(d, records)
+    log(f"Industry ranks: {sum(1 for r in industry_history.values() if r)} days written")
 
     # ---------- Render ----------
     log("Rendering dashboard...")

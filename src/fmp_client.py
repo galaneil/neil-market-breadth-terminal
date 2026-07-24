@@ -3,8 +3,7 @@ fmp_client.py — thin wrapper around Financial Modeling Prep's /stable/ API.
 
 Only the endpoints this project actually needs:
   - quote (current price/change, ONE symbol per call)
-  - historical daily EOD price (for EMA calc + index/breadth history)
-  - historical sector performance
+  - historical daily EOD price (for EMA calc + index/breadth/sector/industry history)
 
 NOTE on batching: FMP's /stable/batch-quote, /stable/batch-quote-short, and even
 /stable/quote?symbol=a,b,c (comma-joined) all return HTTP 402 "Restricted Endpoint" /
@@ -81,25 +80,6 @@ class FMPClient:
         data = self._get("historical-price-eod/full", params)
         return data or []
 
-    def historical_sector_performance(self, sector=None, start=None, end=None):
-        """Historical sector performance rows. Optionally filter to one sector / date range."""
-        params = {}
-        if sector:
-            params["sector"] = sector
-        if start:
-            params["from"] = start
-        if end:
-            params["to"] = end
-        data = self._get("historical-sector-performance", params)
-        return data or []
-
-    def sector_performance_snapshot(self, date, exchange):
-        """All sectors' averageChange for one date, one exchange, in a single call
-        (much cheaper than looping historical_sector_performance per sector).
-        `exchange` must be a single value (NASDAQ/NYSE/AMEX) — "ALL" is plan-gated."""
-        data = self._get("sector-performance-snapshot", {"date": date, "exchange": exchange})
-        return data or []
-
 
 if __name__ == "__main__":
     import os
@@ -118,7 +98,3 @@ if __name__ == "__main__":
     print("\n-- historical_eod('^GSPC') last 3 rows --")
     hist = client.historical_eod("^GSPC")
     print(hist[:3])
-
-    print("\n-- historical_sector_performance(sector='Technology') last 3 rows --")
-    sect = client.historical_sector_performance(sector="Technology")
-    print(sect[:3])
