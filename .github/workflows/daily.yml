@@ -1,0 +1,42 @@
+name: Daily market breadth refresh
+
+on:
+  schedule:
+    # ~5pm ET / 9pm UTC on weekdays, after US market close.
+    # Cron is UTC-only and doesn't know about US DST, so this drifts by an
+    # hour for part of the year (runs ~4pm or ~5pm ET) - harmless for a
+    # once-daily, already-EOD dashboard.
+    - cron: "0 21 * * 1-5"
+  workflow_dispatch: {}  # manual "Run workflow" button, for on-demand runs/testing
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run pipeline
+        env:
+          FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
+        run: python src/main.py
+
+      - name: Commit and push updated data + dashboard
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add data/ docs/
+          git diff --staged --quiet && echo "No changes to commit" && exit 0
+          git commit -m "Daily refresh: $(date -u +'%Y-%m-%d %H:%M UTC')"
+          git push

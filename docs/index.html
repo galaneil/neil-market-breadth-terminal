@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Market Breadth Terminal</title>
+<style>
+:root {
+  --bg: #f5f6f8;
+  --panel-bg: #ffffff;
+  --text: #1a1d24;
+  --text-dim: #6b7280;
+  --border: #e2e5ea;
+  --accent: #2563eb;
+  --up: #16a34a;
+  --down: #dc2626;
+  --flat: #6b7280;
+  --grid-line: #eef0f3;
+}
+:root[data-theme="dark"] {
+  --bg: #10131a;
+  --panel-bg: #171b24;
+  --text: #e7e9ee;
+  --text-dim: #9096a3;
+  --border: #262b36;
+  --accent: #5b9dff;
+  --up: #2ecc71;
+  --down: #f0554b;
+  --flat: #9096a3;
+  --grid-line: #232733;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #10131a;
+    --panel-bg: #171b24;
+    --text: #e7e9ee;
+    --text-dim: #9096a3;
+    --border: #262b36;
+    --accent: #5b9dff;
+    --up: #2ecc71;
+    --down: #f0554b;
+    --flat: #9096a3;
+    --grid-line: #232733;
+  }
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-size: 14px;
+  line-height: 1.4;
+}
+header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+  gap: 10px;
+}
+header h1 { font-size: 18px; margin: 0; }
+.header-controls { display: flex; align-items: center; gap: 12px; }
+.generated-at { color: var(--text-dim); font-size: 12px; }
+select, button.icon-btn {
+  background: var(--panel-bg);
+  color: var(--text);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 13px;
+  cursor: pointer;
+}
+main { padding: 20px; max-width: 1400px; margin: 0 auto; }
+section { margin-bottom: 32px; }
+section h2 { font-size: 15px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-dim); margin: 0 0 12px; }
+.card-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 14px;
+}
+.card {
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+  overflow: hidden;
+}
+.card-title { font-size: 13px; color: var(--text-dim); margin-bottom: 4px; }
+.card-value { font-size: 26px; font-weight: 600; margin-bottom: 2px; }
+.card-value.up { color: var(--up); }
+.card-value.down { color: var(--down); }
+.card-sub { font-size: 12px; color: var(--text-dim); margin-bottom: 8px; }
+.badge-row { display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
+.badge {
+  font-size: 11px;
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+  color: var(--text-dim);
+}
+.badge.on.up { color: var(--up); border-color: var(--up); }
+.badge.on.down { color: var(--down); border-color: var(--down); }
+.tf-toggle { display: flex; gap: 4px; margin-bottom: 8px; }
+.tf-btn {
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 5px;
+  border: 1px solid var(--border);
+  background: transparent;
+  color: var(--text-dim);
+  cursor: pointer;
+}
+.tf-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+.chart-wrap { position: relative; height: 140px; }
+table { width: 100%; border-collapse: collapse; font-size: 13px; }
+th, td { text-align: right; padding: 7px 10px; border-bottom: 1px solid var(--border); }
+th:first-child, td:first-child { text-align: left; }
+th { color: var(--text-dim); font-weight: 500; cursor: pointer; user-select: none; }
+tbody tr { cursor: pointer; }
+tbody tr:hover { background: var(--grid-line); }
+tbody tr.selected { background: var(--grid-line); outline: 1px solid var(--accent); }
+.pct.up { color: var(--up); }
+.pct.down { color: var(--down); }
+.rank-cell { color: var(--text-dim); }
+.table-wrap { background: var(--panel-bg); border: 1px solid var(--border); border-radius: 10px; padding: 4px 12px; max-height: 420px; overflow-y: auto; }
+.drilldown {
+  margin-top: 14px;
+  background: var(--panel-bg);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 14px 16px;
+  display: none;
+}
+.drilldown.visible { display: block; }
+.drilldown-title { font-size: 13px; color: var(--text-dim); margin-bottom: 8px; }
+.drilldown .chart-wrap { height: 220px; }
+.empty-note { color: var(--text-dim); font-size: 12px; padding: 8px 0; }
+footer { text-align: center; color: var(--text-dim); font-size: 11px; padding: 24px 0; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1>Market Breadth Terminal</h1>
+  <div class="header-controls">
+    <span class="generated-at">Updated 2026-07-24 17:57 UTC</span>
+    <select id="country-select">
+      <option value="US">United States</option>
+    </select>
+    <button class="icon-btn" id="theme-toggle" title="Toggle dark/light">&#9788;</button>
+  </div>
+</header>
+
+<main>
+  <section id="panel-indices">
+    <h2>Index Status</h2>
+    <div class="card-grid" id="indices-grid"></div>
+  </section>
+
+  <section id="panel-sectors">
+    <h2>Sector Performance</h2>
+    <div class="table-wrap">
+      <table id="sector-table">
+        <thead><tr>
+          <th data-sort="sector">Sector</th>
+          <th data-sort="chg_1d">1D %</th>
+          <th data-sort="chg_5d">5D %</th>
+          <th data-sort="chg_20d">20D %</th>
+          <th data-sort="rank">Rank</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="drilldown" id="sector-drilldown">
+      <div class="drilldown-title"></div>
+      <div class="tf-toggle" data-target="sector-drilldown"></div>
+      <div class="chart-wrap"><canvas id="sector-drilldown-canvas"></canvas></div>
+    </div>
+  </section>
+
+  <section id="panel-industries">
+    <h2>Industry Performance</h2>
+    <div class="table-wrap">
+      <table id="industry-table">
+        <thead><tr>
+          <th data-sort="industry">Industry</th>
+          <th data-sort="chg_1d">1D %</th>
+          <th data-sort="chg_5d">5D %</th>
+          <th data-sort="chg_20d">20D %</th>
+          <th data-sort="rank">Rank</th>
+        </tr></thead>
+        <tbody></tbody>
+      </table>
+    </div>
+    <div class="drilldown" id="industry-drilldown">
+      <div class="drilldown-title"></div>
+      <div class="tf-toggle" data-target="industry-drilldown"></div>
+      <div class="chart-wrap"><canvas id="industry-drilldown-canvas"></canvas></div>
+    </div>
+  </section>
+
+  <section id="panel-breadth">
+    <h2>Breadth Internals</h2>
+    <div class="card-grid" id="breadth-grid"></div>
+  </section>
+</main>
+
+<footer>US equities &middot; data from Financial Modeling Prep &amp; TradingView &middot; refreshed daily after market close</footer>
+
+<script src="vendor/chart.umd.min.js"></script>
+<script id="dashboard-data" type="application/json">{"generated_at":"2026-07-24 17:57","series":{"index_nasdaq":[{"date":"2026-07-24","close":25121.582,"ema10":25593.640508220116,"ema20":25750.58313913735,"ema50":25658.90134587666,"above_ema10":false,"above_ema20":false,"above_ema50":false,"ema10_rising":false,"ema20_rising":false,"ema50_rising":false}],"index_sp500":[{"date":"2026-07-24","close":7436.66,"ema10":7475.5587725398445,"ema20":7479.029257386137,"ema50":7413.408561049272,"above_ema10":false,"above_ema20":false,"above_ema50":true,"ema10_rising":false,"ema20_rising":false,"ema50_rising":true}],"index_russell2000":[{"date":"2026-07-24","close":2948.1314,"ema10":2961.2918820739296,"ema20":2963.3230918063514,"ema50":2918.80359268417,"above_ema10":false,"above_ema20":false,"above_ema50":true,"ema10_rising":false,"ema20_rising":false,"ema50_rising":true}],"sector_ranks":[{"date":"2026-07-24","sectors":[{"sector":"Consumer Defensive","chg_1d":2.325453539451535,"chg_5d":1.9288123000454904,"chg_20d":3.696285792462417,"rank":1},{"sector":"Real Estate","chg_1d":1.4496464676048035,"chg_5d":3.941799864290707,"chg_20d":2.7321905084013665,"rank":2},{"sector":"Healthcare","chg_1d":0.9278503013336955,"chg_5d":10.307157315621417,"chg_20d":18.86081718039754,"rank":3},{"sector":"Communication Services","chg_1d":0.9102290992091255,"chg_5d":1.8581358088952005,"chg_20d":2.9223638223846438,"rank":4},{"sector":"Financial Services","chg_1d":0.7792049970435847,"chg_5d":4.23332832884824,"chg_20d":1.4578749373203692,"rank":5},{"sector":"Utilities","chg_1d":0.5677982107015422,"chg_5d":15.180924577877741,"chg_20d":15.390402421313443,"rank":6},{"sector":"Basic Materials","chg_1d":0.3956282045326646,"chg_5d":7.2583299808244295,"chg_20d":-3.66874031761939,"rank":7},{"sector":"Energy","chg_1d":-0.007143319114362908,"chg_5d":0.8319203037905343,"chg_20d":15.115912382599216,"rank":8},{"sector":"Industrials","chg_1d":-0.35697743784737596,"chg_5d":-3.851145736692607,"chg_20d":0.0415238836191989,"rank":9},{"sector":"Consumer Cyclical","chg_1d":-0.6270108831108123,"chg_5d":0.4553018829233313,"chg_20d":4.492877331257827,"rank":10},{"sector":"Technology","chg_1d":-1.2117295757404796,"chg_5d":12.939091378753421,"chg_20d":15.758789720108757,"rank":11}]}],"industry_ranks":[{"date":"2026-07-24","industries":[{"industry":"Contract Drilling","chg_1d":5.978326482842322,"chg_5d":6.6352761678143235,"chg_20d":6.427575869729403,"n_members":10,"rank":1},{"industry":"Containers/Packaging","chg_1d":4.144074620676747,"chg_5d":1.8726160419164404,"chg_20d":7.687839727898408,"n_members":17,"rank":2},{"industry":"Specialty Insurance","chg_1d":4.058457295607318,"chg_5d":0.006132275355836468,"chg_20d":6.835543355221034,"n_members":9,"rank":3},{"industry":"Airlines","chg_1d":3.993993398116778,"chg_5d":-0.1634659280680668,"chg_20d":-4.992171450201729,"n_members":12,"rank":4},{"industry":"Home Furnishings","chg_1d":3.8434098137828347,"chg_5d":-2.2069700098567653,"chg_20d":-1.438640218028887,"n_members":10,"rank":5},{"industry":"Wireless Telecommunications","chg_1d":3.7186315159239327,"chg_5d":-0.9825437516811114,"chg_20d":-0.9079428506701511,"n_members":14,"rank":6},{"industry":"Hospital/Nursing Management","chg_1d":3.538678643852395,"chg_5d":1.8726124888609474,"chg_20d":6.258550512047908,"n_members":11,"rank":7},{"industry":"Real Estate Development","chg_1d":3.3169746847946815,"chg_5d":-1.9649205469330324,"chg_20d":2.266128598450373,"n_members":25,"rank":8},{"industry":"Telecommunications Equipment","chg_1d":3.161893465227234,"chg_5d":0.7080441969020573,"chg_20d":10.675791736985238,"n_members":16,"rank":9},{"industry":"Hotels/Resorts/Cruise lines","chg_1d":2.931912024146345,"chg_5d":0.852603514787611,"chg_20d":-3.5722992406530625,"n_members":17,"rank":10},{"industry":"Steel","chg_1d":2.7751209792915645,"chg_5d":6.932456276440707,"chg_20d":1.7779842280275615,"n_members":9,"rank":11},{"industry":"Homebuilding","chg_1d":2.641514790427563,"chg_5d":-2.918963812736843,"chg_20d":-3.8009521030045517,"n_members":20,"rank":12},{"industry":"Industrial Specialties","chg_1d":2.454802417577503,"chg_5d":-3.349206027750561,"chg_20d":-1.5313738579345781,"n_members":13,"rank":13},{"industry":"Other Consumer Services","chg_1d":2.4029876335448277,"chg_5d":-2.1217534817100425,"chg_20d":5.038612079318914,"n_members":26,"rank":14},{"industry":"Automotive Aftermarket","chg_1d":2.3698312626011475,"chg_5d":-2.0984414249839256,"chg_20d":2.802544191776172,"n_members":5,"rank":15},{"industry":"Information Technology Services","chg_1d":2.3226797230787324,"chg_5d":0.07472832457188512,"chg_20d":1.327406369398097,"n_members":56,"rank":16},{"industry":"Real Estate Investment Trusts","chg_1d":2.2229195127773003,"chg_5d":0.9736299146983189,"chg_20d":3.4614514513256416,"n_members":176,"rank":17},{"industry":"Building Products","chg_1d":2.119508257988312,"chg_5d":-0.7245959615563198,"chg_20d":0.3576699347609808,"n_members":17,"rank":18},{"industry":"Construction Materials","chg_1d":1.9861148222919898,"chg_5d":-2.5575258943453134,"chg_20d":-6.4283783318472745,"n_members":12,"rank":19},{"industry":"Movies/Entertainment","chg_1d":1.9798302801980123,"chg_5d":-2.0778230292659887,"chg_20d":-4.444455435549806,"n_members":26,"rank":20},{"industry":"Electronics/Appliances","chg_1d":1.8985896062402126,"chg_5d":-1.4013758404692491,"chg_20d":6.307357856929073,"n_members":7,"rank":21},{"industry":"Apparel/Footwear","chg_1d":1.7718407561822236,"chg_5d":-4.731515469894513,"chg_20d":0.10009635597143803,"n_members":26,"rank":22},{"industry":"Insurance Brokers/Services","chg_1d":1.595268812616521,"chg_5d":-2.9998814587236713,"chg_20d":11.211205967853886,"n_members":14,"rank":23},{"industry":"Commercial Printing/Forms","chg_1d":1.5678468489013297,"chg_5d":-3.371095115071705,"chg_20d":0.9871923605459435,"n_members":6,"rank":24},{"industry":"Apparel/Footwear Retail","chg_1d":1.5193463232825948,"chg_5d":0.1473905645234113,"chg_20d":-2.5542527491272287,"n_members":21,"rank":25},{"industry":"Publishing: Newspapers","chg_1d":1.4412505039237087,"chg_5d":-6.6905236258870975,"chg_20d":4.266450111022078,"n_members":5,"rank":26},{"industry":"Multi-Line Insurance","chg_1d":1.418762879377648,"chg_5d":1.2013524337547044,"chg_20d":4.398398279978744,"n_members":32,"rank":27},{"industry":"Financial Publishing/Services","chg_1d":1.3350377408896357,"chg_5d":-6.920050829532437,"chg_20d":8.45704601447148,"n_members":8,"rank":28},{"industry":"Life/Health Insurance","chg_1d":1.3111296977294713,"chg_5d":-0.09635013159513767,"chg_20d":7.306147379904994,"n_members":15,"rank":29},{"industry":"Food Distributors","chg_1d":1.3013891856643771,"chg_5d":-1.5993570967145,"chg_20d":3.167260105729794,"n_members":8,"rank":30},{"industry":"Miscellaneous Manufacturing","chg_1d":1.2273989329071457,"chg_5d":-1.8337721298074097,"chg_20d":3.71327900770435,"n_members":9,"rank":31},{"industry":"Wholesale Distributors","chg_1d":1.2018977798019574,"chg_5d":-0.30014426907521374,"chg_20d":2.7627233245764455,"n_members":34,"rank":32},{"industry":"Miscellaneous Commercial Services","chg_1d":1.1114384284976235,"chg_5d":-2.464719586002787,"chg_20d":11.752704894721623,"n_members":83,"rank":33},{"industry":"Investment Managers","chg_1d":1.10977259046152,"chg_5d":-1.1136550233803935,"chg_20d":1.6816544632710415,"n_members":48,"rank":34},{"industry":"Advertising/Marketing Services","chg_1d":1.0997344437766639,"chg_5d":-6.372110981856497,"chg_20d":8.725414158859746,"n_members":9,"rank":35},{"industry":"Food: Major Diversified","chg_1d":1.0818311023153893,"chg_5d":-5.014981865757649,"chg_20d":8.948612239153498,"n_members":5,"rank":36},{"industry":"Recreational Products","chg_1d":1.079363348417647,"chg_5d":-1.3379139147368848,"chg_20d":0.5950134887815745,"n_members":15,"rank":37},{"industry":"Medical/Nursing Services","chg_1d":1.013659893072865,"chg_5d":0.49394822244242687,"chg_20d":9.978257991502367,"n_members":37,"rank":38},{"industry":"Savings Banks","chg_1d":0.9962911758303731,"chg_5d":0.389971292392824,"chg_20d":5.140176571499631,"n_members":19,"rank":39},{"industry":"Aerospace & Defense","chg_1d":0.9813950894158557,"chg_5d":4.647200496704203,"chg_20d":2.734828222439076,"n_members":58,"rank":40},{"industry":"Food: Specialty/Candy","chg_1d":0.9792979370053785,"chg_5d":-2.171039904560432,"chg_20d":-0.6802232101286622,"n_members":28,"rank":41},{"industry":"Computer Processing Hardware","chg_1d":0.9391284317625729,"chg_5d":15.355723581490276,"chg_20d":0.3615488873731618,"n_members":13,"rank":42},{"industry":"Broadcasting","chg_1d":0.9389682641651997,"chg_5d":-2.749112633028984,"chg_20d":10.271175924207656,"n_members":10,"rank":43},{"industry":"Food: Meat/Fish/Dairy","chg_1d":0.9011780266069171,"chg_5d":-1.3890466014389167,"chg_20d":1.609382841678634,"n_members":7,"rank":44},{"industry":"Auto Parts: OEM","chg_1d":0.8815641207204333,"chg_5d":2.9194430734084547,"chg_20d":1.381546774336361,"n_members":25,"rank":45},{"industry":"Beverages: Non-Alcoholic","chg_1d":0.870840096167004,"chg_5d":-4.3705940992458405,"chg_20d":0.8210431630595594,"n_members":9,"rank":46},{"industry":"Beverages: Alcoholic","chg_1d":0.8265991078591062,"chg_5d":-2.50875451874112,"chg_20d":-5.742382601763598,"n_members":6,"rank":47},{"industry":"Marine Shipping","chg_1d":0.7983144381802391,"chg_5d":5.125271349720133,"chg_20d":3.7412812096025956,"n_members":36,"rank":48},{"industry":"Restaurants","chg_1d":0.798000586085605,"chg_5d":-3.767678593993365,"chg_20d":0.36150010162753105,"n_members":33,"rank":49},{"industry":"Medical Specialties","chg_1d":0.7835620237939555,"chg_5d":-1.0531728742753068,"chg_20d":5.921410168903053,"n_members":110,"rank":50},{"industry":"Other Transportation","chg_1d":0.7660940107497524,"chg_5d":-4.080170851113995,"chg_20d":-0.05979535503505234,"n_members":7,"rank":51},{"industry":"Trucking","chg_1d":0.764672571863662,"chg_5d":-0.7953169083180037,"chg_20d":3.7888677679537266,"n_members":17,"rank":52},{"industry":"Packaged Software","chg_1d":0.7642238621739162,"chg_5d":-3.020686552548876,"chg_20d":2.358280219094569,"n_members":204,"rank":53},{"industry":"Trucks/Construction/Farm Machinery","chg_1d":0.7557038044194987,"chg_5d":6.041941813605361,"chg_20d":-1.5198917003600894,"n_members":22,"rank":54},{"industry":"Specialty Stores","chg_1d":0.7332181892838815,"chg_5d":-4.706827467044314,"chg_20d":-4.846990718382093,"n_members":46,"rank":55},{"industry":"Property/Casualty Insurance","chg_1d":0.7096212838177361,"chg_5d":0.3571635414717502,"chg_20d":1.8804547712724113,"n_members":40,"rank":56},{"industry":"Pharmaceuticals: Major","chg_1d":0.701014323531447,"chg_5d":1.9755497617838549,"chg_20d":6.094521799195519,"n_members":142,"rank":57},{"industry":"Railroads","chg_1d":0.6884559972212171,"chg_5d":2.2942819128573966,"chg_20d":14.59835075437987,"n_members":6,"rank":58},{"industry":"Cable/Satellite TV","chg_1d":0.6587118972975058,"chg_5d":-6.6427445634889795,"chg_20d":-3.746035607410063,"n_members":6,"rank":59},{"industry":"Major Banks","chg_1d":0.6373270001810775,"chg_5d":0.40411842807385584,"chg_20d":3.067064691288285,"n_members":75,"rank":60},{"industry":"Chemicals: Specialty","chg_1d":0.6215792485139506,"chg_5d":-1.4154535397771817,"chg_20d":-0.3819543273977002,"n_members":38,"rank":61},{"industry":"Regional Banks","chg_1d":0.6140757954249471,"chg_5d":-0.7978518459952578,"chg_20d":4.384597395389158,"n_members":181,"rank":62},{"industry":"Food Retail","chg_1d":0.607073227888393,"chg_5d":-6.474691971501987,"chg_20d":-5.78276916705211,"n_members":11,"rank":63},{"industry":"Precious Metals","chg_1d":0.53272377319299,"chg_5d":7.354186371650205,"chg_20d":0.1656597925744376,"n_members":55,"rank":64},{"industry":"Metal Fabrication","chg_1d":0.5232507666475941,"chg_5d":2.530335272397496,"chg_20d":-8.294101713853093,"n_members":10,"rank":65},{"industry":"Chemicals: Major Diversified","chg_1d":0.503916528280435,"chg_5d":3.9561048414719964,"chg_20d":-8.685959676297767,"n_members":8,"rank":66},{"industry":"Air Freight/Couriers","chg_1d":0.4969166620263049,"chg_5d":-3.085433634107292,"chg_20d":3.9428464081221777,"n_members":12,"rank":67},{"industry":"Household/Personal Care","chg_1d":0.41283273315819896,"chg_5d":-3.2210454477851456,"chg_20d":-1.5393479945567743,"n_members":14,"rank":68},{"industry":"Internet Software/Services","chg_1d":0.35018381773479934,"chg_5d":-6.130582278379075,"chg_20d":-5.449414335070104,"n_members":52,"rank":69},{"industry":"Electric Utilities","chg_1d":0.24615514031104468,"chg_5d":1.253438193209414,"chg_20d":2.0262546956183147,"n_members":48,"rank":70},{"industry":"Data Processing Services","chg_1d":0.2437072543388999,"chg_5d":6.247151259695883,"chg_20d":-0.7940029968183818,"n_members":33,"rank":71},{"industry":"Oil & Gas Pipelines","chg_1d":0.18451387913029388,"chg_5d":1.079564626862436,"chg_20d":6.308613146414256,"n_members":22,"rank":72},{"industry":"Pharmaceuticals: Other","chg_1d":0.17133455406390302,"chg_5d":5.700082528647408,"chg_20d":9.439381534128302,"n_members":7,"rank":73},{"industry":"Agricultural Commodities/Milling","chg_1d":0.13442400503101068,"chg_5d":2.3711940271758594,"chg_20d":11.013333558309373,"n_members":16,"rank":74},{"industry":"Water Utilities","chg_1d":0.10547006589584135,"chg_5d":-1.3227398114026907,"chg_20d":6.149860851821666,"n_members":9,"rank":75},{"industry":"Casinos/Gaming","chg_1d":0.07409548800913364,"chg_5d":-1.9702691573246391,"chg_20d":-0.8423234409295248,"n_members":11,"rank":76},{"industry":"Environmental Services","chg_1d":0.06780878059973137,"chg_5d":-3.6574030068989076,"chg_20d":5.9925541191874245,"n_members":9,"rank":77},{"industry":"Gas Distributors","chg_1d":0.026151363257264797,"chg_5d":0.6842437716221766,"chg_20d":4.2342628811292835,"n_members":17,"rank":78},{"industry":"Electronics Distributors","chg_1d":-0.009838408943504058,"chg_5d":4.041599385936947,"chg_20d":-5.655761845736231,"n_members":6,"rank":79},{"industry":"Oilfield Services/Equipment","chg_1d":-0.0336293603597486,"chg_5d":0.6245859723503941,"chg_20d":3.724473028444733,"n_members":26,"rank":80},{"industry":"Biotechnology","chg_1d":-0.044974239605353225,"chg_5d":0.14476294074198362,"chg_20d":6.664025403651043,"n_members":141,"rank":81},{"industry":"Finance/Rental/Leasing","chg_1d":-0.05286146723003256,"chg_5d":-3.0049010481060208,"chg_20d":5.355721756183673,"n_members":65,"rank":82},{"industry":"Electronic Equipment/Instruments","chg_1d":-0.08867910369053304,"chg_5d":4.601078485466383,"chg_20d":-4.513855220039096,"n_members":23,"rank":83},{"industry":"Oil & Gas Production","chg_1d":-0.1143097415189868,"chg_5d":4.390591902152089,"chg_20d":10.338154835057297,"n_members":26,"rank":84},{"industry":"Integrated Oil","chg_1d":-0.17360788836233745,"chg_5d":5.1303830455007615,"chg_20d":12.817614837221265,"n_members":34,"rank":85},{"industry":"Personnel Services","chg_1d":-0.22085875257023496,"chg_5d":-4.513508224806183,"chg_20d":22.163693849921817,"n_members":9,"rank":86},{"industry":"Investment Trusts/Mutual Funds","chg_1d":-0.2544731440467497,"chg_5d":-0.8303334234754199,"chg_20d":5.7613249788799985,"n_members":37,"rank":87},{"industry":"Financial Conglomerates","chg_1d":-0.2925624460656425,"chg_5d":-0.07393110124661617,"chg_20d":0.3497928982142359,"n_members":125,"rank":88},{"industry":"Internet Retail","chg_1d":-0.3027139219862121,"chg_5d":-4.571460495199229,"chg_20d":0.08811754404555627,"n_members":16,"rank":89},{"industry":"Investment Banks/Brokers","chg_1d":-0.337571781221285,"chg_5d":0.44968729976813093,"chg_20d":2.1669935297804273,"n_members":35,"rank":90},{"industry":"Oil Refining/Marketing","chg_1d":-0.49881071583455916,"chg_5d":-0.12383713999583956,"chg_20d":27.59505255589713,"n_members":11,"rank":91},{"industry":"Chemicals: Agricultural","chg_1d":-0.5517491397356281,"chg_5d":1.93788664861618,"chg_20d":12.826247820939885,"n_members":9,"rank":92},{"industry":"Managed Health Care","chg_1d":-0.5977577593176536,"chg_5d":-0.810997890494216,"chg_20d":1.4140916753163317,"n_members":8,"rank":93},{"industry":"Major Telecommunications","chg_1d":-0.6693865589959304,"chg_5d":-3.0847922651656963,"chg_20d":-7.376735014317651,"n_members":14,"rank":94},{"industry":"Other Metals/Minerals","chg_1d":-1.0303944180362588,"chg_5d":7.4823909501196395,"chg_20d":-1.1975283399169578,"n_members":45,"rank":95},{"industry":"Industrial Machinery","chg_1d":-1.1761308641712929,"chg_5d":2.715668345418542,"chg_20d":-5.830326705021029,"n_members":66,"rank":96},{"industry":"Semiconductors","chg_1d":-1.3802176282210195,"chg_5d":5.308259805075442,"chg_20d":-2.558823809584127,"n_members":62,"rank":97},{"industry":"Alternative Power Generation","chg_1d":-1.5062361827432926,"chg_5d":2.4430181026184625,"chg_20d":-3.2604765011730192,"n_members":7,"rank":98},{"industry":"Coal","chg_1d":-1.5766685962871705,"chg_5d":-0.413743307697786,"chg_20d":-3.306996673518123,"n_members":9,"rank":99},{"industry":"Electrical Products","chg_1d":-1.5888902576255064,"chg_5d":3.9468609208534806,"chg_20d":-4.160239525046716,"n_members":42,"rank":100},{"industry":"Engineering & Construction","chg_1d":-1.866943700761789,"chg_5d":3.8535666369405814,"chg_20d":-8.55467930972505,"n_members":40,"rank":101},{"industry":"Motor Vehicles","chg_1d":-2.8477331452541175,"chg_5d":-15.433038162980312,"chg_20d":-14.62442319936075,"n_members":16,"rank":102},{"industry":"Electronic Components","chg_1d":-2.888625776240801,"chg_5d":3.105072827921005,"chg_20d":-11.204951492144167,"n_members":14,"rank":103},{"industry":"Electronic Production Equipment","chg_1d":-3.876547175501413,"chg_5d":7.09646933706761,"chg_20d":-17.74072984588582,"n_members":21,"rank":104},{"industry":"Computer Peripherals","chg_1d":-4.167633538785847,"chg_5d":12.608051410554445,"chg_20d":-11.366047711182606,"n_members":13,"rank":105},{"industry":"Specialty Telecommunications","chg_1d":-4.516271641681479,"chg_5d":-11.030805957186693,"chg_20d":-26.386806825010993,"n_members":6,"rank":106}]}],"breadth_adv_decl":[{"date":"2026-07-24","advancers":1125,"decliners":374,"net":751}],"breadth_new_hilo":[{"date":"2026-07-24","new_highs":69,"new_lows":9,"net":60}],"breadth_pct_up20":[{"date":"2026-07-24","value":0.33}],"breadth_pct_up30":[{"date":"2026-07-24","value":0.07}],"breadth_pct_down20":[{"date":"2026-07-24","value":0.13}],"breadth_pct_down30":[{"date":"2026-07-24","value":0.0}]}}</script>
+<script src="dashboard.js"></script>
+</body>
+</html>
