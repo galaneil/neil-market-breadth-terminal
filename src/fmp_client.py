@@ -93,6 +93,13 @@ class FMPClient:
         data = self._get("historical-sector-performance", params)
         return data or []
 
+    def sector_performance_snapshot(self, date, exchange):
+        """All sectors' averageChange for one date, one exchange, in a single call
+        (much cheaper than looping historical_sector_performance per sector).
+        `exchange` must be a single value (NASDAQ/NYSE/AMEX) — "ALL" is plan-gated."""
+        data = self._get("sector-performance-snapshot", {"date": date, "exchange": exchange})
+        return data or []
+
 
 if __name__ == "__main__":
     import os
