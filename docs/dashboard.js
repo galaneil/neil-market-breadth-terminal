@@ -56,6 +56,13 @@
       down: cssVar("--down"),
     };
   }
+  // With few data points (e.g. day 1 of the system, or a fresh drill-down
+  // selection), a line has nothing to connect and a 0-radius point draws
+  // nothing at all — so show a visible dot until there's enough history for
+  // a clean connected line to read better on its own.
+  function dotRadius(n) {
+    return n <= 3 ? 3 : 0;
+  }
 
   // ---------- Timeframe filtering ----------
   const TIMEFRAMES = ["1W", "1M", "YTD", "ALL"];
@@ -160,11 +167,12 @@
     setupTimeframeToggle(card.querySelector(".tf-toggle"), function (tf) {
       const filtered = filterByTimeframe(rows, tf);
       const colors = themeColors();
+      const dotR = dotRadius(filtered.length);
       lineChart(canvasId, filtered.map(function (r) { return r.date; }), [
-        { label: "Close", data: filtered.map(function (r) { return r.close; }), borderColor: colors.text, borderWidth: 1.5, pointRadius: 0, tension: 0.15 },
-        { label: "EMA10", data: filtered.map(function (r) { return r.ema10; }), borderColor: colors.accent, borderWidth: 1.5, pointRadius: 0, tension: 0.15 },
-        { label: "EMA20", data: filtered.map(function (r) { return r.ema20; }), borderColor: colors.up, borderWidth: 1.5, pointRadius: 0, tension: 0.15 },
-        { label: "EMA50", data: filtered.map(function (r) { return r.ema50; }), borderColor: colors.down, borderWidth: 1.5, pointRadius: 0, tension: 0.15 },
+        { label: "Close", data: filtered.map(function (r) { return r.close; }), borderColor: colors.text, borderWidth: 1.5, pointRadius: dotR, pointBackgroundColor: colors.text, tension: 0.15 },
+        { label: "EMA10", data: filtered.map(function (r) { return r.ema10; }), borderColor: colors.accent, borderWidth: 1.5, pointRadius: dotR, pointBackgroundColor: colors.accent, tension: 0.15 },
+        { label: "EMA20", data: filtered.map(function (r) { return r.ema20; }), borderColor: colors.up, borderWidth: 1.5, pointRadius: dotR, pointBackgroundColor: colors.up, tension: 0.15 },
+        { label: "EMA50", data: filtered.map(function (r) { return r.ema50; }), borderColor: colors.down, borderWidth: 1.5, pointRadius: dotR, pointBackgroundColor: colors.down, tension: 0.15 },
       ]);
     });
   }
@@ -198,8 +206,9 @@
     setupTimeframeToggle(card.querySelector(".tf-toggle"), function (tf) {
       const filtered = filterByTimeframe(rows, tf);
       const colors = themeColors();
+      const dotR = dotRadius(filtered.length);
       lineChart(canvasId, filtered.map(function (r) { return r.date; }), [
-        { label: label, data: filtered.map(function (r) { return r[valueField]; }), borderColor: colors.accent, borderWidth: 1.5, pointRadius: 0, tension: 0.15 },
+        { label: label, data: filtered.map(function (r) { return r[valueField]; }), borderColor: colors.accent, borderWidth: 1.5, pointRadius: dotR, pointBackgroundColor: colors.accent, tension: 0.15 },
       ]);
     });
   }
@@ -270,8 +279,9 @@
       setupTimeframeToggle(toggleEl, function (tf) {
         const filtered = filterByTimeframe(history, tf);
         const colors = themeColors();
+        const dotR = dotRadius(filtered.length);
         lineChart(canvasId, filtered.map(function (r) { return r.date; }), [
-          { label: name + " rank", data: filtered.map(function (r) { return r.rank; }), borderColor: colors.accent, borderWidth: 1.5, pointRadius: 2, tension: 0.15 },
+          { label: name + " rank", data: filtered.map(function (r) { return r.rank; }), borderColor: colors.accent, borderWidth: 1.5, pointRadius: dotR || 2, pointBackgroundColor: colors.accent, tension: 0.15 },
         ], { yReverse: true });
       });
     }
