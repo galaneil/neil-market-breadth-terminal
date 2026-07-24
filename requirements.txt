@@ -1,5 +1,6 @@
 requests
 pandas
 numpy
+lxml
 tradingview-screener
 jinja2
