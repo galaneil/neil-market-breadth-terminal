@@ -312,29 +312,62 @@
   }
 
   // ---------- Wire everything up ----------
-  const indicesGrid = document.getElementById("indices-grid");
-  renderIndexCard("index_nasdaq", "NASDAQ Composite", indicesGrid);
-  renderIndexCard("index_sp500", "S&P 500", indicesGrid);
-  renderIndexCard("index_russell2000", "Russell 2000", indicesGrid);
+  // Each grid container's data-keys attribute lists which series to render
+  // there (comma-separated). This lets the same script serve both the full
+  // dashboard (all keys) and an individual single-panel embed page (one key)
+  // without needing separate JS per page — a page simply omits the
+  // container element for any panel it doesn't include, and the guards
+  // below skip anything not present in the DOM.
+  const INDEX_LABELS = {
+    index_nasdaq: "NASDAQ Composite",
+    index_sp500: "S&P 500",
+    index_russell2000: "Russell 2000",
+  };
 
-  renderRankPanel("sector_ranks", "sectors", "sector", "sector-table", "sector-drilldown");
-  renderRankPanel("industry_ranks", "industries", "industry", "industry-table", "industry-drilldown");
+  const indicesGrid = document.getElementById("indices-grid");
+  if (indicesGrid) {
+    (indicesGrid.dataset.keys || "").split(",").filter(Boolean).forEach(function (key) {
+      renderIndexCard(key, INDEX_LABELS[key] || key, indicesGrid);
+    });
+  }
+
+  if (document.getElementById("sector-table")) {
+    renderRankPanel("sector_ranks", "sectors", "sector", "sector-table", "sector-drilldown");
+  }
+  if (document.getElementById("industry-table")) {
+    renderRankPanel("industry_ranks", "industries", "industry", "industry-table", "industry-drilldown");
+  }
+
+  const BREADTH_DEFS = {
+    breadth_adv_decl: {
+      label: "Net Advancers − Decliners", valueField: "net",
+      opts: {
+        colorByValue: true,
+        subText: function (items) {
+          return "Avg Adv " + Math.round(average(items, "advancers")) + " / Avg Decl " + Math.round(average(items, "decliners"));
+        },
+      },
+    },
+    breadth_new_hilo: {
+      label: "Net New Highs − New Lows", valueField: "net",
+      opts: {
+        colorByValue: true,
+        subText: function (items) {
+          return "Avg Highs " + Math.round(average(items, "new_highs")) + " / Avg Lows " + Math.round(average(items, "new_lows"));
+        },
+      },
+    },
+    breadth_pct_up20: { label: "% Up 20%+ (5D)", valueField: "value", opts: { isPct: true } },
+    breadth_pct_up30: { label: "% Up 30%+ (5D)", valueField: "value", opts: { isPct: true } },
+    breadth_pct_down20: { label: "% Down 20%+ (5D)", valueField: "value", opts: { isPct: true } },
+    breadth_pct_down30: { label: "% Down 30%+ (5D)", valueField: "value", opts: { isPct: true } },
+  };
 
   const breadthGrid = document.getElementById("breadth-grid");
-  renderSimpleMetricCard("breadth_adv_decl", "Net Advancers − Decliners", "net", breadthGrid, {
-    colorByValue: true,
-    subText: function (items) {
-      return "Avg Adv " + Math.round(average(items, "advancers")) + " / Avg Decl " + Math.round(average(items, "decliners"));
-    },
-  });
-  renderSimpleMetricCard("breadth_new_hilo", "Net New Highs − New Lows", "net", breadthGrid, {
-    colorByValue: true,
-    subText: function (items) {
-      return "Avg Highs " + Math.round(average(items, "new_highs")) + " / Avg Lows " + Math.round(average(items, "new_lows"));
-    },
-  });
-  renderSimpleMetricCard("breadth_pct_up20", "% Up 20%+ (5D)", "value", breadthGrid, { isPct: true });
-  renderSimpleMetricCard("breadth_pct_up30", "% Up 30%+ (5D)", "value", breadthGrid, { isPct: true });
-  renderSimpleMetricCard("breadth_pct_down20", "% Down 20%+ (5D)", "value", breadthGrid, { isPct: true });
-  renderSimpleMetricCard("breadth_pct_down30", "% Down 30%+ (5D)", "value", breadthGrid, { isPct: true });
+  if (breadthGrid) {
+    (breadthGrid.dataset.keys || "").split(",").filter(Boolean).forEach(function (key) {
+      const def = BREADTH_DEFS[key];
+      if (def) renderSimpleMetricCard(key, def.label, def.valueField, breadthGrid, def.opts);
+    });
+  }
 })();

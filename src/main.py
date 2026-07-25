@@ -118,9 +118,11 @@ def main():
     log(f"Industry ranks: {sum(1 for r in industry_history.values() if r)} days written")
 
     # ---------- Render ----------
-    log("Rendering dashboard...")
+    log("Rendering combined dashboard...")
     out_path = render.render_dashboard()
-    log(f"Done. Dashboard written to {out_path}")
+    log("Rendering individual panel pages...")
+    panel_paths = render.render_all_panels()
+    log(f"Done. Dashboard written to {out_path}, plus {len(panel_paths)} individual panel pages")
 
 
 if __name__ == "__main__":
