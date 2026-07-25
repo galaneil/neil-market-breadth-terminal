@@ -82,7 +82,12 @@ def compute_group_performance(price_cache, ticker_groups, market_caps, as_of_dat
     result = pd.DataFrame(records)
     if result.empty:
         return result
-    result = result.sort_values("chg_1d", ascending=False).reset_index(drop=True)
+    # Rank by the 20-trading-day (~1 month) return, not the 1-day move: daily
+    # returns are dominated by noise, so ranking on them produces a rank series
+    # that whipsaws day to day with no visible trend. The 20d window is smooth
+    # enough to show real rotation (a group actually gaining/losing relative
+    # strength over weeks) while still updating daily.
+    result = result.sort_values("chg_20d", ascending=False).reset_index(drop=True)
     result["rank"] = result.index + 1
     return result
 

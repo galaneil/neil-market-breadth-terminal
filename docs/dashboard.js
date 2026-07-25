@@ -44,6 +44,12 @@
     if (v === null || v === undefined || isNaN(v)) return "";
     return v > 0 ? "up" : (v < 0 ? "down" : "");
   }
+  function average(items, field) {
+    const vals = items.map(function (r) { return r[field]; })
+      .filter(function (v) { return v !== null && v !== undefined && !isNaN(v); });
+    if (!vals.length) return null;
+    return vals.reduce(function (a, b) { return a + b; }, 0) / vals.length;
+  }
   function cssVar(name) {
     return getComputedStyle(root).getPropertyValue(name).trim();
   }
@@ -182,6 +188,11 @@
   }
 
   // ---------- Simple current-value + chart cards (breadth internals) ----------
+  // The headline number reflects the AVERAGE over whichever timeframe is
+  // currently selected, not always the latest day — a single day's breadth
+  // reading is noisy, so "today's value" doesn't answer "what has breadth
+  // looked like over the last month/YTD/etc.", which is what the timeframe
+  // buttons are for.
   function renderSimpleMetricCard(seriesKey, label, valueField, grid, opts) {
     opts = opts || {};
     const rows = S[seriesKey] || [];
@@ -194,23 +205,30 @@
       card.innerHTML = '<div class="card-title">' + label + '</div><div class="empty-note">No data yet.</div>';
       return;
     }
-    const last = rows[rows.length - 1];
-    const val = last[valueField];
-    const dirClass = opts.colorByValue ? pctClass(val) : "";
-    const displayVal = opts.isPct ? fmtPlainPct(val) : fmtSignedInt(val);
-    const sub = opts.subText ? opts.subText(last) : "&nbsp;";
 
     card.innerHTML =
       '<div class="card-title">' + label + "</div>" +
-      '<div class="card-value ' + dirClass + '">' + displayVal + "</div>" +
-      '<div class="card-sub">' + sub + "</div>" +
+      '<div class="card-value">&nbsp;</div>' +
+      '<div class="card-sub">&nbsp;</div>' +
       '<div class="tf-toggle"></div>' +
       '<div class="chart-wrap"><canvas id="' + canvasId + '"></canvas></div>';
+
+    const valueEl = card.querySelector(".card-value");
+    const subEl = card.querySelector(".card-sub");
 
     setupTimeframeToggle(card.querySelector(".tf-toggle"), function (tf) {
       const filtered = filterByTimeframe(rows, tf);
       const colors = themeColors();
       const dotR = dotRadius(filtered.length);
+      const avgVal = average(filtered, valueField);
+
+      valueEl.className = "card-value " + (opts.colorByValue ? pctClass(avgVal) : "");
+      valueEl.textContent = avgVal === null ? "—" : (opts.isPct ? fmtPlainPct(avgVal) : fmtSignedInt(Math.round(avgVal)));
+
+      const n = filtered.length;
+      const extra = opts.subText ? opts.subText(filtered) + " — " : "";
+      subEl.textContent = extra + "avg over " + n + " session" + (n === 1 ? "" : "s");
+
       lineChart(canvasId, filtered.map(function (r) { return r.date; }), [
         { label: label, data: filtered.map(function (r) { return r[valueField]; }), borderColor: colors.accent, borderWidth: 1.5, pointRadius: dotR, pointBackgroundColor: colors.accent, tension: 0.15 },
       ]);
@@ -305,11 +323,15 @@
   const breadthGrid = document.getElementById("breadth-grid");
   renderSimpleMetricCard("breadth_adv_decl", "Net Advancers − Decliners", "net", breadthGrid, {
     colorByValue: true,
-    subText: function (r) { return "Adv " + r.advancers + " / Decl " + r.decliners; },
+    subText: function (items) {
+      return "Avg Adv " + Math.round(average(items, "advancers")) + " / Avg Decl " + Math.round(average(items, "decliners"));
+    },
   });
   renderSimpleMetricCard("breadth_new_hilo", "Net New Highs − New Lows", "net", breadthGrid, {
     colorByValue: true,
-    subText: function (r) { return "Highs " + r.new_highs + " / Lows " + r.new_lows; },
+    subText: function (items) {
+      return "Avg Highs " + Math.round(average(items, "new_highs")) + " / Avg Lows " + Math.round(average(items, "new_lows"));
+    },
   });
   renderSimpleMetricCard("breadth_pct_up20", "% Up 20%+ (5D)", "value", breadthGrid, { isPct: true });
   renderSimpleMetricCard("breadth_pct_up30", "% Up 30%+ (5D)", "value", breadthGrid, { isPct: true });
