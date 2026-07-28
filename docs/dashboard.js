@@ -858,8 +858,8 @@
           '<div class="lw-chart" id="stock-chart"></div>' +
           '<div class="rs-block">' +
             '<div class="env-chart-title">Relative strength</div>' +
-            '<div class="env-block-sub">the stock divided by each index, set to 100 at the start of the window &middot; ' +
-              "green means it has gained on that index since then, red means it has lost ground</div>" +
+            '<div class="env-block-sub">the stock divided by each index &middot; ' +
+              "green while it is trending up against that index, red while trending down</div>" +
             '<div class="rs-charts">' +
               '<div><div class="rs-chart-label">vs S&amp;P 500</div><div class="lw-chart rs-chart" id="rs-sp500"></div></div>' +
               '<div><div class="rs-chart-label">vs Nasdaq</div><div class="lw-chart rs-chart" id="rs-nasdaq"></div></div>' +
@@ -901,25 +901,39 @@
       });
       priceChart.timeScale().fitContent();
 
-      // Baseline series rather than a plain line: it fills green above the
-      // 100 starting level and red below, so a stock losing its lead reads as
-      // the shading flipping rather than a line that merely slopes down.
+      // Shaded green while relative strength is trending up and red while it
+      // is trending down — so a stock quietly losing ground to the index shows
+      // as the shading flipping, even if it is still ahead overall.
+      // Trend is measured against the RS line's own 20-day average rather than
+      // day-to-day direction, which would flicker colour on every wiggle.
+      // Two area series sharing one scale: each carries values only while its
+      // side is active and whitespace otherwise, with the turning point given
+      // to both so the segments join without a gap.
       [["rs-sp500", spx], ["rs-nasdaq", ndx]].forEach(function (cfg) {
         const chart = makeChart(cfg[0], 150);
         const line = rsLine(cfg[1]);
-        const s = chart.addBaselineSeries({
-          baseValue: { type: "price", price: 100 },
-          topLineColor: th.up,
-          topFillColor1: "rgba(22,163,74,0.35)",
-          topFillColor2: "rgba(22,163,74,0.04)",
-          bottomLineColor: th.down,
-          bottomFillColor1: "rgba(220,38,38,0.04)",
-          bottomFillColor2: "rgba(220,38,38,0.35)",
-          lineWidth: 1.5,
-          priceLineVisible: false,
+        const valid = line.map(function (v) { return v === null ? 100 : v; });
+        const trend = ema(valid, 20);
+
+        const upData = [], downData = [];
+        let prevUp = null;
+        dates.forEach(function (dt, i) {
+          if (line[i] === null) { upData.push({ time: dt }); downData.push({ time: dt }); return; }
+          const isUp = valid[i] >= trend[i];
+          const turning = prevUp !== null && prevUp !== isUp;
+          upData.push(isUp || turning ? { time: dt, value: line[i] } : { time: dt });
+          downData.push(!isUp || turning ? { time: dt, value: line[i] } : { time: dt });
+          prevUp = isUp;
         });
-        s.setData(dates.map(function (dt, i) { return { time: dt, value: line[i] }; })
-          .filter(function (p) { return p.value !== null; }));
+
+        chart.addAreaSeries({
+          lineColor: th.up, topColor: "rgba(22,163,74,0.32)", bottomColor: "rgba(22,163,74,0.02)",
+          lineWidth: 2, priceLineVisible: false, lastValueVisible: false,
+        }).setData(upData);
+        chart.addAreaSeries({
+          lineColor: th.down, topColor: "rgba(220,38,38,0.32)", bottomColor: "rgba(220,38,38,0.02)",
+          lineWidth: 2, priceLineVisible: false, lastValueVisible: false,
+        }).setData(downData);
         chart.timeScale().fitContent();
       });
     }
