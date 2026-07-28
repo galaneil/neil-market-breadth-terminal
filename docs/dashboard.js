@@ -1045,8 +1045,17 @@
       if (current) { dateInput.value = current.data.dates[current.data.dates.length - 1]; draw(); }
     });
 
-    const first = (host.dataset.tickers || "").split(",")[0];
-    if (first) { tickerInput.value = first; load(first); }
+    // Populate suggestions from the classification map — every classified
+    // name is available, not a curated subset.
+    const known = Object.keys(DATA.classification || {}).sort();
+    const dl = document.getElementById("stock-tickers");
+    if (dl && known.length) {
+      dl.innerHTML = known.map(function (t) { return '<option value="' + t + '">'; }).join("");
+      tickerInput.placeholder = "Search " + known.length.toLocaleString() + " tickers";
+    }
+
+    if (known.indexOf("NVDA") !== -1) { tickerInput.value = "NVDA"; load("NVDA"); }
+    else if (known.length) { tickerInput.value = known[0]; load(known[0]); }
   }
 
   // ---------- Wire everything up ----------

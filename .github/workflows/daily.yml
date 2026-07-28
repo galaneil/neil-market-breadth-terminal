@@ -34,11 +34,33 @@ jobs:
           FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
         run: python src/main.py
 
-      - name: Commit and push updated data + dashboard
+      - name: Commit source data back to main
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add data/ docs/
-          git diff --staged --quiet && echo "No changes to commit" && exit 0
-          git commit -m "Daily refresh: $(date -u +'%Y-%m-%d %H:%M UTC')"
-          git push
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "Daily refresh: $(date -u +'%Y-%m-%d %H:%M UTC')"
+            git push
+          fi
+
+      # The site is published to a branch that is replaced wholesale each run
+      # rather than committed into main. docs/tickers/ alone is a few thousand
+      # files rewritten daily; keeping every version of those in main's history
+      # would add tens of megabytes a day permanently, for data regenerated
+      # from scratch anyway. Only main keeps history, and only for the source
+      # and the accumulating JSONL metrics.
+      - name: Publish site to gh-pages
+        run: |
+          cd docs
+          git init -q
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -qb gh-pages
+          git add -A
+          git commit -qm "Site build: $(date -u +'%Y-%m-%d %H:%M UTC')"
+          git push -qf "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" gh-pages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

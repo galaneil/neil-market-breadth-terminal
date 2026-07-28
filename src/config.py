@@ -64,11 +64,14 @@ WATCHLIST = [
     "TVTX", "TWST", "VIAV", "VICR", "VRT", "VST", "XPO",
 ]
 
-# Per-ticker price files published for the stock-context page. Only the
-# watchlist gets one: writing a file per S&P 1500 member would mean ~1,500
-# small files rewritten on every daily run, which bloats the repo history
-# for names that are rarely looked up.
+# Per-ticker price files published for the stock-context page — one for every
+# name TradingView classifies, so any traded ticker can be looked up rather
+# than only a curated list. These are regenerated in full on every run and
+# published to the gh-pages branch, which is replaced wholesale each time;
+# committing ~3,300 daily-rewritten files into main would grow the repo by
+# tens of megabytes a day and never release it.
 TICKER_DIR_NAME = "tickers"
+TICKER_HISTORY_DAYS = 252
 
 COUNTRIES = {
     "US": {

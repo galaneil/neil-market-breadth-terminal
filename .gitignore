@@ -3,3 +3,8 @@ __pycache__/
 .env
 .venv/
 venv/
+
+# Regenerated in full on every run and published to gh-pages. Committing a few
+# thousand daily-rewritten price files into main would add tens of megabytes of
+# permanent history a day for data that is disposable by design.
+docs/tickers/

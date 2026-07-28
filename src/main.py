@@ -176,15 +176,27 @@ def main():
         f"/{latest_env['trend']['factors_total']})")
 
     # ---------- Per-ticker OHLC for the stock page ----------
-    log(f"Fetching OHLC for {len(config.WATCHLIST)} watchlist names...")
-    written = []
-    for ticker in config.WATCHLIST:
-        rows = drop_partial(client.historical_eod(ticker))[:config.PRICE_WINDOW_DAYS]
+    # Every classified name, not a watchlist: the whole point of the stock page
+    # is looking up something unfamiliar, which a curated list can never cover.
+    # Names FMP has no history for are skipped rather than failing the run.
+    lookup_tickers = sorted(set(industry_df["name"]) | set(stock_tickers))
+    log(f"Fetching OHLC for {len(lookup_tickers)} names (this is the long step)...")
+    written, skipped = [], 0
+    for i, ticker in enumerate(lookup_tickers):
+        try:
+            rows = drop_partial(client.historical_eod(ticker))[:config.TICKER_HISTORY_DAYS]
+        except Exception:
+            skipped += 1
+            continue
         name = store.write_ticker_ohlc(ticker, rows)
         if name:
             written.append(name)
+        else:
+            skipped += 1
+        if (i + 1) % 250 == 0:
+            log(f"  {i + 1}/{len(lookup_tickers)} fetched")
     store.write_benchmarks(price_cache, country_cfg["index_tickers"])
-    log(f"Wrote {len(written)} per-ticker OHLC files")
+    log(f"Wrote {len(written)} per-ticker OHLC files ({skipped} had no usable history)")
 
     # ---------- Render ----------
     log("Rendering combined dashboard...")

@@ -104,13 +104,15 @@ def _replay_body():
 """.strip()
 
 
-def _stock_body(watchlist):
-    options = "".join(f'<option value="{t}"></option>' for t in sorted(watchlist))
-    return f"""
-<div id="stock-panel" data-tickers="{','.join(sorted(watchlist))}">
+def _stock_body():
+    # The suggestion list is built client-side from the classification map the
+    # page already carries, rather than emitted here as a few thousand
+    # duplicate <option> tags.
+    return """
+<div id="stock-panel">
   <div class="replay-controls">
     <input type="search" id="stock-ticker" placeholder="Ticker, e.g. SNDK" list="stock-tickers" autocomplete="off">
-    <datalist id="stock-tickers">{options}</datalist>
+    <datalist id="stock-tickers"></datalist>
     <button class="icon-btn" id="stock-prev" title="Previous session">&lsaquo;</button>
     <input type="date" id="stock-date">
     <button class="icon-btn" id="stock-next" title="Next session">&rsaquo;</button>
@@ -267,7 +269,7 @@ def render_all_panels():
     }, separators=(",", ":"))
     stock_html = _ENV.get_template("panel.html.j2").render(
         title="Stock Context", generated_at=generated_at,
-        body_html=_stock_body(config.WATCHLIST), data_json=stock_json,
+        body_html=_stock_body(), data_json=stock_json,
         needs_chartjs=False, needs_lightweight=True,
     )
     stock_path = os.path.join(config.DOCS_DIR, "panel-stock.html")
