@@ -743,9 +743,239 @@
     go(dates[dates.length - 1]);
   }
 
+  // ---------- Stock context ----------
+  function renderStockPanel() {
+    const host = document.getElementById("stock-panel");
+    if (!host) return;
+
+    const tickerInput = document.getElementById("stock-ticker");
+    const dateInput = document.getElementById("stock-date");
+    const statusEl = document.getElementById("stock-status");
+    const body = document.getElementById("stock-body");
+    const dir = DATA.tickerDir || "tickers";
+
+    const cache = {};
+    let bench = null;
+    let current = null;
+
+    function ema(values, span) {
+      const k = 2 / (span + 1);
+      const out = [];
+      values.forEach(function (v, i) { out.push(i === 0 ? v : v * k + out[i - 1] * (1 - k)); });
+      return out;
+    }
+
+    function fetchJson(path) {
+      if (cache[path]) return cache[path];
+      cache[path] = fetch(path).then(function (r) {
+        if (!r.ok) throw new Error("not found");
+        return r.json();
+      });
+      return cache[path];
+    }
+
+    function pctBetween(values, endIdx, back) {
+      const startIdx = endIdx - back;
+      if (startIdx < 0 || !values[startIdx]) return null;
+      return (values[endIdx] / values[startIdx] - 1) * 100;
+    }
+
+    function benchAt(key, dates, upto) {
+      // Align a benchmark onto the stock's own trading days, carrying the last
+      // known close forward across any date the benchmark doesn't share.
+      const out = [];
+      let j = 0, last = null;
+      for (let i = 0; i <= upto; i++) {
+        while (j < bench.dates.length && bench.dates[j] <= dates[i]) {
+          if (bench[key][j] !== null && bench[key][j] !== undefined) last = bench[key][j];
+          j++;
+        }
+        out.push(last);
+      }
+      return out;
+    }
+
+    function draw() {
+      if (!current) return;
+      const d = current.data, sym = current.symbol;
+      const wanted = dateInput.value;
+      let end = -1;
+      for (let i = 0; i < d.dates.length; i++) { if (d.dates[i] <= wanted) end = i; else break; }
+      if (end < 20) { body.innerHTML = '<div class="empty-note">Not enough history before this date.</div>'; return; }
+      dateInput.value = d.dates[end];
+
+      const e10 = ema(d.close, 10), e20 = ema(d.close, 20), e50 = ema(d.close, 50);
+      const startIdx = Math.max(0, end - 125);
+      const slice = function (a) { return a.slice(startIdx, end + 1); };
+      const dates = slice(d.dates), close = slice(d.close);
+
+      const spx = benchAt("sp500", d.dates, end).slice(startIdx);
+      const ndx = benchAt("nasdaq", d.dates, end).slice(startIdx);
+      function rsLine(b) {
+        const base = close[0] / b[0];
+        return close.map(function (c, i) { return b[i] ? (c / b[i]) / base * 100 : null; });
+      }
+
+      const cls = DATA.classification ? DATA.classification[sym] : null;
+      const windows = [["1 week", 5], ["1 month", 21], ["3 months", 63], ["6 months", 126]];
+      let cards = "";
+      windows.forEach(function (w) {
+        const s = pctBetween(d.close, end, w[1]);
+        const bs = pctBetween(benchAt("sp500", d.dates, end), end, w[1]);
+        const bn = pctBetween(benchAt("nasdaq", d.dates, end), end, w[1]);
+        // Plain "outperformed / underperformed by X%". Strictly the gap between
+        // two returns is measured in percentage points, but both returns are
+        // already on screen, so the precise unit costs more clarity than it buys.
+        function gap(a, b) {
+          if (a === null || b === null) return "—";
+          const v = a - b;
+          return '<span class="' + (v >= 0 ? "up" : "down") + '">' +
+            (v >= 0 ? "outperformed" : "underperformed") + " by " + Math.abs(v).toFixed(1) + "%</span>";
+        }
+        cards +=
+          '<div class="rs-card">' +
+            '<div class="rs-window">' + w[0] + "</div>" +
+            '<div class="rs-main ' + pctClass(s) + '">' + (s === null ? "—" : fmtSignedPct(s)) + "</div>" +
+            '<div class="rs-sub">' + sym + " over " + w[0] + "</div>" +
+            '<div class="rs-line"><span>vs S&amp;P 500 (' + (bs === null ? "—" : fmtSignedPct(bs)) + ")</span>" +
+              '<span class="rs-gap">' + gap(s, bs) + "</span></div>" +
+            '<div class="rs-line"><span>vs Nasdaq (' + (bn === null ? "—" : fmtSignedPct(bn)) + ")</span>" +
+              '<span class="rs-gap">' + gap(s, bn) + "</span></div>" +
+          "</div>";
+      });
+
+      body.innerHTML =
+        '<div class="card">' +
+          '<div class="stock-head">' +
+            '<img class="stock-logo" src="https://images.financialmodelingprep.com/symbol/' + sym + '.png" alt="" onerror="this.style.display=\'none\'">' +
+            "<div>" +
+              '<div class="stock-sym">' + sym + "</div>" +
+              '<div class="card-sub">' + (cls ? cls[1] + " &middot; " + cls[0] : "&nbsp;") + "</div>" +
+            "</div>" +
+            '<div class="stock-price"><div class="card-value">' + fmtNum(d.close[end], 2) + "</div>" +
+              '<div class="card-sub">close on ' + d.dates[end] + "</div></div>" +
+          "</div>" +
+          '<div class="lw-chart" id="stock-chart"></div>' +
+          '<div class="rs-block">' +
+            '<div class="env-chart-title">Relative strength</div>' +
+            '<div class="env-block-sub">the stock divided by each index, set to 100 at the start of the window &middot; ' +
+              "green means it has gained on that index since then, red means it has lost ground</div>" +
+            '<div class="rs-charts">' +
+              '<div><div class="rs-chart-label">vs S&amp;P 500</div><div class="lw-chart rs-chart" id="rs-sp500"></div></div>' +
+              '<div><div class="rs-chart-label">vs Nasdaq</div><div class="lw-chart rs-chart" id="rs-nasdaq"></div></div>' +
+            "</div>" +
+            '<div class="rs-grid">' + cards + "</div>" +
+          "</div>" +
+        "</div>";
+
+      const th = lwTheme();
+      function makeChart(id, height) {
+        const el = document.getElementById(id);
+        const c = LightweightCharts.createChart(el, {
+          height: el.clientHeight || height,
+          layout: { background: { type: "solid", color: th.bg }, textColor: th.text, fontSize: 11 },
+          grid: { vertLines: { color: th.grid }, horzLines: { color: th.grid } },
+          rightPriceScale: { borderColor: th.border },
+          timeScale: { borderColor: th.border, rightOffset: 2 },
+          crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+        });
+        if (window.ResizeObserver) {
+          new ResizeObserver(function () {
+            c.applyOptions({ width: el.clientWidth, height: el.clientHeight });
+            c.timeScale().fitContent();
+          }).observe(el);
+        }
+        return c;
+      }
+
+      const priceChart = makeChart("stock-chart", 340);
+      const bars = priceChart.addBarSeries({
+        upColor: th.up, downColor: th.down, openVisible: false, thinBars: false,
+      });
+      bars.setData(dates.map(function (dt, i) {
+        return { time: dt, open: slice(d.open)[i], high: slice(d.high)[i], low: slice(d.low)[i], close: close[i] };
+      }));
+      [["ema10", e10, "#2962FF"], ["ema20", e20, "#F23645"], ["ema50", e50, "#FF9800"]].forEach(function (cfg) {
+        const s = priceChart.addLineSeries({ color: cfg[2], lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+        s.setData(dates.map(function (dt, i) { return { time: dt, value: slice(cfg[1])[i] }; }));
+      });
+      priceChart.timeScale().fitContent();
+
+      // Baseline series rather than a plain line: it fills green above the
+      // 100 starting level and red below, so a stock losing its lead reads as
+      // the shading flipping rather than a line that merely slopes down.
+      [["rs-sp500", spx], ["rs-nasdaq", ndx]].forEach(function (cfg) {
+        const chart = makeChart(cfg[0], 150);
+        const line = rsLine(cfg[1]);
+        const s = chart.addBaselineSeries({
+          baseValue: { type: "price", price: 100 },
+          topLineColor: th.up,
+          topFillColor1: "rgba(22,163,74,0.35)",
+          topFillColor2: "rgba(22,163,74,0.04)",
+          bottomLineColor: th.down,
+          bottomFillColor1: "rgba(220,38,38,0.04)",
+          bottomFillColor2: "rgba(220,38,38,0.35)",
+          lineWidth: 1.5,
+          priceLineVisible: false,
+        });
+        s.setData(dates.map(function (dt, i) { return { time: dt, value: line[i] }; })
+          .filter(function (p) { return p.value !== null; }));
+        chart.timeScale().fitContent();
+      });
+    }
+
+    function load(sym) {
+      sym = sym.trim().toUpperCase();
+      if (!sym) return;
+      statusEl.className = "replay-miss";
+      statusEl.textContent = "loading…";
+      Promise.all([
+        fetchJson(dir + "/" + sym + ".json"),
+        bench ? Promise.resolve(bench) : fetchJson(dir + "/_benchmarks.json"),
+      ]).then(function (res) {
+        bench = res[1];
+        current = { symbol: sym, data: res[0] };
+        dateInput.min = res[0].dates[0];
+        dateInput.max = res[0].dates[res[0].dates.length - 1];
+        if (!dateInput.value || dateInput.value > dateInput.max || dateInput.value < dateInput.min) {
+          dateInput.value = dateInput.max;
+        }
+        statusEl.textContent = "";
+        draw();
+      }).catch(function () {
+        statusEl.className = "replay-miss";
+        statusEl.textContent = sym + " is not tracked — add it to the watchlist in config.py";
+        body.innerHTML = "";
+        current = null;
+      });
+    }
+
+    function step(delta) {
+      if (!current) return;
+      const dates = current.data.dates;
+      let idx = dates.indexOf(dateInput.value);
+      if (idx === -1) { for (let i = 0; i < dates.length; i++) { if (dates[i] <= dateInput.value) idx = i; else break; } }
+      const next = Math.min(dates.length - 1, Math.max(0, idx + delta));
+      dateInput.value = dates[next];
+      draw();
+    }
+
+    tickerInput.addEventListener("change", function () { load(tickerInput.value); });
+    dateInput.addEventListener("change", draw);
+    document.getElementById("stock-prev").addEventListener("click", function () { step(-1); });
+    document.getElementById("stock-next").addEventListener("click", function () { step(1); });
+    document.getElementById("stock-latest").addEventListener("click", function () {
+      if (current) { dateInput.value = current.data.dates[current.data.dates.length - 1]; draw(); }
+    });
+
+    const first = (host.dataset.tickers || "").split(",")[0];
+    if (first) { tickerInput.value = first; load(first); }
+  }
+
   // ---------- Wire everything up ----------
   renderEnvironmentPanel();
   renderReplayPanel();
+  renderStockPanel();
 
   // Each grid container's data-keys attribute lists which series to render
   // there (comma-separated). This lets the same script serve both the full

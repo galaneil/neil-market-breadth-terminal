@@ -46,6 +46,54 @@ def write_industry_ranks(date_str, industry_records):
     upsert_jsonl(path, {"date": date_str, "industries": industry_records})
 
 
+def write_ticker_ohlc(ticker, eod_rows):
+    """One small JSON per watchlist name under docs/, fetched on demand by the
+    stock page. Carries full OHLC rather than the close-only series the shared
+    price cache holds, because the stock chart draws HLC bars — worth the extra
+    call for the handful of names on the watchlist, not for all 1,500."""
+    out_dir = os.path.join(config.DOCS_DIR, config.TICKER_DIR_NAME)
+    os.makedirs(out_dir, exist_ok=True)
+
+    rows = [r for r in eod_rows if r.get("close") is not None]
+    rows.sort(key=lambda r: r["date"])
+    if not rows:
+        return None
+
+    payload = {
+        "dates": [r["date"] for r in rows],
+        "open": [round(r.get("open") or r["close"], 4) for r in rows],
+        "high": [round(r.get("high") or r["close"], 4) for r in rows],
+        "low": [round(r.get("low") or r["close"], 4) for r in rows],
+        "close": [round(r["close"], 4) for r in rows],
+    }
+    name = ticker.replace("/", "-")
+    with open(os.path.join(out_dir, f"{name}.json"), "w") as f:
+        json.dump(payload, f, separators=(",", ":"))
+    return name
+
+
+def write_benchmarks(price_cache, index_tickers):
+    out_dir = os.path.join(config.DOCS_DIR, config.TICKER_DIR_NAME)
+    os.makedirs(out_dir, exist_ok=True)
+    written = []
+
+    benchmarks = {}
+    for key, symbol in index_tickers.items():
+        series = price_cache.get(symbol)
+        if series:
+            benchmarks[key] = series
+    if benchmarks:
+        dates = sorted(set().union(*[set(s.keys()) for s in benchmarks.values()]))
+        payload = {"dates": dates}
+        for key, series in benchmarks.items():
+            payload[key] = [series.get(d) for d in dates]
+        with open(os.path.join(out_dir, "_benchmarks.json"), "w") as f:
+            json.dump(payload, f, separators=(",", ":"))
+        written.append("_benchmarks")
+
+    return written
+
+
 def write_classification(ticker_map):
     """{ticker: [sector, industry]} — lets the replay view resolve a symbol to
     the groups it belongs to. Only today's classification is kept: TradingView

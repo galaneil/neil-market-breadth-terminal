@@ -51,6 +51,25 @@ INTERNALS_LOOKBACK_DAYS = 10
 TOP_MOVERS_COUNT = 3
 MOVER_WINDOWS = {"1w": "chg_5d", "1m": "chg_20d"}
 
+# Names to track for the stock-context page beyond the S&P 1500 breadth
+# universe. Neil trades plenty of names that aren't index members (CRDO, ALAB,
+# AXTI, AAOI and friends), and those would otherwise have no price history to
+# chart. Seeded from the prior TMLE project's universe plus names discussed
+# since; edit freely, each addition is one extra API call a day.
+WATCHLIST = [
+    "AAOI", "AEIS", "ALAB", "ALKS", "APLS", "ARM", "ARWR", "AXTI", "BE", "BEAM",
+    "CDE", "COHR", "CRDO", "CRH", "CW", "DOCN", "DRAM", "FLEX", "FN", "FTI",
+    "GEV", "IESC", "IONQ", "LITE", "MDGL", "MOD", "MPWR", "MTZ", "NVT", "NXT",
+    "POWL", "RVMD", "SATS", "SITM", "SMMT", "SNDK", "STRL", "TGTX", "TTMI",
+    "TVTX", "TWST", "VIAV", "VICR", "VRT", "VST", "XPO",
+]
+
+# Per-ticker price files published for the stock-context page. Only the
+# watchlist gets one: writing a file per S&P 1500 member would mean ~1,500
+# small files rewritten on every daily run, which bloats the repo history
+# for names that are rarely looked up.
+TICKER_DIR_NAME = "tickers"
+
 COUNTRIES = {
     "US": {
         "label": "United States",

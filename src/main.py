@@ -70,8 +70,9 @@ def main():
     uni = universe.build_sp1500()
     stock_tickers = uni["ticker"].tolist()
     index_tickers = list(country_cfg["index_tickers"].values())
-    all_price_tickers = stock_tickers + index_tickers
-    log(f"Universe: {len(stock_tickers)} stocks + {len(index_tickers)} indices")
+    extra = [t for t in config.WATCHLIST if t not in stock_tickers]
+    all_price_tickers = stock_tickers + extra + index_tickers
+    log(f"Universe: {len(stock_tickers)} stocks + {len(extra)} watchlist + {len(index_tickers)} indices")
 
     # ---------- Price cache: backfill missing, then refresh today for all ----------
     price_cache = cache_mod.load(config.PRICE_CACHE_PATH)
@@ -173,6 +174,17 @@ def main():
     log(f"Environment: {len(env_records)} days written (latest {latest_env['date']}: "
         f"{latest_env['overall']}, trend {latest_env['trend']['factors_favourable']}"
         f"/{latest_env['trend']['factors_total']})")
+
+    # ---------- Per-ticker OHLC for the stock page ----------
+    log(f"Fetching OHLC for {len(config.WATCHLIST)} watchlist names...")
+    written = []
+    for ticker in config.WATCHLIST:
+        rows = drop_partial(client.historical_eod(ticker))[:config.PRICE_WINDOW_DAYS]
+        name = store.write_ticker_ohlc(ticker, rows)
+        if name:
+            written.append(name)
+    store.write_benchmarks(price_cache, country_cfg["index_tickers"])
+    log(f"Wrote {len(written)} per-ticker OHLC files")
 
     # ---------- Render ----------
     log("Rendering combined dashboard...")

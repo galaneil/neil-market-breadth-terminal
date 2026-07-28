@@ -104,6 +104,24 @@ def _replay_body():
 """.strip()
 
 
+def _stock_body(watchlist):
+    options = "".join(f'<option value="{t}"></option>' for t in sorted(watchlist))
+    return f"""
+<div id="stock-panel" data-tickers="{','.join(sorted(watchlist))}">
+  <div class="replay-controls">
+    <input type="search" id="stock-ticker" placeholder="Ticker, e.g. SNDK" list="stock-tickers" autocomplete="off">
+    <datalist id="stock-tickers">{options}</datalist>
+    <button class="icon-btn" id="stock-prev" title="Previous session">&lsaquo;</button>
+    <input type="date" id="stock-date">
+    <button class="icon-btn" id="stock-next" title="Next session">&rsaquo;</button>
+    <button class="icon-btn" id="stock-latest">Latest</button>
+    <span id="stock-status"></span>
+  </div>
+  <div id="stock-body"></div>
+</div>
+""".strip()
+
+
 def _compact_groups(rows, items_field, name_field):
     """Rebuilds the per-day group tables as a name list plus numeric arrays.
 
@@ -234,6 +252,28 @@ def render_all_panels():
     with open(replay_path, "w", encoding="utf-8") as f:
         f.write(replay_html)
     paths.append(replay_path)
+
+    # Stock context page. Carries only the classification map; each ticker's
+    # prices are fetched on demand from docs/tickers/.
+    classification_path = os.path.join(config.DATA_DIR, "classification.json")
+    classification = {}
+    if os.path.exists(classification_path):
+        with open(classification_path) as f:
+            classification = json.load(f)
+    stock_json = json.dumps({
+        "generated_at": generated_at,
+        "classification": classification,
+        "tickerDir": config.TICKER_DIR_NAME,
+    }, separators=(",", ":"))
+    stock_html = _ENV.get_template("panel.html.j2").render(
+        title="Stock Context", generated_at=generated_at,
+        body_html=_stock_body(config.WATCHLIST), data_json=stock_json,
+        needs_chartjs=False, needs_lightweight=True,
+    )
+    stock_path = os.path.join(config.DOCS_DIR, "panel-stock.html")
+    with open(stock_path, "w", encoding="utf-8") as f:
+        f.write(stock_html)
+    paths.append(stock_path)
 
     for key, label in INDEX_LABELS.items():
         filename = f"panel-{key.replace('_', '-')}.html"
