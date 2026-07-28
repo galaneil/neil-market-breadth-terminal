@@ -1,7 +1,9 @@
 (function () {
   "use strict";
   const DATA = JSON.parse(document.getElementById("dashboard-data").textContent);
-  const S = DATA.series;
+  // The replay page carries a differently-shaped payload with no `series`
+  // key, and shares this script, so this must not be assumed present.
+  const S = DATA.series || {};
   const root = document.documentElement;
 
   // ---------- Theme ----------
@@ -575,8 +577,175 @@
     renderTable();
   }
 
+  // ---------- Market replay ----------
+  // Rewinds every stored reading to a chosen session, so a chart being studied
+  // in TradingView can be paired with the market context of that exact day.
+  function renderReplayPanel() {
+    const host = document.getElementById("replay-panel");
+    if (!host) return;
+    const D = DATA;
+    const envRows = D.environment || [];
+    if (!envRows.length) {
+      document.getElementById("replay-body").innerHTML = '<div class="empty-note">No data yet.</div>';
+      return;
+    }
+
+    const dates = envRows.map(function (r) { return r.date; });
+    const envByDate = {};
+    envRows.forEach(function (r) { envByDate[r.date] = r; });
+
+    const dateInput = document.getElementById("replay-date");
+    const tickerInput = document.getElementById("replay-ticker");
+    const tickerResult = document.getElementById("replay-ticker-result");
+    const body = document.getElementById("replay-body");
+
+    dateInput.min = dates[0];
+    dateInput.max = dates[dates.length - 1];
+
+    let highlight = { sector: null, industry: null };
+
+    // Snap to the newest session on or before the requested date, so picking a
+    // weekend or a holiday lands on the last day that actually traded instead
+    // of showing nothing.
+    function resolveDate(wanted) {
+      let chosen = null;
+      for (let i = 0; i < dates.length; i++) {
+        if (dates[i] <= wanted) chosen = dates[i]; else break;
+      }
+      return chosen || dates[0];
+    }
+
+    function groupRows(pack, dateStr) {
+      const raw = pack.byDate[dateStr] || [];
+      return raw.map(function (v) {
+        return { name: pack.names[v[0]], rank: v[1], chg_1d: v[2], chg_5d: v[3], chg_20d: v[4] };
+      }).sort(function (a, b) { return (a.rank || 999) - (b.rank || 999); });
+    }
+
+    function groupTable(title, rows, highlightName) {
+      if (!rows.length) return '<div class="empty-note">No ' + title.toLowerCase() + " for this date.</div>";
+      let html = '<div class="replay-col-title">' + title + "</div>" +
+        '<div class="replay-table-wrap"><table><thead><tr>' +
+        "<th>" + title + "</th><th>Rank</th><th>1D %</th><th>5D %</th><th>20D %</th>" +
+        "</tr></thead><tbody>";
+      rows.forEach(function (r) {
+        const hit = highlightName && r.name === highlightName;
+        html += '<tr class="' + (hit ? "selected" : "") + '">' +
+          "<td>" + r.name + "</td>" +
+          '<td class="rank-cell">' + (r.rank === null ? "—" : r.rank) + "</td>" +
+          '<td class="pct ' + pctClass(r.chg_1d) + '">' + fmtSignedPct(r.chg_1d) + "</td>" +
+          '<td class="pct ' + pctClass(r.chg_5d) + '">' + fmtSignedPct(r.chg_5d) + "</td>" +
+          '<td class="pct ' + pctClass(r.chg_20d) + '">' + fmtSignedPct(r.chg_20d) + "</td>" +
+          "</tr>";
+      });
+      return html + "</tbody></table></div>";
+    }
+
+    function indexRow(key, label, dateStr) {
+      const rows = (D.indices && D.indices[key]) || [];
+      let match = null;
+      for (let i = 0; i < rows.length; i++) {
+        if (rows[i].date <= dateStr) match = rows[i]; else break;
+      }
+      if (!match) return "";
+      function pill(on, text) {
+        return '<span class="factor-pill ' + (on ? "up" : "down") + '">' + text + "</span>";
+      }
+      return '<div class="factor-row">' +
+        '<span class="factor-name">' + label + "</span>" +
+        '<span class="replay-close">' + fmtNum(match.close, 2) + "</span>" +
+        pill(match.a10, "10") + pill(match.a20, "20") + pill(match.a50, "50") +
+        "</div>";
+    }
+
+    function draw(dateStr) {
+      const env = envByDate[dateStr];
+      const t = env && env.trend, p = env && env.participation, i = env && env.internals;
+
+      function tag(label) { return '<span class="env-tag ' + label + '">' + label + "</span>"; }
+
+      body.innerHTML =
+        '<div class="card">' +
+          '<div class="env-headline">' +
+            '<span class="env-verdict ' + (env ? env.overall : "") + '">' + (env ? env.overall : "—") + "</span>" +
+            '<span class="env-date">' + dateStr + "</span>" +
+          "</div>" +
+          '<div class="env-grid">' +
+            '<div class="env-block">' +
+              '<div class="env-block-title">Trend ' + (t ? tag(t.label) : "") + "</div>" +
+              '<div class="env-block-value">' + (t ? t.factors_favourable + " / " + t.factors_total : "—") + "</div>" +
+              '<div class="env-block-sub">large caps only ' + (t ? t.large_cap_favourable + " / " + t.large_cap_total : "—") + "</div>" +
+              '<div class="factor-grid">' +
+                indexRow("index_nasdaq", "NASDAQ", dateStr) +
+                indexRow("index_sp500", "S&P 500", dateStr) +
+                indexRow("index_russell2000", "Russell 2000", dateStr) +
+              "</div>" +
+            "</div>" +
+            '<div class="env-block">' +
+              '<div class="env-block-title">Participation ' + (p ? tag(p.label) : "") + "</div>" +
+              '<div class="env-stat"><span class="env-stat-num">' +
+                (p && p.sectors_positive !== null ? p.sectors_positive + " / " + p.sectors_total : "—") +
+                '</span><span class="env-stat-label">sectors</span></div>' +
+              '<div class="env-stat"><span class="env-stat-num">' +
+                (p && p.industries_positive !== null ? p.industries_positive + " / " + p.industries_total : "—") +
+                '</span><span class="env-stat-label">industries</span></div>' +
+              '<div class="env-block-sub">positive over the prior 20 days</div>' +
+            "</div>" +
+            '<div class="env-block">' +
+              '<div class="env-block-title">Internals ' + (i ? tag(i.label) : "") + "</div>" +
+              '<div class="env-block-value ' + (i ? pctClass(i.adv_decl_avg) : "") + '">' +
+                (i && i.adv_decl_avg !== null ? fmtSignedInt(Math.round(i.adv_decl_avg)) : "—") + "</div>" +
+              '<div class="env-block-sub">more stocks rising than falling on a typical day</div>' +
+              '<div class="env-block-extra">' +
+                (i && i.new_hilo_avg !== null ? fmtSignedInt(Math.round(i.new_hilo_avg)) + " more new highs than new lows" : "&nbsp;") +
+              "</div>" +
+            "</div>" +
+          "</div>" +
+          '<div class="replay-groups">' +
+            "<div>" + groupTable("Sectors", groupRows(D.sectors, dateStr), highlight.sector) + "</div>" +
+            "<div>" + groupTable("Industries", groupRows(D.industries, dateStr), highlight.industry) + "</div>" +
+          "</div>" +
+        "</div>";
+    }
+
+    function go(wanted) {
+      const resolved = resolveDate(wanted);
+      dateInput.value = resolved;
+      draw(resolved);
+    }
+
+    function step(delta) {
+      const idx = dates.indexOf(dateInput.value);
+      const next = Math.min(dates.length - 1, Math.max(0, (idx === -1 ? dates.length - 1 : idx) + delta));
+      go(dates[next]);
+    }
+
+    dateInput.addEventListener("change", function () { go(dateInput.value); });
+    document.getElementById("replay-prev").addEventListener("click", function () { step(-1); });
+    document.getElementById("replay-next").addEventListener("click", function () { step(1); });
+    document.getElementById("replay-latest").addEventListener("click", function () { go(dates[dates.length - 1]); });
+
+    tickerInput.addEventListener("input", function () {
+      const sym = tickerInput.value.trim().toUpperCase();
+      const hit = D.classification ? D.classification[sym] : null;
+      if (sym && hit) {
+        highlight = { sector: hit[0], industry: hit[1] };
+        tickerResult.className = "replay-hit";
+        tickerResult.textContent = sym + " → " + hit[1] + " (" + hit[0] + ")";
+      } else {
+        highlight = { sector: null, industry: null };
+        tickerResult.className = "replay-miss";
+        tickerResult.textContent = sym ? "not found" : "";
+      }
+      draw(dateInput.value);
+    });
+
+    go(dates[dates.length - 1]);
+  }
+
   // ---------- Wire everything up ----------
   renderEnvironmentPanel();
+  renderReplayPanel();
 
   // Each grid container's data-keys attribute lists which series to render
   // there (comma-separated). This lets the same script serve both the full

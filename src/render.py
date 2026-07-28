@@ -88,6 +88,76 @@ def _summary_body():
     return '<div id="environment-panel"></div>'
 
 
+def _replay_body():
+    return """
+<div id="replay-panel">
+  <div class="replay-controls">
+    <button class="icon-btn" id="replay-prev" title="Previous session">&lsaquo;</button>
+    <input type="date" id="replay-date">
+    <button class="icon-btn" id="replay-next" title="Next session">&rsaquo;</button>
+    <button class="icon-btn" id="replay-latest">Latest</button>
+    <input type="search" id="replay-ticker" placeholder="Ticker, e.g. NVDA">
+    <span id="replay-ticker-result"></span>
+  </div>
+  <div id="replay-body"></div>
+</div>
+""".strip()
+
+
+def _compact_groups(rows, items_field, name_field):
+    """Rebuilds the per-day group tables as a name list plus numeric arrays.
+
+    The replay page needs every date, and the industry history alone is 3.6MB
+    as stored - mostly the same field names and group names repeated 252 times.
+    Emitting names once and then [rank, 1d, 5d, 20d] per group per day cuts it
+    to a fraction, which matters when the page has to load inside a Notion
+    embed."""
+    names, index_of = [], {}
+    by_date = {}
+    for row in rows:
+        values = []
+        for item in row.get(items_field, []):
+            name = item.get(name_field)
+            if name is None:
+                continue
+            if name not in index_of:
+                index_of[name] = len(names)
+                names.append(name)
+            values.append([
+                index_of[name],
+                item.get("rank"),
+                item.get("chg_1d"),
+                item.get("chg_5d"),
+                item.get("chg_20d"),
+            ])
+        by_date[row["date"]] = values
+    return {"names": names, "byDate": by_date}
+
+
+def build_replay_payload(series, generated_at):
+    classification_path = os.path.join(config.DATA_DIR, "classification.json")
+    classification = {}
+    if os.path.exists(classification_path):
+        with open(classification_path) as f:
+            classification = json.load(f)
+
+    return {
+        "generated_at": generated_at,
+        "environment": series.get("environment", []),
+        "indices": {
+            key: [
+                {"date": r["date"], "close": r["close"],
+                 "a10": r["above_ema10"], "a20": r["above_ema20"], "a50": r["above_ema50"]}
+                for r in series.get(key, [])
+            ]
+            for key in INDEX_LABELS
+        },
+        "sectors": _compact_groups(series.get("sector_ranks", []), "sectors", "sector"),
+        "industries": _compact_groups(series.get("industry_ranks", []), "industries", "industry"),
+        "classification": classification,
+    }
+
+
 def _breadth_body(key):
     return f'<div class="card-grid" id="breadth-grid" data-keys="{key}"></div>'
 
@@ -151,6 +221,19 @@ def render_all_panels():
         "panel-summary.html", "Market Environment", _summary_body(),
         ["environment"], series, generated_at,
     ))
+
+    # The replay page carries its own compacted payload rather than the raw
+    # per-metric series, so it is built directly instead of via render_panel.
+    replay_json = json.dumps(build_replay_payload(series, generated_at), separators=(",", ":"))
+    replay_html = _ENV.get_template("panel.html.j2").render(
+        title="Market Replay", generated_at=generated_at,
+        body_html=_replay_body(), data_json=replay_json,
+        needs_chartjs=False, needs_lightweight=False,
+    )
+    replay_path = os.path.join(config.DOCS_DIR, "panel-replay.html")
+    with open(replay_path, "w", encoding="utf-8") as f:
+        f.write(replay_html)
+    paths.append(replay_path)
 
     for key, label in INDEX_LABELS.items():
         filename = f"panel-{key.replace('_', '-')}.html"

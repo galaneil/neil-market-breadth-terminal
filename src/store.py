@@ -46,6 +46,18 @@ def write_industry_ranks(date_str, industry_records):
     upsert_jsonl(path, {"date": date_str, "industries": industry_records})
 
 
+def write_classification(ticker_map):
+    """{ticker: [sector, industry]} — lets the replay view resolve a symbol to
+    the groups it belongs to. Only today's classification is kept: TradingView
+    has no historical mode, so a stock that changed industry mid-year will show
+    under its current one for older dates. Same approximation the prior TMLE
+    project made."""
+    path = os.path.join(config.DATA_DIR, "classification.json")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w") as f:
+        json.dump(ticker_map, f, separators=(",", ":"), sort_keys=True)
+
+
 def write_environment(record):
     upsert_jsonl(os.path.join(config.DATA_DIR, "environment.jsonl"), record)
 

@@ -167,6 +167,22 @@ section h2 { font-size: 15px; text-transform: uppercase; letter-spacing: 0.04em;
 .mover-chg { font-variant-numeric: tabular-nums; flex-shrink: 0; }
 .mover-chg.up { color: var(--up); }
 .mover-chg.down { color: var(--down); }
+.replay-controls { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
+.replay-controls input[type="date"], .replay-controls input[type="search"] {
+  background: var(--panel-bg); color: var(--text); border: 1px solid var(--border);
+  border-radius: 6px; padding: 6px 10px; font-size: 13px;
+}
+.replay-controls input[type="search"] { width: 170px; }
+.replay-hit { font-size: 12px; color: var(--accent); }
+.replay-miss { font-size: 12px; color: var(--text-dim); }
+.replay-close { font-size: 12px; font-variant-numeric: tabular-nums; width: 84px; }
+.replay-groups { display: grid; grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); gap: 18px; margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); border-radius: 0; }
+.replay-col-title { font-size: 13px; font-weight: 600; margin-bottom: 8px; }
+.replay-table-wrap { max-height: 420px; overflow-y: auto; }
+.replay-table-wrap table { font-size: 12px; }
+.replay-table-wrap th, .replay-table-wrap td { padding: 5px 8px; }
+.replay-table-wrap th { cursor: default; }
+.replay-table-wrap tbody tr { cursor: default; }
 .env-chart-block { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border); border-radius: 0; }
 .env-chart-title { font-size: 13px; font-weight: 600; margin-bottom: 2px; }
 .env-chart-block .tf-toggle { margin-top: 10px; }

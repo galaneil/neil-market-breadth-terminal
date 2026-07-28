@@ -131,6 +131,12 @@ def main():
     log(f"Classified {len(industry_df)} stocks: "
         f"{industry_df['sector'].nunique()} sectors, {industry_df['industry'].nunique()} industries")
 
+    store.write_classification({
+        row["name"]: [row["sector"], row["industry"]]
+        for _, row in industry_df.iterrows()
+        if row.get("sector") and row.get("industry")
+    })
+
     dates = groups_mod.trading_calendar(price_cache, country_cfg["index_tickers"]["sp500"], n_days)
 
     log("Backfilling sector performance/rank...")
