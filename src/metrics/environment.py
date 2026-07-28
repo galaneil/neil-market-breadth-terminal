@@ -33,6 +33,7 @@ from config import (
     TREND_BULL_MIN, TREND_BEAR_MAX,
     PARTICIPATION_BULL_MIN, PARTICIPATION_BEAR_MAX,
     INTERNALS_LOOKBACK_DAYS,
+    TOP_MOVERS_COUNT, MOVER_WINDOWS,
 )
 
 EMA_KEYS = ["above_ema10", "above_ema20", "above_ema50"]
@@ -97,11 +98,14 @@ def compute_trend(index_series, date_str):
     }
 
 
-def _positive_share(items, field="chg_20d"):
+def _positive_counts(items, field="chg_20d"):
+    """(positive_count, total, pct) — the raw counts matter as much as the
+    share: "12 of 19" is a different confidence than "63%" alone implies."""
     values = [i.get(field) for i in items if i.get(field) is not None]
     if not values:
-        return None
-    return round(100.0 * sum(1 for v in values if v > 0) / len(values), 1)
+        return None, None, None
+    positive = sum(1 for v in values if v > 0)
+    return positive, len(values), round(100.0 * positive / len(values), 1)
 
 
 def compute_participation(sector_rows, industry_rows, date_str):
@@ -110,19 +114,54 @@ def compute_participation(sector_rows, industry_rows, date_str):
     sector_row = _row_for_date(sector_rows, date_str) if sector_rows else None
     industry_row = _row_for_date(industry_rows, date_str) if industry_rows else None
 
-    sector_pct = _positive_share(sector_row["sectors"]) if sector_row else None
-    industry_pct = _positive_share(industry_row["industries"]) if industry_row else None
+    s_pos, s_total, s_pct = _positive_counts(sector_row["sectors"]) if sector_row else (None, None, None)
+    i_pos, i_total, i_pct = _positive_counts(industry_row["industries"]) if industry_row else (None, None, None)
 
-    parts = [p for p in (sector_pct, industry_pct) if p is not None]
+    parts = [p for p in (s_pct, i_pct) if p is not None]
     if not parts:
         return None
     combined = sum(parts) / len(parts)
 
     return {
-        "sectors_positive_pct": sector_pct,
-        "industries_positive_pct": industry_pct,
+        "sectors_positive": s_pos,
+        "sectors_total": s_total,
+        "sectors_positive_pct": s_pct,
+        "industries_positive": i_pos,
+        "industries_total": i_total,
+        "industries_positive_pct": i_pct,
         "label": _label(combined, PARTICIPATION_BULL_MIN, PARTICIPATION_BEAR_MAX),
     }
+
+
+def _movers(items, name_field, value_field, n):
+    """Best and worst n groups by return over one window."""
+    usable = [i for i in items if i.get(value_field) is not None]
+    if not usable:
+        return {"top": [], "bottom": []}
+    ordered = sorted(usable, key=lambda i: i[value_field], reverse=True)
+
+    def shape(entries):
+        return [{"name": e[name_field], "chg": round(e[value_field], 2)} for e in entries]
+
+    return {"top": shape(ordered[:n]), "bottom": shape(ordered[-n:][::-1])}
+
+
+def compute_leaders(sector_rows, industry_rows, date_str):
+    """Which sectors and industries are actually gaining and losing traction,
+    over a week and a month. Deliberately not a 1-day view: a single session
+    reshuffles the order without telling you anything about rotation."""
+    sector_row = _row_for_date(sector_rows, date_str) if sector_rows else None
+    industry_row = _row_for_date(industry_rows, date_str) if industry_rows else None
+    if not sector_row and not industry_row:
+        return None
+
+    out = {}
+    for window, field in MOVER_WINDOWS.items():
+        out[window] = {
+            "sectors": _movers(sector_row["sectors"], "sector", field, TOP_MOVERS_COUNT) if sector_row else {"top": [], "bottom": []},
+            "industries": _movers(industry_row["industries"], "industry", field, TOP_MOVERS_COUNT) if industry_row else {"top": [], "bottom": []},
+        }
+    return out
 
 
 def _trailing_mean(rows, date_str, field, n):
@@ -180,6 +219,7 @@ def compute_environment(index_series, sector_rows, industry_rows,
     trend = compute_trend(index_series, date_str)
     participation = compute_participation(sector_rows, industry_rows, date_str)
     internals = compute_internals(adv_decl_rows, new_hilo_rows, date_str)
+    leaders = compute_leaders(sector_rows, industry_rows, date_str)
 
     labels = [
         trend["label"] if trend else None,
@@ -193,6 +233,7 @@ def compute_environment(index_series, sector_rows, industry_rows,
         "trend": trend,
         "participation": participation,
         "internals": internals,
+        "leaders": leaders,
     }
 
 

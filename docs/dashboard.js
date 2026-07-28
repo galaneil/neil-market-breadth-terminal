@@ -167,6 +167,61 @@
   // here, so the browser and any later consumer (replay, trade log) always
   // agree on what the environment was on a given date.
   const INDEX_SHORT = { nasdaq: "NASDAQ", sp500: "S&P 500", russell2000: "Russell 2000" };
+  const MOVER_WINDOW_LABELS = { "1w": "1 week", "1m": "1 month" };
+
+  // Which groups are gaining and losing traction. Shown over a week and a
+  // month rather than a day, so a name that has genuinely rotated from dead
+  // to leading (or has quietly fallen apart) actually surfaces.
+  function moverList(entries, direction) {
+    if (!entries || !entries.length) return "";
+    let html = '<div class="mover-group"><div class="mover-group-label ' + direction + '">' +
+      (direction === "up" ? "Leaders" : "Laggards") + "</div>";
+    entries.forEach(function (e) {
+      html += '<div class="mover-row">' +
+        '<span class="mover-name">' + e.name + "</span>" +
+        '<span class="mover-chg ' + pctClass(e.chg) + '">' + fmtSignedPct(e.chg) + "</span>" +
+        "</div>";
+    });
+    return html + "</div>";
+  }
+
+  function moversColumn(title, block) {
+    return '<div><div class="movers-col-title">' + title + "</div>" +
+      moverList(block.top, "up") + moverList(block.bottom, "down") + "</div>";
+  }
+
+  function moversHtml(leaders) {
+    const windows = Object.keys(MOVER_WINDOW_LABELS).filter(function (w) { return leaders[w]; });
+    if (!windows.length) return "";
+    let buttons = "";
+    windows.forEach(function (w, idx) {
+      buttons += '<button class="tf-btn mover-btn' + (idx === 0 ? " active" : "") +
+        '" data-window="' + w + '">' + MOVER_WINDOW_LABELS[w] + "</button>";
+    });
+    return '<div class="movers">' +
+      '<div class="movers-head"><span class="movers-title">Leaders and laggards</span>' + buttons + "</div>" +
+      '<div class="movers-grid"></div></div>';
+  }
+
+  function wireMoversToggle(host, leaders) {
+    if (!leaders) return;
+    const grid = host.querySelector(".movers-grid");
+    const buttons = host.querySelectorAll(".mover-btn");
+    if (!grid || !buttons.length) return;
+
+    function draw(w) {
+      const data = leaders[w];
+      grid.innerHTML = moversColumn("Sectors", data.sectors) + moversColumn("Industries", data.industries);
+    }
+    buttons.forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        buttons.forEach(function (b) { b.classList.remove("active"); });
+        btn.classList.add("active");
+        draw(btn.dataset.window);
+      });
+    });
+    draw(buttons[0].dataset.window);
+  }
 
   function renderEnvironmentPanel() {
     const host = document.getElementById("environment-panel");
@@ -219,27 +274,40 @@
 
           '<div class="env-block">' +
             '<div class="env-block-title">Participation ' + (p ? tag(p.label) : "") + "</div>" +
-            '<div class="env-block-value">' + (p && p.sectors_positive_pct !== null ? p.sectors_positive_pct + "%" : "—") + "</div>" +
-            '<div class="env-block-sub">of sectors positive over 20 days</div>' +
-            '<div class="env-block-extra">' +
-              (p && p.industries_positive_pct !== null ? p.industries_positive_pct + "% of industries positive" : "&nbsp;") +
+            '<div class="env-stat">' +
+              '<span class="env-stat-num">' + (p && p.sectors_positive !== null ? p.sectors_positive + " / " + p.sectors_total : "—") + "</span>" +
+              '<span class="env-stat-label">sectors' + (p && p.sectors_positive_pct !== null ? " &middot; " + p.sectors_positive_pct + "%" : "") + "</span>" +
             "</div>" +
+            '<div class="env-stat">' +
+              '<span class="env-stat-num">' + (p && p.industries_positive !== null ? p.industries_positive + " / " + p.industries_total : "—") + "</span>" +
+              '<span class="env-stat-label">industries' + (p && p.industries_positive_pct !== null ? " &middot; " + p.industries_positive_pct + "%" : "") + "</span>" +
+            "</div>" +
+            '<div class="env-block-sub">positive over the last 20 days</div>' +
           "</div>" +
 
           '<div class="env-block">' +
             '<div class="env-block-title">Internals ' + (i ? tag(i.label) : "") + "</div>" +
             '<div class="env-block-value ' + (i ? pctClass(i.adv_decl_avg) : "") + '">' +
               (i && i.adv_decl_avg !== null ? fmtSignedInt(Math.round(i.adv_decl_avg)) : "—") + "</div>" +
-            '<div class="env-block-sub">avg net advancers over ' + (i ? i.lookback_days : 10) + " sessions</div>" +
+            '<div class="env-block-sub">more stocks rising than falling on a typical day</div>' +
             '<div class="env-block-extra">' +
-              (i && i.new_hilo_avg !== null ? fmtSignedInt(Math.round(i.new_hilo_avg)) + " avg net new highs" : "&nbsp;") +
+              (i && i.new_hilo_avg !== null
+                ? fmtSignedInt(Math.round(i.new_hilo_avg)) + " more new highs than new lows &middot; both averaged over " + i.lookback_days + " sessions"
+                : "&nbsp;") +
             "</div>" +
           "</div>" +
 
         "</div>" +
-        '<div class="tf-toggle"></div>' +
-        '<div class="chart-wrap"><canvas id="environment-canvas"></canvas></div>' +
+        (env.leaders ? moversHtml(env.leaders) : "") +
+        '<div class="env-chart-block">' +
+          '<div class="env-chart-title">Trend strength over time</div>' +
+          '<div class="env-block-sub">how many of the 9 index-vs-EMA factors were favourable each day &middot; 9 is fully bullish, 0 fully bearish</div>' +
+          '<div class="tf-toggle"></div>' +
+          '<div class="chart-wrap"><canvas id="environment-canvas"></canvas></div>' +
+        "</div>" +
       "</div>";
+
+    wireMoversToggle(host, env.leaders);
 
     setupTimeframeToggle(host.querySelector(".tf-toggle"), function (tf) {
       const filtered = filterByTimeframe(rows, tf);

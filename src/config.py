@@ -45,6 +45,12 @@ PARTICIPATION_BEAR_MAX = 35
 # since a single day's net figure whipsaws too much to describe a regime.
 INTERNALS_LOOKBACK_DAYS = 10
 
+# Leaders/laggards: how many to list each way, and which stored return window
+# each label maps to. Deliberately no 1-day window — a single session says
+# nothing about which groups are actually gaining or losing traction.
+TOP_MOVERS_COUNT = 3
+MOVER_WINDOWS = {"1w": "chg_5d", "1m": "chg_20d"}
+
 COUNTRIES = {
     "US": {
         "label": "United States",
