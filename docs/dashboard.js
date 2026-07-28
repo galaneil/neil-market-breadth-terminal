@@ -905,6 +905,13 @@
     let bench = null;
     let current = null;
 
+    // How many trailing sessions the price and RS charts draw. 0 means every
+    // bar stored. This used to be hard-coded to 126, which silently threw away
+    // most of the history actually on disk (a name with two years stored still
+    // only ever drew its last six months).
+    const RANGES = [["1M", 21], ["3M", 63], ["6M", 126], ["1Y", 252], ["2Y", 504], ["ALL", 0]];
+    let rangeBars = 252;
+
     function ema(values, span) {
       const k = 2 / (span + 1);
       const out = [];
@@ -951,8 +958,11 @@
       if (end < 20) { body.innerHTML = '<div class="empty-note">Not enough history before this date.</div>'; return; }
       dateInput.value = d.dates[end];
 
+      // EMAs are computed over the FULL history and sliced afterwards, so the
+      // averages at the left edge of the window are already seeded and correct
+      // rather than restarting from the first visible bar.
       const e10 = ema(d.close, 10), e20 = ema(d.close, 20), e50 = ema(d.close, 50);
-      const startIdx = Math.max(0, end - 125);
+      const startIdx = rangeBars ? Math.max(0, end - (rangeBars - 1)) : 0;
       const slice = function (a) { return a.slice(startIdx, end + 1); };
       const dates = slice(d.dates), close = slice(d.close);
 
@@ -1002,6 +1012,16 @@
             '<div class="stock-price"><div class="card-value">' + fmtNum(d.close[end], 2) + "</div>" +
               '<div class="card-sub">close on ' + d.dates[end] + "</div></div>" +
           "</div>" +
+          '<div class="tf-toggle stock-tf">' +
+            RANGES.map(function (r) {
+              // A range longer than the stored history would just render the
+              // same chart as ALL, so it is disabled rather than offered.
+              const tooLong = r[1] && r[1] > end + 1;
+              return '<button data-bars="' + r[1] + '"' +
+                (r[1] === rangeBars ? ' class="active"' : "") +
+                (tooLong ? " disabled" : "") + ">" + r[0] + "</button>";
+            }).join("") +
+          "</div>" +
           '<div class="lw-chart" id="stock-chart"></div>' +
           '<div class="rs-block">' +
             '<div class="env-chart-title">Relative strength</div>' +
@@ -1016,6 +1036,13 @@
             '<div class="rs-grid">' + cards + "</div>" +
           "</div>" +
         "</div>";
+
+      body.querySelectorAll(".stock-tf button").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          rangeBars = Number(btn.dataset.bars);
+          draw();
+        });
+      });
 
       const th = lwTheme();
       function makeChart(id, height) {
@@ -1034,6 +1061,14 @@
             c.timeScale().fitContent();
           }).observe(el);
         }
+        // A chart created before its container has finished laying out sizes
+        // itself to whatever width exists at that instant and keeps that bar
+        // spacing, which leaves the series drawn across only part of the pane.
+        // Re-fitting on the next frame corrects it once layout is settled.
+        requestAnimationFrame(function () {
+          c.applyOptions({ width: el.clientWidth, height: el.clientHeight || height });
+          c.timeScale().fitContent();
+        });
         return c;
       }
 
