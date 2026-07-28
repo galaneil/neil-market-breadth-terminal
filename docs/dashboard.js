@@ -431,6 +431,11 @@
     if (window.ResizeObserver) {
       new ResizeObserver(function () {
         chart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
+        // Resizing keeps the existing bar spacing, so a chart that was fitted
+        // at one width ends up showing only part of its range at another -
+        // which is exactly what happens on first paint inside an iframe.
+        // Re-fit so the selected timeframe always fills the visible area.
+        chart.timeScale().fitContent();
       }).observe(container);
     }
   }
