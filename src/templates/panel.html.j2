@@ -30,7 +30,8 @@ footer { display: none; }
 {{ body_html | safe }}
 </main>
 
-<script src="vendor/chart.umd.min.js"></script>
+{% if needs_chartjs %}<script src="vendor/chart.umd.min.js"></script>{% endif %}
+{% if needs_lightweight %}<script src="vendor/lightweight-charts.js"></script>{% endif %}
 <script id="dashboard-data" type="application/json">{{ data_json }}</script>
 <script src="dashboard.js"></script>
 </body>

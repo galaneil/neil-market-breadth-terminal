@@ -1,15 +1,18 @@
 """
-metrics/indices.py — NASDAQ / S&P 500 / Russell 2000: EMA10/20/50 and their
-position/slope relative to price. Raw, directly observable data only — no
-composite/derived signal (position above/below and slope direction are just
+metrics/indices.py — NASDAQ / S&P 500 / Russell 2000: daily OHLC plus EMA10/20/50
+and their position/slope relative to price. Raw, directly observable data only —
+no composite/derived signal (position above/below and slope direction are just
 plain comparisons, not a blended score).
 
-Computes the EMA series once (vectorized over the full cached price history)
-and extracts records for a trailing window of dates, rather than one point at
-a time — this is what makes real multi-month backfill cheap: the EMA math for
-day N always depends on the whole history up to day N anyway, so computing
-the whole series in one pass is both simpler and much faster than replaying
-it separately per day.
+Takes full OHLC rows straight from FMP rather than reading the shared price
+cache: the cache only keeps closing prices (all the breadth maths needs), but
+the dashboard draws these three indices as HLC bars, which needs high and low
+too. It's only three symbols, so fetching them separately is cheap.
+
+Computes the EMA series once (vectorized over the full history) and extracts
+records for a trailing window of dates, rather than one point at a time — the
+EMA for day N depends on the whole history up to day N anyway, so one pass is
+both simpler and much faster than replaying it per day.
 """
 
 import sys
@@ -17,19 +20,25 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pandas as pd
-import cache as cache_mod
 
 
-def compute_index_series(price_cache, ticker):
-    """Returns a DataFrame (indexed by date) with columns close/ema10/ema20/ema50,
-    or None if there's no cached history for this ticker yet."""
-    series = cache_mod.to_series(price_cache, ticker)
-    if series.empty:
+def build_ohlc_frame(eod_rows):
+    """eod_rows: list of dicts from FMPClient.historical_eod (newest first).
+    Returns a DataFrame indexed by date (ascending) with open/high/low/close
+    plus ema10/ema20/ema50, or None if there's nothing usable."""
+    rows = [r for r in eod_rows if r.get("close") is not None]
+    if not rows:
         return None
-    df = pd.DataFrame({"close": series})
-    df["ema10"] = series.ewm(span=10, adjust=False).mean()
-    df["ema20"] = series.ewm(span=20, adjust=False).mean()
-    df["ema50"] = series.ewm(span=50, adjust=False).mean()
+
+    df = pd.DataFrame(rows)[["date", "open", "high", "low", "close"]]
+    df["date"] = pd.to_datetime(df["date"])
+    df = df.set_index("date").sort_index()
+    df = df.astype(float)
+
+    close = df["close"]
+    df["ema10"] = close.ewm(span=10, adjust=False).mean()
+    df["ema20"] = close.ewm(span=20, adjust=False).mean()
+    df["ema50"] = close.ewm(span=50, adjust=False).mean()
     return df
 
 
@@ -41,6 +50,9 @@ def _record_from_row(df, i):
 
     return {
         "date": df.index[i].strftime("%Y-%m-%d"),
+        "open": float(row["open"]),
+        "high": float(row["high"]),
+        "low": float(row["low"]),
         "close": float(row["close"]),
         "ema10": float(row["ema10"]),
         "ema20": float(row["ema20"]),
@@ -54,10 +66,10 @@ def _record_from_row(df, i):
     }
 
 
-def backfill_index_history(price_cache, ticker, n_days):
-    """Records for the trailing n_days of available cached history (fewer if
-    the cache doesn't hold that much yet)."""
-    df = compute_index_series(price_cache, ticker)
+def backfill_index_history(eod_rows, n_days):
+    """Records for the trailing n_days of available history (fewer if FMP
+    returned less than that)."""
+    df = build_ohlc_frame(eod_rows)
     if df is None or df.empty:
         return []
     start = max(0, len(df) - n_days)
@@ -66,13 +78,15 @@ def backfill_index_history(price_cache, ticker, n_days):
 
 if __name__ == "__main__":
     import json
-    from config import PRICE_CACHE_PATH, COUNTRIES, DEFAULT_COUNTRY, CHART_BACKFILL_DAYS
+    from fmp_client import FMPClient
+    from config import COUNTRIES, DEFAULT_COUNTRY, CHART_BACKFILL_DAYS
 
-    price_cache = cache_mod.load(PRICE_CACHE_PATH)
-    if not price_cache:
-        print("Price cache is empty — run main.py's backfill step first.")
+    key = os.environ.get("FMP_API_KEY")
+    if not key:
+        print("Set FMP_API_KEY to smoke-test this module.")
     else:
         ticker = COUNTRIES[DEFAULT_COUNTRY]["index_tickers"]["sp500"]
-        records = backfill_index_history(price_cache, ticker, CHART_BACKFILL_DAYS)
+        rows = FMPClient(key).historical_eod(ticker)
+        records = backfill_index_history(rows, CHART_BACKFILL_DAYS)
         print(f"{len(records)} records for {ticker}")
         print(json.dumps(records[-1], indent=2))

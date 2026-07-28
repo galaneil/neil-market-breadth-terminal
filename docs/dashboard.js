@@ -50,6 +50,23 @@
     if (!vals.length) return null;
     return vals.reduce(function (a, b) { return a + b; }, 0) / vals.length;
   }
+  // How many consecutive days (ending today) has the same side been ahead -
+  // a plain run-length count, not a synthesized signal. Always computed off
+  // the FULL history regardless of the selected timeframe, since "how many
+  // days in a row" is a property of the raw day-by-day series, not something
+  // that means anything averaged over a window.
+  function currentStreak(rows, field) {
+    if (!rows.length) return null;
+    const sign = function (v) { return v > 0 ? 1 : (v < 0 ? -1 : 0); };
+    const lastSign = sign(rows[rows.length - 1][field]);
+    if (lastSign === 0) return { sign: 0, days: 0 };
+    let days = 0;
+    for (let i = rows.length - 1; i >= 0; i--) {
+      if (sign(rows[i][field]) === lastSign) days++;
+      else break;
+    }
+    return { sign: lastSign, days: days };
+  }
   function cssVar(name) {
     return getComputedStyle(root).getPropertyValue(name).trim();
   }
@@ -109,7 +126,10 @@
     registeredCards.push(function () { renderFn(currentTf()); });
     renderFn("ALL");
   }
-  function redrawAllCharts() { registeredCards.forEach(function (fn) { fn(); }); }
+  function redrawAllCharts() {
+    registeredCards.forEach(function (fn) { fn(); });
+    lwUpdaters.forEach(function (fn) { fn(); });
+  }
 
   // ---------- Chart.js wrapper ----------
   const charts = {};
@@ -142,13 +162,32 @@
     });
   }
 
-  // ---------- Index cards ----------
+  // ---------- Index cards (TradingView lightweight-charts) ----------
+  // Drawn as HLC bars rather than a line: with four overlapping lines the
+  // close was hard to pick out. Bars also make the daily range visible, and
+  // the chart is scrollable/zoomable like a real charting package.
+  // EMA colours match Neil's own TradingView layout so the two read the same:
+  // 10 blue, 20 red, 50 orange.
+  const EMA_COLORS = { ema10: "#2962FF", ema20: "#F23645", ema50: "#FF9800" };
+  const lwUpdaters = [];
+
+  function lwTheme() {
+    return {
+      bg: cssVar("--panel-bg"),
+      text: cssVar("--text-dim"),
+      grid: cssVar("--grid-line"),
+      border: cssVar("--border"),
+      up: cssVar("--up"),
+      down: cssVar("--down"),
+    };
+  }
+
   function renderIndexCard(seriesKey, label, grid) {
     const rows = S[seriesKey] || [];
     const card = document.createElement("div");
     card.className = "card";
     grid.appendChild(card);
-    const canvasId = seriesKey + "-canvas";
+    const chartId = seriesKey + "-lw";
 
     if (!rows.length) {
       card.innerHTML = '<div class="card-title">' + label + '</div><div class="empty-note">No data yet.</div>';
@@ -172,19 +211,66 @@
         badge("EMA50 " + (last.above_ema50 ? "above" : "below"), last.above_ema50 ? "up" : "down") +
       "</div>" +
       '<div class="tf-toggle"></div>' +
-      '<div class="chart-wrap"><canvas id="' + canvasId + '"></canvas></div>';
+      '<div class="lw-chart" id="' + chartId + '"></div>';
 
-    setupTimeframeToggle(card.querySelector(".tf-toggle"), function (tf) {
-      const filtered = filterByTimeframe(rows, tf);
-      const colors = themeColors();
-      const dotR = dotRadius(filtered.length);
-      lineChart(canvasId, filtered.map(function (r) { return r.date; }), [
-        { label: "Close", data: filtered.map(function (r) { return r.close; }), borderColor: colors.text, borderWidth: 1.5, pointRadius: dotR, pointBackgroundColor: colors.text, tension: 0.15 },
-        { label: "EMA10", data: filtered.map(function (r) { return r.ema10; }), borderColor: colors.accent, borderWidth: 1.5, pointRadius: dotR, pointBackgroundColor: colors.accent, tension: 0.15 },
-        { label: "EMA20", data: filtered.map(function (r) { return r.ema20; }), borderColor: colors.up, borderWidth: 1.5, pointRadius: dotR, pointBackgroundColor: colors.up, tension: 0.15 },
-        { label: "EMA50", data: filtered.map(function (r) { return r.ema50; }), borderColor: colors.down, borderWidth: 1.5, pointRadius: dotR, pointBackgroundColor: colors.down, tension: 0.15 },
-      ]);
+    const container = document.getElementById(chartId);
+    const th = lwTheme();
+
+    const chart = LightweightCharts.createChart(container, {
+      height: container.clientHeight || 380,
+      layout: { background: { type: "solid", color: th.bg }, textColor: th.text, fontSize: 11 },
+      grid: { vertLines: { color: th.grid }, horzLines: { color: th.grid } },
+      rightPriceScale: { borderColor: th.border },
+      timeScale: { borderColor: th.border, rightOffset: 2 },
+      crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
     });
+
+    const barSeries = chart.addBarSeries({
+      upColor: th.up,
+      downColor: th.down,
+      openVisible: false,   // HLC bars, not OHLC
+      thinBars: false,
+    });
+    const emaSeries = {};
+    ["ema10", "ema20", "ema50"].forEach(function (key) {
+      emaSeries[key] = chart.addLineSeries({
+        color: EMA_COLORS[key],
+        lineWidth: 1,
+        priceLineVisible: false,
+        lastValueVisible: false,
+        crosshairMarkerVisible: false,
+      });
+    });
+
+    function draw(tf) {
+      const filtered = filterByTimeframe(rows, tf);
+      barSeries.setData(filtered.map(function (r) {
+        return { time: r.date, open: r.open, high: r.high, low: r.low, close: r.close };
+      }));
+      ["ema10", "ema20", "ema50"].forEach(function (key) {
+        emaSeries[key].setData(filtered.map(function (r) { return { time: r.date, value: r[key] }; }));
+      });
+      chart.timeScale().fitContent();
+    }
+
+    setupTimeframeToggle(card.querySelector(".tf-toggle"), draw);
+
+    lwUpdaters.push(function () {
+      const t = lwTheme();
+      chart.applyOptions({
+        layout: { background: { type: "solid", color: t.bg }, textColor: t.text },
+        grid: { vertLines: { color: t.grid }, horzLines: { color: t.grid } },
+        rightPriceScale: { borderColor: t.border },
+        timeScale: { borderColor: t.border },
+      });
+      barSeries.applyOptions({ upColor: t.up, downColor: t.down });
+    });
+
+    if (window.ResizeObserver) {
+      new ResizeObserver(function () {
+        chart.applyOptions({ width: container.clientWidth, height: container.clientHeight });
+      }).observe(container);
+    }
   }
 
   // ---------- Simple current-value + chart cards (breadth internals) ----------
@@ -210,11 +296,22 @@
       '<div class="card-title">' + label + "</div>" +
       '<div class="card-value">&nbsp;</div>' +
       '<div class="card-sub">&nbsp;</div>' +
+      (opts.streakLabels ? '<div class="streak-badge"></div>' : "") +
       '<div class="tf-toggle"></div>' +
       '<div class="chart-wrap"><canvas id="' + canvasId + '"></canvas></div>';
 
     const valueEl = card.querySelector(".card-value");
     const subEl = card.querySelector(".card-sub");
+
+    if (opts.streakLabels) {
+      const streak = currentStreak(rows, opts.streakField || valueField);
+      const streakEl = card.querySelector(".streak-badge");
+      if (streak && streak.days > 0) {
+        const streakLabel = streak.sign > 0 ? opts.streakLabels.pos : opts.streakLabels.neg;
+        streakEl.className = "streak-badge " + (streak.sign > 0 ? "up" : "down");
+        streakEl.textContent = streakLabel + " · " + streak.days + " straight day" + (streak.days === 1 ? "" : "s");
+      }
+    }
 
     setupTimeframeToggle(card.querySelector(".tf-toggle"), function (tf) {
       const filtered = filterByTimeframe(rows, tf);
@@ -343,6 +440,7 @@
       label: "Net Advancers − Decliners", valueField: "net",
       opts: {
         colorByValue: true,
+        streakLabels: { pos: "Advancers ahead", neg: "Decliners ahead" },
         subText: function (items) {
           return "Avg Adv " + Math.round(average(items, "advancers")) + " / Avg Decl " + Math.round(average(items, "decliners"));
         },
@@ -352,6 +450,7 @@
       label: "Net New Highs − New Lows", valueField: "net",
       opts: {
         colorByValue: true,
+        streakLabels: { pos: "New highs ahead", neg: "New lows ahead" },
         subText: function (items) {
           return "Avg Highs " + Math.round(average(items, "new_highs")) + " / Avg Lows " + Math.round(average(items, "new_lows"));
         },

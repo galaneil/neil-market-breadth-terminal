@@ -74,6 +74,9 @@ section h2 { font-size: 15px; text-transform: uppercase; letter-spacing: 0.04em;
   grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
   gap: 14px;
 }
+/* Index cards hold a bar chart with ~250 sessions on it, so they need more
+   width than the breadth stat cards to stay legible. */
+#indices-grid { grid-template-columns: repeat(auto-fit, minmax(460px, 1fr)); }
 .card {
   background: var(--panel-bg);
   border: 1px solid var(--border);
@@ -96,6 +99,19 @@ section h2 { font-size: 15px; text-transform: uppercase; letter-spacing: 0.04em;
 }
 .badge.on.up { color: var(--up); border-color: var(--up); }
 .badge.on.down { color: var(--down); border-color: var(--down); }
+.streak-badge {
+  display: inline-block;
+  font-size: 11px;
+  font-weight: 600;
+  padding: 3px 9px;
+  border-radius: 999px;
+  margin-bottom: 8px;
+  background: var(--grid-line);
+  color: var(--text-dim);
+}
+.streak-badge.up { background: color-mix(in srgb, var(--up) 16%, transparent); color: var(--up); }
+.streak-badge.down { background: color-mix(in srgb, var(--down) 16%, transparent); color: var(--down); }
+.lw-chart { height: 380px; width: 100%; }
 .tf-toggle { display: flex; gap: 4px; margin-bottom: 8px; flex-wrap: wrap; }
 .tf-btn {
   font-size: 11px;

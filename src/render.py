@@ -110,14 +110,22 @@ def _rank_body(name_label, table_id, drilldown_id, sort_key):
 """.strip()
 
 
-def render_panel(filename, title, body_html, data_keys, series, generated_at):
+def render_panel(filename, title, body_html, data_keys, series, generated_at, chart_lib="chartjs"):
     """Renders one standalone single-panel page, embedding only `data_keys`
-    from the full series set (keeps individual embed pages lightweight)."""
+    from the full series set (keeps individual embed pages lightweight).
+
+    `chart_lib` decides which charting library the page loads — index panels
+    need lightweight-charts for HLC bars, everything else needs Chart.js.
+    Loading only the one in use keeps a 12KB breadth panel from pulling in
+    370KB of unused JavaScript, which matters inside a Notion embed."""
     scoped_series = {k: series.get(k, []) for k in data_keys}
     data_json = json.dumps({"generated_at": generated_at, "series": scoped_series}, separators=(",", ":"))
 
     template = _ENV.get_template("panel.html.j2")
-    html = template.render(title=title, generated_at=generated_at, body_html=body_html, data_json=data_json)
+    html = template.render(
+        title=title, generated_at=generated_at, body_html=body_html, data_json=data_json,
+        needs_chartjs=(chart_lib == "chartjs"), needs_lightweight=(chart_lib == "lightweight"),
+    )
 
     out_path = os.path.join(config.DOCS_DIR, filename)
     with open(out_path, "w", encoding="utf-8") as f:
@@ -136,7 +144,8 @@ def render_all_panels():
 
     for key, label in INDEX_LABELS.items():
         filename = f"panel-{key.replace('_', '-')}.html"
-        paths.append(render_panel(filename, label, _index_body(key), [key], series, generated_at))
+        paths.append(render_panel(filename, label, _index_body(key), [key], series, generated_at,
+                                  chart_lib="lightweight"))
 
     paths.append(render_panel(
         "panel-sectors.html", "Sector Performance",

@@ -2,11 +2,13 @@ name: Daily market breadth refresh
 
 on:
   schedule:
-    # ~5pm ET / 9pm UTC on weekdays, after US market close.
-    # Cron is UTC-only and doesn't know about US DST, so this drifts by an
-    # hour for part of the year (runs ~4pm or ~5pm ET) - harmless for a
-    # once-daily, already-EOD dashboard.
-    - cron: "0 21 * * 1-5"
+    # 23:00 UTC on weekdays. Cron is UTC-only and has no idea about US DST,
+    # so this has to clear the close in BOTH halves of the year: the cash
+    # session ends at 20:00 UTC under EDT and 21:00 UTC under EST. 23:00 UTC
+    # is 7pm ET in summer and 6pm ET in winter, comfortably clear of both.
+    # (The previous 21:00 UTC schedule landed exactly on the closing bell
+    # every winter, which risked ingesting an unfinished session.)
+    - cron: "0 23 * * 1-5"
   workflow_dispatch: {}  # manual "Run workflow" button, for on-demand runs/testing
 
 permissions:

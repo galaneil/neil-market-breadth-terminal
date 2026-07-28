@@ -17,7 +17,7 @@ docs/index.html.
 import os
 import sys
 import time
-from datetime import date
+from datetime import date, datetime, timezone
 
 import config
 import cache as cache_mod
@@ -33,6 +33,21 @@ def log(msg):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
+# The US cash session closes at 20:00 UTC in EDT and 21:00 UTC in EST. Anything
+# earlier than this cutoff means today's daily bar is still forming, and both
+# FMP's "historical" endpoint and its live quote will hand back an in-progress
+# value that looks exactly like a finished session. Writing that into the
+# history would show a partial day as a real close (and skew its EMAs, its
+# breadth counts and the day-change figure), so the pipeline drops today's row
+# entirely until the session is genuinely over.
+SESSION_FINAL_AFTER_UTC = (21, 30)
+
+
+def todays_bar_is_incomplete(now=None):
+    now = now or datetime.now(timezone.utc)
+    return (now.hour, now.minute) < SESSION_FINAL_AFTER_UTC
+
+
 def main():
     api_key = os.environ.get("FMP_API_KEY")
     if not api_key:
@@ -41,7 +56,15 @@ def main():
 
     client = FMPClient(api_key)
     country_cfg = config.COUNTRIES[config.DEFAULT_COUNTRY]
-    today = date.today().isoformat()
+    today = datetime.now(timezone.utc).date().isoformat()
+
+    skip_today = todays_bar_is_incomplete()
+    if skip_today:
+        log(f"US session for {today} has not closed yet — today's partial bar will be "
+            f"excluded; the dashboard will report through the last completed session.")
+
+    def drop_partial(rows):
+        return [r for r in rows if r.get("date") != today] if skip_today else rows
 
     log("Building S&P 1500 universe...")
     uni = universe.build_sp1500()
@@ -57,18 +80,21 @@ def main():
         log(f"Backfilling price history for {len(missing)} new tickers "
             f"(up to {config.PRICE_WINDOW_DAYS} trading days each, one-time cost)...")
         for i, ticker in enumerate(missing):
-            hist = client.historical_eod(ticker)[:config.PRICE_WINDOW_DAYS]
+            hist = drop_partial(client.historical_eod(ticker))[:config.PRICE_WINDOW_DAYS]
             for row in hist:
                 cache_mod.set_value(price_cache, ticker, row["date"], row["close"])
             if (i + 1) % 100 == 0:
                 log(f"  backfilled {i + 1}/{len(missing)}")
                 cache_mod.save(price_cache, config.PRICE_CACHE_PATH)  # checkpoint
 
-    log(f"Fetching today's quotes for {len(all_price_tickers)} tickers...")
-    quotes = client.quote_many(all_price_tickers, on_progress=lambda d, t: log(f"  quoted {d}/{t}"))
-    for q in quotes:
-        if q.get("symbol") and q.get("price") is not None:
-            cache_mod.set_value(price_cache, q["symbol"], today, q["price"])
+    if skip_today:
+        log("Skipping the quote snapshot — a live quote mid-session is not a close.")
+    else:
+        log(f"Fetching today's quotes for {len(all_price_tickers)} tickers...")
+        quotes = client.quote_many(all_price_tickers, on_progress=lambda d, t: log(f"  quoted {d}/{t}"))
+        for q in quotes:
+            if q.get("symbol") and q.get("price") is not None:
+                cache_mod.set_value(price_cache, q["symbol"], today, q["price"])
 
     cache_mod.trim(price_cache, config.PRICE_WINDOW_DAYS)
     cache_mod.save(price_cache, config.PRICE_CACHE_PATH)
@@ -77,9 +103,13 @@ def main():
     n_days = config.CHART_BACKFILL_DAYS
 
     # ---------- Indices ----------
-    log("Backfilling index history (EMA10/20/50)...")
+    # Fetched separately from the shared price cache: the cache holds closes
+    # only (all the breadth maths needs), but the index panels draw HLC bars,
+    # which needs high/low too. Three extra API calls.
+    log("Backfilling index history (OHLC + EMA10/20/50)...")
     for key, ticker in country_cfg["index_tickers"].items():
-        records = indices.backfill_index_history(price_cache, ticker, n_days)
+        eod_rows = drop_partial(client.historical_eod(ticker))
+        records = indices.backfill_index_history(eod_rows, n_days)
         for record in records:
             store.write_index(key, record)
         log(f"  {key}: {len(records)} days written")
