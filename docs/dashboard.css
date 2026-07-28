@@ -69,7 +69,7 @@ select, button.icon-btn {
   font-size: 13px;
   cursor: pointer;
 }
-main { padding: 20px; max-width: 1400px; margin: 0 auto; }
+main { padding: 20px; max-width: 1800px; margin: 0 auto; }
 section { margin-bottom: 32px; }
 section h2 { font-size: 15px; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-dim); margin: 0 0 12px; }
 .card-grid {
@@ -114,7 +114,9 @@ section h2 { font-size: 15px; text-transform: uppercase; letter-spacing: 0.04em;
 }
 .streak-badge.up { background: color-mix(in srgb, var(--up) 16%, transparent); color: var(--up); }
 .streak-badge.down { background: color-mix(in srgb, var(--down) 16%, transparent); color: var(--down); }
-.lw-chart { height: 380px; width: 100%; }
+/* Chart heights scale with the frame they're in, so a short Notion embed and
+   a full-screen monitor both get a sensibly proportioned chart. */
+.lw-chart { height: clamp(280px, 46vh, 460px); width: 100%; }
 
 .env-headline { display: flex; align-items: baseline; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
 .env-verdict { font-size: 26px; font-weight: 600; text-transform: capitalize; }
@@ -157,7 +159,10 @@ section h2 { font-size: 15px; text-transform: uppercase; letter-spacing: 0.04em;
 .mover-group-label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.04em; margin-bottom: 4px; }
 .mover-group-label.up { color: var(--up); }
 .mover-group-label.down { color: var(--down); }
-.mover-row { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; padding: 2px 0; }
+/* Capped so the name and its number stay next to each other. Left to fill a
+   wide column, the percentage ends up an inch away from the label it belongs
+   to and the list stops being scannable. */
+.mover-row { display: flex; justify-content: space-between; gap: 10px; font-size: 12px; padding: 2px 0; max-width: 460px; }
 .mover-name { color: var(--text); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mover-chg { font-variant-numeric: tabular-nums; flex-shrink: 0; }
 .mover-chg.up { color: var(--up); }
@@ -185,7 +190,7 @@ section h2 { font-size: 15px; text-transform: uppercase; letter-spacing: 0.04em;
   cursor: pointer;
 }
 .tf-btn.active { background: var(--accent); color: #fff; border-color: var(--accent); }
-.chart-wrap { position: relative; height: 140px; }
+.chart-wrap { position: relative; height: clamp(130px, 22vh, 210px); }
 table { width: 100%; border-collapse: collapse; font-size: 13px; }
 th, td { text-align: right; padding: 7px 10px; border-bottom: 1px solid var(--border); }
 th:first-child, td:first-child { text-align: left; }
@@ -207,6 +212,6 @@ tbody tr.selected { background: var(--grid-line); outline: 1px solid var(--accen
 }
 .drilldown.visible { display: block; }
 .drilldown-title { font-size: 13px; color: var(--text-dim); margin-bottom: 8px; }
-.drilldown .chart-wrap { height: 220px; }
+.drilldown .chart-wrap { height: clamp(190px, 32vh, 320px); }
 .empty-note { color: var(--text-dim); font-size: 12px; padding: 8px 0; }
 footer { text-align: center; color: var(--text-dim); font-size: 11px; padding: 24px 0; }

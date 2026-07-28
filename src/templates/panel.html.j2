@@ -11,7 +11,9 @@
 body { margin: 0; }
 header { padding: 10px 14px; }
 header h1 { font-size: 14px; }
-main { padding: 12px; }
+/* Embeds should use the frame they are given — no centred max-width column,
+   which just produces large empty margins inside a wide Notion block. */
+main { padding: 12px; max-width: none; margin: 0; }
 section { margin-bottom: 0; }
 footer { display: none; }
 </style>
