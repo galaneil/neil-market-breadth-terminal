@@ -25,6 +25,60 @@
     redrawAllCharts();
   });
 
+  // ---------- Shared context across panels ----------
+  // The replay page and the stock page are separate documents — in Notion,
+  // two separate embeds — but both are served from the same origin, so they
+  // can share state. Writing to localStorage fires a `storage` event in every
+  // OTHER same-origin document (never in the one that wrote it), including a
+  // sibling iframe on the same page. So a ticker typed into the replay search
+  // drives the stock chart, and a date stepped on either side moves both,
+  // without anything being retyped.
+  //
+  // Echo loops are avoided structurally rather than with a guard flag: only
+  // user-event handlers ever publish, and incoming state is applied by
+  // setting .value programmatically (which does not fire input/change) and
+  // calling the render functions directly.
+  //
+  // Every access is wrapped, because an iframe sandboxed without
+  // allow-same-origin throws on any storage access. If that happens the
+  // pages simply stop talking to each other and still work standalone.
+  const SYNC_KEY = "mbt-context";
+  const Sync = {
+    read: function () {
+      try { return JSON.parse(localStorage.getItem(SYNC_KEY) || "null") || {}; }
+      catch (e) { return {}; }
+    },
+    publish: function (patch) {
+      try {
+        const merged = Object.assign(this.read(), patch, { ts: Date.now() });
+        localStorage.setItem(SYNC_KEY, JSON.stringify(merged));
+      } catch (e) { /* storage unavailable — sync is best-effort */ }
+    },
+    subscribe: function (fn) {
+      window.addEventListener("storage", function (e) {
+        if (e.key !== SYNC_KEY || !e.newValue) return;
+        let payload;
+        try { payload = JSON.parse(e.newValue); } catch (err) { return; }
+        fn(payload);
+      });
+    },
+  };
+
+  // Newest date on or before `wanted`, clamped to the ends. Shared context can
+  // carry a date a given ticker has no bar for (a holiday, or a listing that
+  // starts later than the market history), so both panels snap rather than
+  // showing nothing.
+  function snapToDate(dates, wanted) {
+    if (!dates.length) return null;
+    if (!wanted || wanted >= dates[dates.length - 1]) return dates[dates.length - 1];
+    if (wanted <= dates[0]) return dates[0];
+    let chosen = dates[0];
+    for (let i = 0; i < dates.length; i++) {
+      if (dates[i] <= wanted) chosen = dates[i]; else break;
+    }
+    return chosen;
+  }
+
   // ---------- Formatting helpers ----------
   function fmtNum(v, d) {
     if (v === null || v === undefined || isNaN(v)) return "—";
@@ -782,13 +836,11 @@
       go(dates[next]);
     }
 
-    dateInput.addEventListener("change", function () { go(dateInput.value); });
-    document.getElementById("replay-prev").addEventListener("click", function () { step(-1); });
-    document.getElementById("replay-next").addEventListener("click", function () { step(1); });
-    document.getElementById("replay-latest").addEventListener("click", function () { go(dates[dates.length - 1]); });
-
-    tickerInput.addEventListener("input", function () {
-      const sym = tickerInput.value.trim().toUpperCase();
+    // Applies a ticker without publishing it, so this is safe to call both
+    // from the local input handler and from an inbound sync message.
+    function applyTicker(sym) {
+      sym = (sym || "").trim().toUpperCase();
+      if (tickerInput.value.trim().toUpperCase() !== sym) tickerInput.value = sym;
       const hit = D.classification ? D.classification[sym] : null;
       if (sym && hit) {
         highlight = { sector: hit[0], industry: hit[1] };
@@ -800,9 +852,42 @@
         tickerResult.textContent = sym ? "not found" : "";
       }
       draw(dateInput.value);
+    }
+
+    function publishDate() { Sync.publish({ date: dateInput.value }); }
+
+    dateInput.addEventListener("change", function () { go(dateInput.value); publishDate(); });
+    document.getElementById("replay-prev").addEventListener("click", function () { step(-1); publishDate(); });
+    document.getElementById("replay-next").addEventListener("click", function () { step(1); publishDate(); });
+    document.getElementById("replay-latest").addEventListener("click", function () {
+      go(dates[dates.length - 1]);
+      publishDate();
     });
 
-    go(dates[dates.length - 1]);
+    tickerInput.addEventListener("input", function () {
+      applyTicker(tickerInput.value);
+      Sync.publish({ ticker: tickerInput.value.trim().toUpperCase() });
+    });
+
+    Sync.subscribe(function (ctx) {
+      if (ctx.date && ctx.date !== dateInput.value) go(ctx.date);
+      if (typeof ctx.ticker === "string" && ctx.ticker !== tickerInput.value.trim().toUpperCase()) {
+        applyTicker(ctx.ticker);
+      }
+    });
+
+    // Same ticker list the stock page offers, so a name typed here
+    // autocompletes to something the other panel can actually load.
+    const knownNames = Object.keys(D.classification || {}).sort();
+    const replayList = document.getElementById("replay-tickers");
+    if (replayList && knownNames.length) {
+      replayList.innerHTML = knownNames.map(function (t) { return '<option value="' + t + '">'; }).join("");
+      tickerInput.placeholder = "Search " + knownNames.length.toLocaleString() + " tickers";
+    }
+
+    const shared = Sync.read();
+    go(shared.date ? resolveDate(shared.date) : dates[dates.length - 1]);
+    if (shared.ticker) applyTicker(shared.ticker);
   }
 
   // ---------- Stock context ----------
@@ -920,8 +1005,10 @@
           '<div class="lw-chart" id="stock-chart"></div>' +
           '<div class="rs-block">' +
             '<div class="env-chart-title">Relative strength</div>' +
-            '<div class="env-block-sub">the stock divided by each index &middot; ' +
-              "green while it is trending up against that index, red while trending down</div>" +
+            '<div class="env-block-sub">the stock&rsquo;s strength against each index, ' +
+              "10-day trend versus 30-day &middot; green while it is gaining on that index, " +
+              "red while it is losing ground &middot; the longer a run of one colour, the more " +
+              "persistent the move</div>" +
             '<div class="rs-charts">' +
               '<div><div class="rs-chart-label">vs S&amp;P 500</div><div class="lw-chart rs-chart" id="rs-sp500"></div></div>' +
               '<div><div class="rs-chart-label">vs Nasdaq</div><div class="lw-chart rs-chart" id="rs-nasdaq"></div></div>' +
@@ -964,44 +1051,62 @@
       });
       priceChart.timeScale().fitContent();
 
-      // Shaded green while relative strength is trending up and red while it
-      // is trending down — so a stock quietly losing ground to the index shows
-      // as the shading flipping, even if it is still ahead overall.
-      // Trend is measured against the RS line's own 20-day average rather than
-      // day-to-day direction, which would flicker colour on every wiggle.
-      // Two area series sharing one scale: each carries values only while its
-      // side is active and whitespace otherwise, with the turning point given
-      // to both so the segments join without a gap.
+      // Relative strength, plotted as its distance from its own 20-day trend
+      // rather than as the raw ratio. Two problems this solves:
+      //
+      //  - Filling a raw RS line down to the axis coloured the area by LEVEL,
+      //    not direction, so the pane came out as one near-solid block: a
+      //    stock far above where its RS history started read as green almost
+      //    everywhere regardless of which way it was actually moving.
+      //    Centring on the trend puts zero exactly where the colour flips, so
+      //    green means "gaining on the index" and red means "losing ground".
+      //
+      //  - The raw level is not comparable between stocks — one reads 469 and
+      //    another 750 purely because of where each series was indexed from.
+      //    Distance from trend is a percentage, so +4% means the same thing on
+      //    every ticker and on every date.
+      //
+      // The two sides are a fast and a slow average of the RS line, not the
+      // raw line against one average. Raw-vs-average crosses back and forth
+      // every few sessions, which chops the chart into confetti and hides
+      // exactly the thing it is meant to show. Comparing a 10-day to a 30-day
+      // average holds a colour for as long as the move actually persists, so
+      // a run of green is a real stretch of outperformance rather than a
+      // week of noise.
       [["rs-sp500", spx], ["rs-nasdaq", ndx]].forEach(function (cfg) {
         const chart = makeChart(cfg[0], 150);
         const line = rsLine(cfg[1]);
         const valid = line.map(function (v) { return v === null ? 100 : v; });
-        const trend = ema(valid, 20);
+        const fast = ema(valid, 10);
+        const trend = ema(valid, 30);
 
-        const upData = [], downData = [];
-        let prevUp = null;
-        dates.forEach(function (dt, i) {
-          if (line[i] === null) { upData.push({ time: dt }); downData.push({ time: dt }); return; }
-          const isUp = valid[i] >= trend[i];
-          const turning = prevUp !== null && prevUp !== isUp;
-          upData.push(isUp || turning ? { time: dt, value: line[i] } : { time: dt });
-          downData.push(!isUp || turning ? { time: dt, value: line[i] } : { time: dt });
-          prevUp = isUp;
+        const series = chart.addBaselineSeries({
+          baseValue: { type: "price", price: 0 },
+          topLineColor: th.up,
+          topFillColor1: "rgba(22,163,74,0.45)",
+          topFillColor2: "rgba(22,163,74,0.04)",
+          bottomLineColor: th.down,
+          bottomFillColor1: "rgba(220,38,38,0.04)",
+          bottomFillColor2: "rgba(220,38,38,0.45)",
+          lineWidth: 2, priceLineVisible: false, lastValueVisible: false,
+          priceFormat: {
+            type: "custom",
+            formatter: function (v) { return (v >= 0 ? "+" : "") + v.toFixed(1) + "%"; },
+          },
         });
-
-        chart.addAreaSeries({
-          lineColor: th.up, topColor: "rgba(22,163,74,0.32)", bottomColor: "rgba(22,163,74,0.02)",
-          lineWidth: 2, priceLineVisible: false, lastValueVisible: false,
-        }).setData(upData);
-        chart.addAreaSeries({
-          lineColor: th.down, topColor: "rgba(220,38,38,0.32)", bottomColor: "rgba(220,38,38,0.02)",
-          lineWidth: 2, priceLineVisible: false, lastValueVisible: false,
-        }).setData(downData);
+        series.setData(dates.map(function (dt, i) {
+          return (line[i] === null || !trend[i])
+            ? { time: dt }
+            : { time: dt, value: (fast[i] / trend[i] - 1) * 100 };
+        }));
         chart.timeScale().fitContent();
       });
     }
 
-    function load(sym) {
+    // `wantDate` lets an inbound sync message set the ticker and the date in
+    // one go — without it, loading a new symbol would reset the date to its
+    // latest bar and throw away the date the other panel just sent.
+    function load(sym, wantDate) {
       sym = sym.trim().toUpperCase();
       if (!sym) return;
       statusEl.className = "replay-miss";
@@ -1014,17 +1119,24 @@
         current = { symbol: sym, data: res[0] };
         dateInput.min = res[0].dates[0];
         dateInput.max = res[0].dates[res[0].dates.length - 1];
-        if (!dateInput.value || dateInput.value > dateInput.max || dateInput.value < dateInput.min) {
-          dateInput.value = dateInput.max;
-        }
+        dateInput.value = snapToDate(res[0].dates, wantDate || dateInput.value);
         statusEl.textContent = "";
         draw();
       }).catch(function () {
         statusEl.className = "replay-miss";
-        statusEl.textContent = sym + " is not tracked — add it to the watchlist in config.py";
+        statusEl.textContent = "No price history stored for " + sym + ".";
         body.innerHTML = "";
         current = null;
       });
+    }
+
+    // Applies a date without publishing it — safe for inbound sync messages.
+    function applyDate(wanted) {
+      if (!current) { dateInput.value = wanted; return; }
+      const snapped = snapToDate(current.data.dates, wanted);
+      if (!snapped || snapped === dateInput.value) return;
+      dateInput.value = snapped;
+      draw();
     }
 
     function step(delta) {
@@ -1037,12 +1149,29 @@
       draw();
     }
 
-    tickerInput.addEventListener("change", function () { load(tickerInput.value); });
-    dateInput.addEventListener("change", draw);
-    document.getElementById("stock-prev").addEventListener("click", function () { step(-1); });
-    document.getElementById("stock-next").addEventListener("click", function () { step(1); });
+    function publishDate() { Sync.publish({ date: dateInput.value }); }
+
+    tickerInput.addEventListener("change", function () {
+      load(tickerInput.value);
+      Sync.publish({ ticker: tickerInput.value.trim().toUpperCase() });
+    });
+    dateInput.addEventListener("change", function () { draw(); publishDate(); });
+    document.getElementById("stock-prev").addEventListener("click", function () { step(-1); publishDate(); });
+    document.getElementById("stock-next").addEventListener("click", function () { step(1); publishDate(); });
     document.getElementById("stock-latest").addEventListener("click", function () {
-      if (current) { dateInput.value = current.data.dates[current.data.dates.length - 1]; draw(); }
+      if (current) { dateInput.value = current.data.dates[current.data.dates.length - 1]; draw(); publishDate(); }
+    });
+
+    Sync.subscribe(function (ctx) {
+      const wantTicker = typeof ctx.ticker === "string" ? ctx.ticker.trim().toUpperCase() : null;
+      // A partially-typed ticker in the replay box shouldn't blank this panel;
+      // only switch once it names something actually stored.
+      if (wantTicker && wantTicker !== (current && current.symbol) && (DATA.classification || {})[wantTicker]) {
+        tickerInput.value = wantTicker;
+        load(wantTicker, ctx.date);
+      } else if (ctx.date) {
+        applyDate(ctx.date);
+      }
     });
 
     // Populate suggestions from the classification map — every classified
@@ -1054,8 +1183,16 @@
       tickerInput.placeholder = "Search " + known.length.toLocaleString() + " tickers";
     }
 
-    if (known.indexOf("NVDA") !== -1) { tickerInput.value = "NVDA"; load("NVDA"); }
-    else if (known.length) { tickerInput.value = known[0]; load(known[0]); }
+    // Open on whatever the shared context already holds — so if the replay
+    // panel was left on a ticker, this panel comes up showing that ticker
+    // rather than resetting to a default every reload.
+    const shared = Sync.read();
+    const initial = (shared.ticker && known.indexOf(shared.ticker) !== -1) ? shared.ticker
+      : (known.indexOf("NVDA") !== -1 ? "NVDA" : (known.length ? known[0] : null));
+    if (initial) {
+      tickerInput.value = initial;
+      load(initial, shared.date);
+    }
   }
 
   // ---------- Wire everything up ----------

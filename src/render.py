@@ -96,7 +96,8 @@ def _replay_body():
     <input type="date" id="replay-date">
     <button class="icon-btn" id="replay-next" title="Next session">&rsaquo;</button>
     <button class="icon-btn" id="replay-latest">Latest</button>
-    <input type="search" id="replay-ticker" placeholder="Ticker, e.g. NVDA">
+    <input type="search" id="replay-ticker" placeholder="Ticker, e.g. NVDA" list="replay-tickers" autocomplete="off">
+    <datalist id="replay-tickers"></datalist>
     <span id="replay-ticker-result"></span>
   </div>
   <div id="replay-body"></div>
