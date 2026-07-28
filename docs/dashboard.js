@@ -335,6 +335,67 @@
   const EMA_COLORS = { ema10: "#2962FF", ema20: "#F23645", ema50: "#FF9800" };
   const lwUpdaters = [];
 
+  // Shift-drag anywhere on a chart to measure the move between two points,
+  // reported as a percentage. lightweight-charts has no measure tool, but it
+  // exposes coordinate/price conversion, which is all this needs. Shift is
+  // required so a plain drag still pans the chart.
+  function enableMeasure(chart, series, container) {
+    container.style.position = "relative";
+    const box = document.createElement("div");
+    box.className = "measure-box";
+    const shade = document.createElement("div");
+    shade.className = "measure-shade";
+    container.appendChild(shade);
+    container.appendChild(box);
+
+    let startY = null, startX = null, startPrice = null;
+
+    function hide() {
+      box.style.display = "none";
+      shade.style.display = "none";
+      startY = null;
+    }
+    hide();
+
+    container.addEventListener("mousedown", function (e) {
+      if (!e.shiftKey) return;
+      const rect = container.getBoundingClientRect();
+      startY = e.clientY - rect.top;
+      startX = e.clientX - rect.left;
+      startPrice = series.coordinateToPrice(startY);
+      if (startPrice === null) { startY = null; return; }
+      e.preventDefault();
+    });
+
+    container.addEventListener("mousemove", function (e) {
+      if (startY === null) return;
+      const rect = container.getBoundingClientRect();
+      const y = e.clientY - rect.top, x = e.clientX - rect.left;
+      const price = series.coordinateToPrice(y);
+      if (price === null || !startPrice) return;
+
+      const pct = (price / startPrice - 1) * 100;
+      const up = pct >= 0;
+      shade.style.display = "block";
+      shade.style.left = Math.min(startX, x) + "px";
+      shade.style.top = Math.min(startY, y) + "px";
+      shade.style.width = Math.abs(x - startX) + "px";
+      shade.style.height = Math.abs(y - startY) + "px";
+      shade.style.background = up ? "rgba(22,163,74,0.14)" : "rgba(220,38,38,0.14)";
+
+      box.style.display = "block";
+      box.style.left = Math.min(x + 8, container.clientWidth - 120) + "px";
+      box.style.top = Math.max(2, y - 30) + "px";
+      box.className = "measure-box " + (up ? "up" : "down");
+      box.textContent = (up ? "+" : "") + pct.toFixed(2) + "%  ·  " +
+        fmtNum(Math.abs(price - startPrice), 2);
+    });
+
+    ["mouseup", "mouseleave"].forEach(function (ev) {
+      container.addEventListener(ev, hide);
+    });
+  }
+
   function lwTheme() {
     return {
       bg: cssVar("--panel-bg"),
@@ -395,6 +456,7 @@
       openVisible: false,   // HLC bars, not OHLC
       thinBars: false,
     });
+    enableMeasure(chart, barSeries, container);
     const emaSeries = {};
     ["ema10", "ema20", "ema50"].forEach(function (key) {
       emaSeries[key] = chart.addLineSeries({
@@ -895,6 +957,7 @@
       bars.setData(dates.map(function (dt, i) {
         return { time: dt, open: slice(d.open)[i], high: slice(d.high)[i], low: slice(d.low)[i], close: close[i] };
       }));
+      enableMeasure(priceChart, bars, document.getElementById("stock-chart"));
       [["ema10", e10, "#2962FF"], ["ema20", e20, "#F23645"], ["ema50", e50, "#FF9800"]].forEach(function (cfg) {
         const s = priceChart.addLineSeries({ color: cfg[2], lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
         s.setData(dates.map(function (dt, i) { return { time: dt, value: slice(cfg[1])[i] }; }));

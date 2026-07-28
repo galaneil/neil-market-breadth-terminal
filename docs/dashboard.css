@@ -167,6 +167,15 @@ section h2 { font-size: 15px; text-transform: uppercase; letter-spacing: 0.04em;
 .mover-chg { font-variant-numeric: tabular-nums; flex-shrink: 0; }
 .mover-chg.up { color: var(--up); }
 .mover-chg.down { color: var(--down); }
+.measure-box {
+  position: absolute; z-index: 5; pointer-events: none;
+  font-size: 12px; font-weight: 600; font-variant-numeric: tabular-nums;
+  padding: 3px 8px; border-radius: 5px; white-space: nowrap;
+  background: var(--panel-bg); border: 1px solid var(--border);
+}
+.measure-box.up { color: var(--up); border-color: var(--up); }
+.measure-box.down { color: var(--down); border-color: var(--down); }
+.measure-shade { position: absolute; z-index: 4; pointer-events: none; }
 .stock-head { display: flex; align-items: center; gap: 12px; margin-bottom: 12px; flex-wrap: wrap; }
 .stock-logo { width: 34px; height: 34px; border-radius: 6px; object-fit: contain; background: #fff; }
 .stock-sym { font-size: 17px; font-weight: 600; }
