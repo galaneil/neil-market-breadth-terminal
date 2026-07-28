@@ -112,6 +112,37 @@ section h2 { font-size: 15px; text-transform: uppercase; letter-spacing: 0.04em;
 .streak-badge.up { background: color-mix(in srgb, var(--up) 16%, transparent); color: var(--up); }
 .streak-badge.down { background: color-mix(in srgb, var(--down) 16%, transparent); color: var(--down); }
 .lw-chart { height: 380px; width: 100%; }
+
+.env-headline { display: flex; align-items: baseline; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
+.env-verdict { font-size: 26px; font-weight: 600; text-transform: capitalize; }
+.env-verdict.bullish { color: var(--up); }
+.env-verdict.bearish { color: var(--down); }
+.env-verdict.choppy { color: var(--flat); }
+.env-date { font-size: 12px; color: var(--text-dim); }
+.env-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr)); gap: 16px; margin-bottom: 14px; }
+.env-block { border-left: 2px solid var(--border); padding-left: 12px; border-radius: 0; }
+.env-block-title { font-size: 12px; color: var(--text-dim); margin-bottom: 4px; }
+.env-block-value { font-size: 22px; font-weight: 600; }
+.env-block-value.up { color: var(--up); }
+.env-block-value.down { color: var(--down); }
+.env-block-sub { font-size: 11px; color: var(--text-dim); margin-top: 2px; }
+.env-block-extra { font-size: 11px; color: var(--text-dim); margin-top: 6px; }
+.env-tag {
+  font-size: 10px; padding: 1px 6px; border-radius: 999px;
+  text-transform: uppercase; letter-spacing: 0.04em; margin-left: 4px;
+}
+.env-tag.bullish { background: color-mix(in srgb, var(--up) 16%, transparent); color: var(--up); }
+.env-tag.bearish { background: color-mix(in srgb, var(--down) 16%, transparent); color: var(--down); }
+.env-tag.choppy { background: var(--grid-line); color: var(--text-dim); }
+.factor-grid { margin-top: 10px; display: flex; flex-direction: column; gap: 4px; }
+.factor-row { display: flex; align-items: center; gap: 4px; }
+.factor-name { font-size: 11px; color: var(--text-dim); width: 88px; }
+.factor-pill {
+  font-size: 10px; padding: 1px 6px; border-radius: 4px;
+  border: 1px solid var(--border); min-width: 22px; text-align: center;
+}
+.factor-pill.up { color: var(--up); border-color: var(--up); }
+.factor-pill.down { color: var(--down); border-color: var(--down); }
 .tf-toggle { display: flex; gap: 4px; margin-bottom: 8px; flex-wrap: wrap; }
 .tf-btn {
   font-size: 11px;

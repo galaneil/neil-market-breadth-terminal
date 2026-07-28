@@ -26,6 +26,7 @@ import config
 import store
 
 SERIES_FILES = {
+    "environment": "environment.jsonl",
     "index_nasdaq": "index_nasdaq.jsonl",
     "index_sp500": "index_sp500.jsonl",
     "index_russell2000": "index_russell2000.jsonl",
@@ -81,6 +82,10 @@ def render_dashboard():
 
 def _index_body(key):
     return f'<div class="card-grid" id="indices-grid" data-keys="{key}"></div>'
+
+
+def _summary_body():
+    return '<div id="environment-panel"></div>'
 
 
 def _breadth_body(key):
@@ -141,6 +146,11 @@ def render_all_panels():
     series = load_all_series()
     generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
     paths = []
+
+    paths.append(render_panel(
+        "panel-summary.html", "Market Environment", _summary_body(),
+        ["environment"], series, generated_at,
+    ))
 
     for key, label in INDEX_LABELS.items():
         filename = f"panel-{key.replace('_', '-')}.html"

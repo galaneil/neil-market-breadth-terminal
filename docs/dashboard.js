@@ -162,6 +162,100 @@
     });
   }
 
+  // ---------- Market environment panel ----------
+  // Reads the stored daily environment record rather than deriving anything
+  // here, so the browser and any later consumer (replay, trade log) always
+  // agree on what the environment was on a given date.
+  const INDEX_SHORT = { nasdaq: "NASDAQ", sp500: "S&P 500", russell2000: "Russell 2000" };
+
+  function renderEnvironmentPanel() {
+    const host = document.getElementById("environment-panel");
+    if (!host) return;
+    const rows = S.environment || [];
+    if (!rows.length) {
+      host.innerHTML = '<div class="empty-note">No data yet.</div>';
+      return;
+    }
+    const env = rows[rows.length - 1];
+
+    function tag(label) {
+      return '<span class="env-tag ' + label + '">' + label + "</span>";
+    }
+    function factorPill(on, text) {
+      return '<span class="factor-pill ' + (on ? "up" : "down") + '">' + text + "</span>";
+    }
+
+    let factorRows = "";
+    const per = (env.trend && env.trend.per_index) || {};
+    Object.keys(INDEX_SHORT).forEach(function (key) {
+      const f = per[key];
+      if (!f) return;
+      factorRows +=
+        '<div class="factor-row">' +
+          '<span class="factor-name">' + INDEX_SHORT[key] + "</span>" +
+          factorPill(f.above_ema10, "10") +
+          factorPill(f.above_ema20, "20") +
+          factorPill(f.above_ema50, "50") +
+        "</div>";
+    });
+
+    const t = env.trend, p = env.participation, i = env.internals;
+
+    host.innerHTML =
+      '<div class="card env-card">' +
+        '<div class="env-headline">' +
+          '<span class="env-verdict ' + env.overall + '">' + env.overall + "</span>" +
+          '<span class="env-date">as of ' + env.date + "</span>" +
+        "</div>" +
+        '<div class="env-grid">' +
+
+          '<div class="env-block">' +
+            '<div class="env-block-title">Trend ' + (t ? tag(t.label) : "") + "</div>" +
+            '<div class="env-block-value">' + (t ? t.factors_favourable + " / " + t.factors_total : "—") + "</div>" +
+            '<div class="env-block-sub">index vs EMA 10 / 20 / 50' +
+              (t ? " &middot; large caps only " + t.large_cap_favourable + " / " + t.large_cap_total : "") + "</div>" +
+            '<div class="factor-grid">' + factorRows + "</div>" +
+          "</div>" +
+
+          '<div class="env-block">' +
+            '<div class="env-block-title">Participation ' + (p ? tag(p.label) : "") + "</div>" +
+            '<div class="env-block-value">' + (p && p.sectors_positive_pct !== null ? p.sectors_positive_pct + "%" : "—") + "</div>" +
+            '<div class="env-block-sub">of sectors positive over 20 days</div>' +
+            '<div class="env-block-extra">' +
+              (p && p.industries_positive_pct !== null ? p.industries_positive_pct + "% of industries positive" : "&nbsp;") +
+            "</div>" +
+          "</div>" +
+
+          '<div class="env-block">' +
+            '<div class="env-block-title">Internals ' + (i ? tag(i.label) : "") + "</div>" +
+            '<div class="env-block-value ' + (i ? pctClass(i.adv_decl_avg) : "") + '">' +
+              (i && i.adv_decl_avg !== null ? fmtSignedInt(Math.round(i.adv_decl_avg)) : "—") + "</div>" +
+            '<div class="env-block-sub">avg net advancers over ' + (i ? i.lookback_days : 10) + " sessions</div>" +
+            '<div class="env-block-extra">' +
+              (i && i.new_hilo_avg !== null ? fmtSignedInt(Math.round(i.new_hilo_avg)) + " avg net new highs" : "&nbsp;") +
+            "</div>" +
+          "</div>" +
+
+        "</div>" +
+        '<div class="tf-toggle"></div>' +
+        '<div class="chart-wrap"><canvas id="environment-canvas"></canvas></div>' +
+      "</div>";
+
+    setupTimeframeToggle(host.querySelector(".tf-toggle"), function (tf) {
+      const filtered = filterByTimeframe(rows, tf);
+      const colors = themeColors();
+      const dotR = dotRadius(filtered.length);
+      lineChart("environment-canvas", filtered.map(function (r) { return r.date; }), [
+        {
+          label: "Favourable index factors (of 9)",
+          data: filtered.map(function (r) { return r.trend ? r.trend.factors_favourable : null; }),
+          borderColor: colors.accent, borderWidth: 1.5, pointRadius: dotR,
+          pointBackgroundColor: colors.accent, tension: 0.15,
+        },
+      ]);
+    });
+  }
+
   // ---------- Index cards (TradingView lightweight-charts) ----------
   // Drawn as HLC bars rather than a line: with four overlapping lines the
   // close was hard to pick out. Bars also make the daily range visible, and
@@ -409,6 +503,8 @@
   }
 
   // ---------- Wire everything up ----------
+  renderEnvironmentPanel();
+
   // Each grid container's data-keys attribute lists which series to render
   // there (comma-separated). This lets the same script serve both the full
   // dashboard (all keys) and an individual single-panel embed page (one key)

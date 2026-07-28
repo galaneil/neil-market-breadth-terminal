@@ -26,7 +26,7 @@ import store
 import render
 import tv_industry
 from fmp_client import FMPClient
-from metrics import indices, sectors, industries, breadth, groups as groups_mod
+from metrics import indices, sectors, industries, breadth, environment, groups as groups_mod
 
 
 def log(msg):
@@ -146,6 +146,27 @@ def main():
         if records:
             store.write_industry_ranks(d, records)
     log(f"Industry ranks: {sum(1 for r in industry_history.values() if r)} days written")
+
+    # ---------- Environment read ----------
+    # Computed here (not in the browser) so the label exists for every past
+    # date too — the replay view and, later, the trade log both need to ask
+    # "what was the environment on this date" without recomputing anything.
+    log("Computing environment read...")
+    env_records = environment.backfill_environment(
+        {key: store.read_jsonl(os.path.join(config.DATA_DIR, f"index_{key}.jsonl"))
+         for key in country_cfg["index_tickers"]},
+        store.read_jsonl(os.path.join(config.DATA_DIR, "sector_ranks.jsonl")),
+        store.read_jsonl(os.path.join(config.DATA_DIR, "industry_ranks.jsonl")),
+        store.read_jsonl(os.path.join(config.DATA_DIR, "breadth_adv_decl.jsonl")),
+        store.read_jsonl(os.path.join(config.DATA_DIR, "breadth_new_hilo.jsonl")),
+        dates,
+    )
+    for record in env_records:
+        store.write_environment(record)
+    latest_env = env_records[-1]
+    log(f"Environment: {len(env_records)} days written (latest {latest_env['date']}: "
+        f"{latest_env['overall']}, trend {latest_env['trend']['factors_favourable']}"
+        f"/{latest_env['trend']['factors_total']})")
 
     # ---------- Render ----------
     log("Rendering combined dashboard...")

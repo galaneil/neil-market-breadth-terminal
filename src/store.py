@@ -46,6 +46,10 @@ def write_industry_ranks(date_str, industry_records):
     upsert_jsonl(path, {"date": date_str, "industries": industry_records})
 
 
+def write_environment(record):
+    upsert_jsonl(os.path.join(config.DATA_DIR, "environment.jsonl"), record)
+
+
 def write_breadth(breadth_record):
     date_str = breadth_record["date"]
 

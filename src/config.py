@@ -34,6 +34,17 @@ PCT_MOVE_THRESHOLDS = [20, 30]  # "% up/down 20%+ / 30%+ in the last 5 days"
 GROUP_CHG_WINDOWS = {"chg_1d": 1, "chg_5d": 5, "chg_20d": 20}
 MIN_GROUP_MEMBERS = 5  # drop sectors/industries too small to be a meaningful bucket
 
+# Environment thresholds (metrics/environment.py).
+# Trend: of the 9 index-vs-EMA factors, how many must be favourable.
+TREND_BULL_MIN = 7
+TREND_BEAR_MAX = 2
+# Participation: % of sectors/industries with a positive 20-day return.
+PARTICIPATION_BULL_MIN = 65
+PARTICIPATION_BEAR_MAX = 35
+# Breadth internals are averaged over this many sessions before being read,
+# since a single day's net figure whipsaws too much to describe a regime.
+INTERNALS_LOOKBACK_DAYS = 10
+
 COUNTRIES = {
     "US": {
         "label": "United States",
