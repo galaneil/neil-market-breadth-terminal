@@ -9,6 +9,11 @@ identically on every OS and inside a Notion embed, and costs nothing extra to
 serve since it is part of the HTML.
 
 Drawn at a 24x16 viewBox and scaled down by CSS, so they stay crisp at any size.
+The width/height attributes are NOT redundant with the CSS: HTML and CSS are
+separate files with independent cache lifetimes, so a browser can hold a fresh
+page alongside a stale stylesheet. An SVG with no intrinsic size defaults to
+300x150, which would blow the header apart in exactly that window. The
+attributes are the floor; the CSS rule still wins when it loads.
 Simplified on purpose: at 18px wide the US canton's 50 stars would be mud, so it
 is a solid blue canton over the correct 13 stripes, which is what actually reads
 at this size.
@@ -23,14 +28,14 @@ _US_STRIPES = "".join(
 
 FLAGS = {
     "US": (
-        '<svg class="flag" viewBox="0 0 24 16" role="img" aria-label="United States">'
+        '<svg class="flag" width="18" height="12" viewBox="0 0 24 16" role="img" aria-label="United States">'
         '<rect width="24" height="16" fill="#fff"/>'
         f'<g fill="#B22234">{_US_STRIPES}</g>'
         f'<rect width="10" height="{7 * _STRIPE:.3f}" fill="#3C3B6E"/>'
         "</svg>"
     ),
     "IN": (
-        '<svg class="flag" viewBox="0 0 24 16" role="img" aria-label="India">'
+        '<svg class="flag" width="18" height="12" viewBox="0 0 24 16" role="img" aria-label="India">'
         '<rect width="24" height="5.333" fill="#FF9933"/>'
         '<rect y="5.333" width="24" height="5.334" fill="#fff"/>'
         '<rect y="10.667" width="24" height="5.333" fill="#138808"/>'
