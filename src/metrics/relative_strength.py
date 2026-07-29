@@ -61,21 +61,31 @@ def compute_ratings(price_cache, tickers=None):
     if frame.empty:
         return {}
 
-    # Blended trailing return, weighted toward the recent quarter.
+    # Each window is ranked across the market FIRST, and the RANKS are what get
+    # blended.
+    #
+    # Blending the raw returns instead is wrong, and badly so. Returns over
+    # different windows are on wildly different scales, so the largest number
+    # swamps the rest no matter what weight sits in front of it. AAOI on
+    # 2026-07-28: -36% over three months contributed -14.3 to the blend while
+    # +266% over twelve months contributed +53.1, giving a rating of 97 for a
+    # stock that had been bleeding for five weeks. The 3-month leg was weighted
+    # double and was still arithmetically invisible.
+    #
+    # Ranking first puts every window on the same 0-100 scale, so a weight of
+    # 0.40 actually means 40% of the answer. That -36% quarter lands in the
+    # bottom decile of the market and carries its full weight.
+    enough = frame.shift(MIN_HISTORY_DAYS).notna()
+
     blended = None
     for window, weight in RS_WINDOWS.items():
-        ret = frame / frame.shift(window) - 1
-        contribution = ret * weight
+        ret = (frame / frame.shift(window) - 1).where(enough)
+        window_rank = ret.rank(axis=1, pct=True) * 100
+        contribution = window_rank * weight
         blended = contribution if blended is None else blended.add(contribution, fill_value=np.nan)
 
-    # A row is only comparable where the shortest window exists, so drop names
-    # that have not traded long enough rather than ranking them against a
-    # partial return.
-    enough = frame.shift(MIN_HISTORY_DAYS).notna()
-    blended = blended.where(enough)
-
-    # Cross-sectional percentile per DAY: rank across columns, not down them.
-    # This is what makes the number mean the same thing on every date.
+    # Re-rank the blend so the output is itself a clean percentile rather than
+    # a weighted average of percentiles, which would bunch toward the middle.
     ranked = blended.rank(axis=1, pct=True) * 100
     ranked = ranked.round().clip(1, 99)
 
