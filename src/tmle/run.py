@@ -116,6 +116,30 @@ def write_scores(country, date_str, rows):
     )
 
 
+def write_theme_leaders(country, date_str, rows):
+    """Ranked on fundamentals and theme alone, ignoring price entirely.
+
+    Not gated on stage or drawdown: the point of this list is precisely the names
+    whose business is strong while their chart is not.
+    """
+    ranked = sorted((r for r in rows if r.get("theme_composite") is not None),
+                    key=lambda r: r["theme_composite"], reverse=True)
+    top = ranked[:config.LEADERBOARD_SIZE]
+    store.upsert_jsonl(
+        store.series_path(country, "tmle_theme.jsonl"),
+        {
+            "date": date_str,
+            "leaders": [
+                dict({k: r.get(k) for k in
+                      ("ticker", "theme_composite", "stage", "actionable", "drawdown",
+                       "gain", "episode_days", "F1", "F2", "F2B", "F6", "F4", "F4B", "F5")},
+                     theme_rank=i + 1)
+                for i, r in enumerate(top)
+            ],
+        },
+    )
+
+
 def write_leaders(country, date_str, rows):
     top = rows[:config.LEADERBOARD_SIZE]
     store.upsert_jsonl(
@@ -126,14 +150,14 @@ def write_leaders(country, date_str, rows):
                 {k: r.get(k) for k in
                  ("ticker", "rank", "composite", "coverage", "stage", "actionable",
                   "drawdown", "gain", "episode_days", "episode_start",
-                  "pct_below_20", "pct_below_10w", "F1", "F2", "F2B", "F4", "F4B", "F5")}
+                  "pct_below_20", "pct_below_10w", "F1", "F2", "F2B", "F6", "F4", "F4B", "F5")}
                 for r in top
             ],
         },
     )
 
 
-def write_trajectories(country, history):
+def write_trajectories(country, history, as_of=None):
     """history: {ticker: [{date, composite, rank, F1, F4, F4B, F5}, ...]}"""
     out_dir = os.path.join(app_config.docs_dir(country), "tmle")
     os.makedirs(out_dir, exist_ok=True)
@@ -142,6 +166,9 @@ def write_trajectories(country, history):
         rows = sorted(rows, key=lambda r: r["date"])
         payload = {
             "ticker": ticker,
+            # The last checkpoint the ENGINE ran, so the page can tell whether
+            # this name's own last reading is current or stale.
+            "as_of": as_of,
             "dates": [r["date"] for r in rows],
             "composite": [r["composite"] for r in rows],
             "rank": [r["rank"] for r in rows],
@@ -155,7 +182,7 @@ def write_trajectories(country, history):
             "pct_below_20": [r.get("pct_below_20") for r in rows],
             "factors": {
                 key: [r.get(key) for r in rows]
-                for key in ("F1", "F2", "F2B", "F4", "F4B", "F5")
+                for key in ("F1", "F2", "F2B", "F6", "F4", "F4B", "F5")
             },
         }
         name = ticker.replace("/", "-")
@@ -166,14 +193,15 @@ def write_trajectories(country, history):
 
 
 def run(country, price_rows, bench_rows, session_dates, market_caps,
-        fundamentals=None, quarterly=None, log=print):
+        fundamentals=None, quarterly=None, rs_ratings=None, forward=None,
+        log=print):
     """Score the universe at weekly checkpoints and persist everything.
 
     Returns the latest checkpoint's ranked rows.
     """
     lookup = build_rank_lookup(country)
     eng = engine.Engine(price_rows, bench_rows, lookup, market_caps,
-                        fundamentals, quarterly)
+                        fundamentals, quarterly, rs_ratings, forward)
     log(f"  price structure built for {len(eng.arrays)} names")
 
     dates = checkpoint_dates(session_dates)
@@ -189,25 +217,28 @@ def run(country, price_rows, bench_rows, session_dates, market_caps,
             continue
         write_scores(country, date_str, rows)
         write_leaders(country, date_str, rows)
+        write_theme_leaders(country, date_str, rows)
         latest = rows
-        # Only the names that reached the leaderboard at some point get a
-        # trajectory file — writing 3,300 of them for a name that has never
-        # ranked above 2,000th is noise on disk and in the browser.
-        for row in rows[:config.LEADERBOARD_SIZE]:
+        # EVERY scored name gets a trajectory, not just the current top slice.
+        # Restricting it to the leaderboard meant a name that dropped out simply
+        # stopped having history: AAOI's file ended 2026-06-22 while the engine
+        # had scored through 07-28, and the card displayed that five-week-old
+        # state as if it were current.
+        for row in rows:
             history.setdefault(row["ticker"], []).append({
                 "date": date_str, "composite": row["composite"], "rank": row["rank"],
                 "stage": row["stage"], "drawdown": row.get("drawdown"),
                 "gain": row.get("gain"), "episode_days": row.get("episode_days"),
                 "pct_below_10w": row.get("pct_below_10w"),
                 "pct_below_20": row.get("pct_below_20"),
-                "F1": row.get("F1"), "F2": row.get("F2"), "F2B": row.get("F2B"),
+                "F1": row.get("F1"), "F2": row.get("F2"), "F2B": row.get("F2B"), "F6": row.get("F6"),
                 "F4": row.get("F4"),
                 "F4B": row.get("F4B"), "F5": row.get("F5"),
             })
         if (i + 1) % 10 == 0:
             log(f"    {i + 1}/{len(dates)} checkpoints")
 
-    written = write_trajectories(country, history)
+    written = write_trajectories(country, history, as_of=dates[-1])
     log(f"  {len(latest)} names scored at the latest checkpoint; "
         f"{written} trajectory files written")
     return latest

@@ -24,6 +24,16 @@ import numpy as np
 from tmle import config, factors, structure
 
 
+def theme_composite(scores):
+    """Business quality and thematic strength only — no price, no structure.
+
+    This is deliberately blind to what the chart is doing, so a group whose
+    fundamentals are still excellent stays visible while its price is broken.
+    """
+    subset = {k: v for k, v in scores.items() if k in config.THEME_FACTORS}
+    return composite(subset)
+
+
 def composite(scores):
     """Weighted composite over available factors, renormalised.
     Returns (composite, coverage)."""
@@ -62,11 +72,14 @@ class Engine:
     """
 
     def __init__(self, price_rows, bench_rows, rank_lookup, market_caps=None,
-                 fundamentals=None, quarterly=None):
+                 fundamentals=None, quarterly=None, rs_ratings=None,
+                 forward=None):
         self.rank_lookup = rank_lookup
         self.market_caps = market_caps or {}
         self.fundamentals = fundamentals or {}
         self.quarterly = quarterly or {}
+        self.rs_ratings = rs_ratings or {}
+        self.forward = forward or {}
 
         bench = factors.prepare(bench_rows)
         if bench is None:
@@ -112,8 +125,17 @@ class Engine:
             # move to score, which is itself the answer.
             return None
 
+        # RS rating on the scoring date, falling back to the most recent
+        # reading at or before it so a checkpoint on a stale date still resolves.
+        rs_series = self.rs_ratings.get(ticker) or {}
+        rs_rating = rs_series.get(date_str)
+        if rs_rating is None and rs_series:
+            earlier = [d for d in rs_series if d <= date_str]
+            if earlier:
+                rs_rating = rs_series[max(earlier)]
+
         scores = {
-            "F1": factors.f1_score(episode),
+            "F1": factors.f1_score(rs_rating, episode),
             "F4": factors.f4_score(arrays, i, episode),
             "F4B": factors.f4b_score(arrays, i, episode),
             "F5": factors.f5_score(self.rank_lookup(ticker, date_str),
@@ -124,10 +146,12 @@ class Engine:
             # in for its business three months ago.
             "F2": factors.f2_score(self.fundamentals.get(ticker)),
             "F2B": factors.f2b_score(self.quarterly.get(ticker)),
+            "F6": factors.f6_score(self.forward.get(ticker)),
         }
         comp, coverage = composite(scores)
         if comp is None or coverage < config.MIN_COVERAGE:
             return None
+        theme_comp, theme_coverage = theme_composite(scores)
 
         stage = episode["stage"]
         drawdown = episode["drawdown"]
@@ -146,6 +170,8 @@ class Engine:
             "ticker": ticker,
             "composite": comp,
             "coverage": coverage,
+            "theme_composite": theme_comp,
+            "theme_coverage": theme_coverage,
             "stage": stage,
             "stage_label": structure.STAGE_LABELS.get(stage, "—"),
             "actionable": bool(actionable),
@@ -156,6 +182,10 @@ class Engine:
             "pct_below_20": episode["pct_below_20"],
             "pct_below_10w": episode["pct_below_10w"],
             "has_revenue": has_revenue,
+            # The whole-advance relative strength is kept for display even
+            # though it no longer drives F1 — it is still the answer to "how far
+            # ahead of the index did this move get".
+            "episode_rs": round(episode["episode_rs"], 1) if episode.get("episode_rs") is not None else None,
         }
         for key, value in scores.items():
             row[key] = round(value, 1) if value is not None else None

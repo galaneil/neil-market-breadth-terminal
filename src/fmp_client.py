@@ -61,13 +61,24 @@ class FMPClient:
     def quote_many(self, symbols, on_progress=None):
         """Current quotes for a list of symbols, one request per symbol (see module
         docstring — batch endpoints are plan-gated). Skips symbols with no quote."""
-        out = []
+        out, failed = [], 0
         for i, sym in enumerate(symbols):
-            q = self.quote_one(sym)
+            # Third place the same class of symbol broke a run: share-class
+            # tickers (AGM.A, BRK.B, BF.A ...) 402 on this plan. Any per-symbol
+            # loop against FMP has to treat one failure as a skip, never as an
+            # abort — the backfill and index fetch already learned this.
+            try:
+                q = self.quote_one(sym)
+            except Exception:
+                failed += 1
+                continue
             if q:
                 out.append(q)
             if on_progress and (i + 1) % 100 == 0:
                 on_progress(i + 1, len(symbols))
+        if failed and on_progress:
+            on_progress(len(symbols), len(symbols))
+        self.last_quote_failures = failed
         return out
 
     def income_statement_quarterly(self, symbol, limit=8):
@@ -76,6 +87,15 @@ class FMPClient:
         TradingView only exposes TTM and the latest single quarter."""
         data = self._get("income-statement",
                          {"symbol": symbol, "period": "quarter", "limit": limit})
+        return data or []
+
+    def analyst_estimates(self, symbol, limit=6):
+        """Annual consensus revenue/EPS estimates, for TMLE's forward-growth
+        factor. This is the only LEADING input in the engine — every other
+        fundamental is reported history, which by construction cannot tell you
+        what a theme looked like before it moved."""
+        data = self._get("analyst-estimates",
+                         {"symbol": symbol, "period": "annual", "limit": limit})
         return data or []
 
     def historical_eod(self, symbol, start=None, end=None):

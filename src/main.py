@@ -63,7 +63,8 @@ def todays_bar_is_incomplete(country_cfg, now=None):
 
 # ---------------------------------------------------------------- price sources
 
-def fetch_prices_fmp(client, tickers, index_tickers, drop_partial, price_cache):
+def fetch_prices_fmp(client, tickers, index_tickers, drop_partial, price_cache,
+                     country_code="US"):
     """US: FMP, one symbol per call (batch endpoints are plan-gated), so only
     symbols missing from the rolling cache are backfilled; the rest get today's
     close from the quote loop."""
@@ -85,6 +86,7 @@ def fetch_prices_fmp(client, tickers, index_tickers, drop_partial, price_cache):
                 cache_mod.set_value(price_cache, ticker, row["date"], row["close"])
             if (i + 1) % 100 == 0:
                 log(f"    {i + 1}/{len(missing)}")
+                cache_mod.save(price_cache, config.price_cache_path(country_code))
         if failed:
             preview = ", ".join(failed[:8]) + (" ..." if len(failed) > 8 else "")
             log(f"  {len(failed)} symbols had no fetchable history and were skipped: {preview}")
@@ -147,7 +149,7 @@ def run_country(code, client=None):
     bulk = {}
     if cfg["price_source"] == "fmp":
         fetch_prices_fmp(client, all_price_tickers + index_tickers, index_tickers,
-                         drop_partial, price_cache)
+                         drop_partial, price_cache, code)
         if skip_today:
             log(f"{code}: skipping the quote snapshot — a live quote mid-session is not a close.")
         else:
@@ -292,12 +294,13 @@ def run_country(code, client=None):
             caps = {row["name"]: row.get("market_cap_basic") or 0
                     for _, row in industry_df.iterrows()}
             funds = tv_industry.fundamentals_map(industry_df)
-            quarterly = {}
+            quarterly, forward = {}, {}
             if cfg["price_source"] == "fmp":
                 log(f"{code}: refreshing quarterly fundamentals for F2B...")
-                quarterly = fundamentals_mod.refresh(code, client, lookup_tickers, log=log)
+                quarterly, forward = fundamentals_mod.refresh(code, client, lookup_tickers, log=log)
             leaders = tmle_run.run(code, tmle_prices, bench_rows, dates, caps,
-                                   fundamentals=funds, quarterly=quarterly, log=log)
+                                   fundamentals=funds, quarterly=quarterly,
+                                   rs_ratings=rs_ratings, forward=forward, log=log)
             if leaders:
                 top = ", ".join(f"{r['ticker']} {r['composite']}" for r in leaders[:5])
                 log(f"{code}: TMLE top 5 — {top}")

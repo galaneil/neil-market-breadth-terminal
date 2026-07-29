@@ -32,6 +32,9 @@ import config
 # not move faster than this, and staggering keeps the nightly call count low.
 MAX_AGE_DAYS = 7
 
+# Forward estimates from fewer than this many analysts are noise, not consensus.
+MIN_ANALYSTS = 3
+
 # Eight quarters in, four year-on-year growth figures out.
 QUARTERS_FETCHED = 8
 YOY_QUARTERS = 4
@@ -104,6 +107,48 @@ def growths_from_quarters(rows):
     return growths
 
 
+def forward_from_estimates(rows, today=None):
+    """Next fiscal year's consensus growth over the current year's.
+
+    Returns {revenue_growth, eps_growth, analysts, year} or None.
+
+    Only the NEXT year is used. The far years carry one or two analysts and swing
+    wildly — SNDK's 2030 line is a single estimate showing -78% revenue, which
+    says nothing about the company and everything about the sample size.
+    """
+    today = today or date.today().isoformat()
+    rows = [r for r in rows if r.get("date")]
+    rows.sort(key=lambda r: r["date"])
+    if len(rows) < 2:
+        return None
+
+    nxt = None
+    for i, r in enumerate(rows):
+        if r["date"] > today and i > 0:
+            nxt = i
+            break
+    if nxt is None:
+        return None
+
+    current, forward = rows[nxt - 1], rows[nxt]
+    analysts = forward.get("numAnalystsRevenue") or forward.get("numAnalystsEps") or 0
+    if analysts < MIN_ANALYSTS:
+        return None
+
+    def growth(key):
+        a, b = current.get(key), forward.get(key)
+        if a is None or b is None or a <= 0:
+            return None
+        return (b / a - 1) * 100
+
+    return {
+        "revenue_growth": growth("revenueAvg"),
+        "eps_growth": growth("epsAvg"),
+        "analysts": int(analysts),
+        "year": forward["date"][:4],
+    }
+
+
 def refresh(country, client, tickers, log=print):
     """Fetch what is stale, return {ticker: [growths]} for everything known."""
     store = load(country)
@@ -114,15 +159,20 @@ def refresh(country, client, tickers, log=print):
         today = date.today().isoformat()
         failed = 0
         for i, ticker in enumerate(due):
+            entry = {"fetched": today, "growths": [], "forward": None}
             try:
                 rows = client.income_statement_quarterly(ticker, limit=QUARTERS_FETCHED)
+                entry["growths"] = growths_from_quarters(rows or [])
             except Exception:
                 # Record the attempt so a permanently unavailable name is not
                 # retried every single night.
-                store[ticker] = {"fetched": today, "growths": []}
                 failed += 1
-                continue
-            store[ticker] = {"fetched": today, "growths": growths_from_quarters(rows or [])}
+            try:
+                est = client.analyst_estimates(ticker, limit=6)
+                entry["forward"] = forward_from_estimates(est or [])
+            except Exception:
+                pass
+            store[ticker] = entry
             if (i + 1) % 250 == 0:
                 log(f"    {i + 1}/{len(due)}")
                 save(country, store)
@@ -132,7 +182,10 @@ def refresh(country, client, tickers, log=print):
     else:
         log("  all fundamentals are fresh; no calls needed")
 
-    return {t: entry.get("growths", []) for t, entry in store.items()}
+    return (
+        {t: entry.get("growths", []) for t, entry in store.items()},
+        {t: entry.get("forward") for t, entry in store.items()},
+    )
 
 
 if __name__ == "__main__":

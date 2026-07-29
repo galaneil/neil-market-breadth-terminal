@@ -47,17 +47,26 @@ def _band_score(value, bands, default=0):
 
 
 # ── F1 — PRICE LEADERSHIP ──────────────────────────────────────────────────
-def f1_score(episode):
-    """Relative strength versus the benchmark across the advance.
+def f1_score(rs_rating, episode=None):
+    """The RS rating: a cross-sectional percentile of recent relative strength.
 
-    Same scale as the notebook (50 + RS/200 * 50, clipped), but RS is now the
-    stock's gain minus the benchmark's gain over the SAME episode window,
-    instead of over a calendar or trailing year.
+    This replaces measuring relative strength across the whole advance, which
+    had the same defect as the calendar year and the trailing year before it.
+    AAOI's advance began from a very low base, so even 60% off its high it was
+    still up enormously from that base and F1 pinned at 100 — the engine
+    reporting maximum price leadership on a broken stock.
+
+    The RS rating is 21-day-led and includes where the stock/index ratio sits in
+    its own six-month range, so it answers "is this gaining on the market now".
+    AAOI reads 3 on it rather than 100. It also means the whole system has ONE
+    definition of relative strength instead of two that disagree.
+
+    `episode` is accepted but unused; kept so the call site stays uniform with
+    the other factors and so the episode-RS figure remains available for display.
     """
-    rs = episode.get("episode_rs")
-    if rs is None:
+    if rs_rating is None:
         return None
-    return float(np.clip(50 + (rs / config.F1_RS_SCALE) * 50, 0, 100))
+    return float(np.clip(rs_rating, 0, 100))
 
 
 # ── F4 — PRICE STRUCTURE ───────────────────────────────────────────────────
@@ -199,6 +208,27 @@ def f2b_score(growths):
 
     return float(triple_score * config.F2B_TRIPLE_WEIGHT +
                  accel_score * config.F2B_ACCEL_WEIGHT)
+
+
+# ── F6 — FORWARD GROWTH ────────────────────────────────────────────────
+def f6_score(forward):
+    """Next fiscal year's consensus revenue and EPS growth, 50/50.
+
+    The only LEADING factor in the engine. Every other fundamental is reported
+    history, and reported history structurally cannot answer the question that
+    matters most — where is the money going NEXT. A year before memory ran, the
+    reported numbers were unremarkable while the estimates were already vertical:
+    SNDK's 2027 consensus is +143% revenue and +208% EPS.
+
+    No usable consensus scores zero, consistent with F2 and F2B. That does
+    penalise uncovered small caps, which is intended: a true market leader
+    attracts analyst coverage, and a name nobody models is not one.
+    """
+    if not forward:
+        return 0.0
+    rev = _band_score(forward.get("revenue_growth"), config.F6_REVENUE_BANDS)
+    eps = _band_score(forward.get("eps_growth"), config.F6_EPS_BANDS)
+    return float(rev + eps)
 
 
 # ── F5 — THEME & SECTOR ALIGNMENT ──────────────────────────────────────────
