@@ -107,6 +107,9 @@ COUNTRIES = {
         # The index whose trading days define the calendar every other series
         # is aligned to.
         "calendar_index": "sp500",
+        # Benchmark for the RS rating: both the trading calendar the ranking
+        # happens on and the index the RS line is measured against.
+        "rs_benchmark": "^IXIC",
         # The broad/large-cap indices, used for the "large caps only" read in
         # the environment summary (i.e. the same call with small caps excluded).
         "largecap_keys": ["nasdaq", "sp500"],
@@ -148,6 +151,7 @@ COUNTRIES = {
             "niftysmallcap250": "Nifty Smallcap 250",
         },
         "calendar_index": "nifty500",
+        "rs_benchmark": "^CRSLDX",
         "largecap_keys": ["sensex", "nifty500"],
         # NSE/BSE close at 15:30 IST = 10:00 UTC year-round (India observes no
         # daylight saving), so a 10:30 UTC cutoff clears the bell with margin.

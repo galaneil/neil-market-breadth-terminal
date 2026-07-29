@@ -254,7 +254,7 @@ def run_country(code, client=None):
     # percentile only means something relative to everyone else that day, so it
     # cannot be produced per ticker inside the loop below.
     log(f"{code}: computing relative strength ratings...")
-    rs_ratings = rs_mod.compute_ratings(price_cache)
+    rs_ratings = rs_mod.compute_ratings(price_cache, benchmark=cfg["rs_benchmark"])
     log(f"{code}: rated {len(rs_ratings)} names")
 
     lookup_tickers = sorted(set(industry_df["name"]) | set(stock_tickers))
