@@ -70,6 +70,14 @@ class FMPClient:
                 on_progress(i + 1, len(symbols))
         return out
 
+    def income_statement_quarterly(self, symbol, limit=8):
+        """Quarterly income statements, newest first. Feeds TMLE's F2B, which
+        needs a run of quarters to judge triple-digit growth and acceleration —
+        TradingView only exposes TTM and the latest single quarter."""
+        data = self._get("income-statement",
+                         {"symbol": symbol, "period": "quarter", "limit": limit})
+        return data or []
+
     def historical_eod(self, symbol, start=None, end=None):
         """Full daily OHLCV history for one symbol. Returns list of dicts, newest first."""
         params = {"symbol": symbol}

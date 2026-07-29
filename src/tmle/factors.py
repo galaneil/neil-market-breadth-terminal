@@ -10,11 +10,20 @@ a trailing year, and both keep scoring a stock as a leader after its move has
 ended. These measure the move itself, from where it began.
 
   F1   Price Leadership    RS vs the Nasdaq 100, over the episode
+  F2   Fundamental Quality revenue growth, EPS growth, operating margin (TTM,
+                           from TradingView)
+  F2B  Fundamental Excel.  triple-digit quarters and acceleration (quarterly,
+                           from FMP — TradingView has no quarter history)
   F4   Price Structure     trend discipline, new highs, and whether it held
                            its 20-day and 10-week while advancing
   F4B  Volume Behavior     up/down volume and big-day confirmation, over the
                            episode
   F5   Theme Alignment     its industry's rank and whether that rank is climbing
+
+F2 and F2B return ZERO, never None, when a company has no revenue or no usable
+quarters. The composite renormalises over available factors, so a None would
+excuse the name and leave it judged on price alone — which is exactly how
+pre-revenue biotechs reached the top of the leaderboard.
 
 Stage is deliberately NOT a factor. It does not adjust the score — it decides
 whether the score is actionable. Folding "this is broken" into a single number
@@ -165,6 +174,31 @@ def f2_score(fund):
     eps = _band_score(fund.get("eps_growth"), config.F2_EPS_BANDS)
     margin = _band_score(fund.get("operating_margin"), config.F2_MARGIN_BANDS)
     return float(rev + eps + margin)
+
+
+# ── F2B — FUNDAMENTAL EXCELLENCE ───────────────────────────────────────────
+def f2b_score(growths):
+    """Triple-digit quarters and acceleration, 50/50 — Neil's scoring tables.
+
+    `growths` is year-on-year growth for the last four quarters, oldest first,
+    taking the stronger of revenue and EPS per quarter.
+
+    As with F2, a name with no usable quarters scores ZERO rather than None. A
+    None would be renormalised away and leave the stock judged on price alone,
+    which is the exact hole that put pre-revenue biotechs at the top of the
+    leaderboard.
+    """
+    if not growths:
+        return 0.0
+
+    triple = sum(1 for g in growths if g >= config.F2B_TRIPLE_DIGIT_THRESHOLD)
+    triple_score = config.F2B_TRIPLE_SCORE.get(min(triple, 4), 0)
+
+    accel = sum(1 for i in range(1, len(growths)) if growths[i] > growths[i - 1])
+    accel_score = config.F2B_ACCEL_SCORE.get(min(accel, 3), 0)
+
+    return float(triple_score * config.F2B_TRIPLE_WEIGHT +
+                 accel_score * config.F2B_ACCEL_WEIGHT)
 
 
 # ── F5 — THEME & SECTOR ALIGNMENT ──────────────────────────────────────────

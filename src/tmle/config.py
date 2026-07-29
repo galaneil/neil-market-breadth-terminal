@@ -46,7 +46,7 @@ PRIMARY_BENCHMARK = "QQQ"
 WEIGHTS = {
     "F1": 0.20,   # Price Leadership
     "F2": 0.20,   # Fundamental Quality
-    "F2B": 0.20,  # Fundamental Excellence     (phase 2 — not yet wired)
+    "F2B": 0.20,  # Fundamental Excellence
     "F4": 0.10,   # Price Structure
     "F4B": 0.10,  # Volume Behavior
     "F5": 0.20,   # Theme Alignment
@@ -56,13 +56,12 @@ assert abs(sum(WEIGHTS.values()) - 1.0) < 1e-9, "Weights must sum to 1.0"
 
 # Factors live today. The composite renormalises over whatever is available, so
 # adding F2/F2B later raises coverage without rescaling anything already stored.
-ACTIVE_FACTORS = ["F1", "F2", "F4", "F4B", "F5"]
+ACTIVE_FACTORS = ["F1", "F2", "F2B", "F4", "F4B", "F5"]
 
-# A score built on too little of the weight is not a score. With F2B still
-# absent the maximum available weight is 0.80, and this sits low enough that one
-# small factor (F4B, when a name has no volume data) can drop out without
-# disqualifying it.
-MIN_COVERAGE = 0.70
+# A score built on too little of the weight is not a score. All six factors are
+# live, so the full weight is 1.00; this sits low enough that one small factor
+# (F4B, when a name has no volume data) can drop out without disqualifying it.
+MIN_COVERAGE = 0.85
 
 # ── F1 — Price Leadership ──────────────────────────────────────────────────
 F1_RS_SCALE = 200.0   # RS of +200 -> 100; RS of -100 -> 0

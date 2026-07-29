@@ -15,8 +15,8 @@ genuinely earned and simply never appears in a buy list. `actionable` is the
 flag the leaderboard filters on.
 
 The composite renormalises over whichever factors returned a value, so a name
-missing one is not silently dragged down — and so adding F2/F2B later raises
-coverage without rescaling anything already computed.
+missing one is not silently dragged down. All six factors are live; in practice
+only F4B drops out, for names with no volume history.
 """
 
 import numpy as np
@@ -62,10 +62,11 @@ class Engine:
     """
 
     def __init__(self, price_rows, bench_rows, rank_lookup, market_caps=None,
-                 fundamentals=None):
+                 fundamentals=None, quarterly=None):
         self.rank_lookup = rank_lookup
         self.market_caps = market_caps or {}
         self.fundamentals = fundamentals or {}
+        self.quarterly = quarterly or {}
 
         bench = factors.prepare(bench_rows)
         if bench is None:
@@ -122,6 +123,7 @@ class Engine:
             # classification already makes — a company's business today stands
             # in for its business three months ago.
             "F2": factors.f2_score(self.fundamentals.get(ticker)),
+            "F2B": factors.f2b_score(self.quarterly.get(ticker)),
         }
         comp, coverage = composite(scores)
         if comp is None or coverage < config.MIN_COVERAGE:

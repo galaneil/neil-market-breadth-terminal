@@ -30,6 +30,7 @@ from datetime import datetime, timezone
 
 import config
 import cache as cache_mod
+import fundamentals as fundamentals_mod
 import universe
 import store
 import render
@@ -291,8 +292,12 @@ def run_country(code, client=None):
             caps = {row["name"]: row.get("market_cap_basic") or 0
                     for _, row in industry_df.iterrows()}
             funds = tv_industry.fundamentals_map(industry_df)
+            quarterly = {}
+            if cfg["price_source"] == "fmp":
+                log(f"{code}: refreshing quarterly fundamentals for F2B...")
+                quarterly = fundamentals_mod.refresh(code, client, lookup_tickers, log=log)
             leaders = tmle_run.run(code, tmle_prices, bench_rows, dates, caps,
-                                   fundamentals=funds, log=log)
+                                   fundamentals=funds, quarterly=quarterly, log=log)
             if leaders:
                 top = ", ".join(f"{r['ticker']} {r['composite']}" for r in leaders[:5])
                 log(f"{code}: TMLE top 5 — {top}")
