@@ -28,6 +28,7 @@ from datetime import datetime, timezone
 from jinja2 import Environment, FileSystemLoader
 
 import config
+import flags
 import store
 
 # Series that exist for every country under the same filename. Index series are
@@ -99,6 +100,7 @@ def country_links(country, filename):
         else:
             href = asset_prefix(country) + filename
         links.append({"code": code, "label": cfg["short"], "title": cfg["label"],
+                      "flag": flags.flag(code),
                       "href": href, "active": code == country})
     return links
 
@@ -128,6 +130,7 @@ def render_dashboard(country):
         generated_at=generated_at,
         data_json=data_json,
         country_label=cfg["label"],
+        country_flag=flags.flag(country),
         index_keys_csv=",".join(f"index_{k}" for k in cfg["index_tickers"]),
         asset_prefix=asset_prefix(country),
         country_links=country_links(country, "index.html"),
@@ -276,6 +279,7 @@ def _write_panel(country, filename, title, body_html, payload, generated_at,
         asset_prefix=asset_prefix(country),
         country_links=country_links(country, filename),
         country_label=config.COUNTRIES[country]["label"],
+        country_flag=flags.flag(country),
     )
     out_dir = config.docs_dir(country)
     os.makedirs(out_dir, exist_ok=True)

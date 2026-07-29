@@ -9,13 +9,13 @@
 <body>
 
 <header>
-  <h1>Market Breadth Terminal <span class="country-tag">{{ country_label }}</span></h1>
+  <h1>{{ country_flag | safe }}Market Breadth Terminal <span class="country-tag">{{ country_label }}</span></h1>
   <div class="header-controls">
     <span class="generated-at">Updated {{ generated_at }} UTC</span>
     {%- if country_links | length > 1 %}
     <span class="country-switch">
       {%- for c in country_links %}
-      <a href="{{ c.href }}" title="{{ c.title }}"{% if c.active %} class="active"{% endif %}>{{ c.label }}</a>
+      <a href="{{ c.href }}" title="{{ c.title }}"{% if c.active %} class="active"{% endif %}>{{ c.flag | safe }}{{ c.label }}</a>
       {%- endfor %}
     </span>
     {%- endif %}

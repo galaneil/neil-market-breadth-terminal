@@ -21,12 +21,12 @@ footer { display: none; }
 <body>
 
 <header>
-  <h1>{{ title }}</h1>
+  <h1>{{ country_flag | safe }}{{ title }}</h1>
   <div class="header-controls">
     {%- if country_links | length > 1 %}
     <span class="country-switch">
       {%- for c in country_links %}
-      <a href="{{ c.href }}" title="{{ c.title }}"{% if c.active %} class="active"{% endif %}>{{ c.label }}</a>
+      <a href="{{ c.href }}" title="{{ c.title }}"{% if c.active %} class="active"{% endif %}>{{ c.flag | safe }}{{ c.label }}</a>
       {%- endfor %}
     </span>
     {%- endif %}
