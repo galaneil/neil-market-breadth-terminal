@@ -126,7 +126,7 @@ def write_leaders(country, date_str, rows):
                 {k: r.get(k) for k in
                  ("ticker", "rank", "composite", "coverage", "stage", "actionable",
                   "drawdown", "gain", "episode_days", "episode_start",
-                  "pct_below_20", "pct_below_10w", "F1", "F4", "F4B", "F5")}
+                  "pct_below_20", "pct_below_10w", "F1", "F2", "F4", "F4B", "F5")}
                 for r in top
             ],
         },
@@ -155,7 +155,7 @@ def write_trajectories(country, history):
             "pct_below_20": [r.get("pct_below_20") for r in rows],
             "factors": {
                 key: [r.get(key) for r in rows]
-                for key in ("F1", "F4", "F4B", "F5")
+                for key in ("F1", "F2", "F4", "F4B", "F5")
             },
         }
         name = ticker.replace("/", "-")
@@ -165,13 +165,14 @@ def write_trajectories(country, history):
     return written
 
 
-def run(country, price_rows, bench_rows, session_dates, market_caps, log=print):
+def run(country, price_rows, bench_rows, session_dates, market_caps,
+        fundamentals=None, log=print):
     """Score the universe at weekly checkpoints and persist everything.
 
     Returns the latest checkpoint's ranked rows.
     """
     lookup = build_rank_lookup(country)
-    eng = engine.Engine(price_rows, bench_rows, lookup, market_caps)
+    eng = engine.Engine(price_rows, bench_rows, lookup, market_caps, fundamentals)
     log(f"  price structure built for {len(eng.arrays)} names")
 
     dates = checkpoint_dates(session_dates)
@@ -198,7 +199,7 @@ def run(country, price_rows, bench_rows, session_dates, market_caps, log=print):
                 "gain": row.get("gain"), "episode_days": row.get("episode_days"),
                 "pct_below_10w": row.get("pct_below_10w"),
                 "pct_below_20": row.get("pct_below_20"),
-                "F1": row.get("F1"), "F4": row.get("F4"),
+                "F1": row.get("F1"), "F2": row.get("F2"), "F4": row.get("F4"),
                 "F4B": row.get("F4B"), "F5": row.get("F5"),
             })
         if (i + 1) % 10 == 0:

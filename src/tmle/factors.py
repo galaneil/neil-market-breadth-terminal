@@ -138,6 +138,35 @@ def f4b_score(arrays, i, episode):
                          bigdown * config.F4B_BIGDOWN_WEIGHT, 0, 100))
 
 
+# ── F2 — FUNDAMENTAL QUALITY ───────────────────────────────────────────────
+def f2_score(fund):
+    """Revenue growth 40 / EPS growth 30 / operating margin 30 — Neil's bands,
+    unchanged, fed from TradingView's TTM figures.
+
+    THE IMPORTANT PART is what happens when there are no fundamentals.
+
+    Returning None would be wrong. The composite renormalises over available
+    factors, so a None here means the name is scored on price and theme alone
+    and is not penalised at all — which is precisely how a pre-revenue biotech
+    ended up ranked as a market leader. Companies with no revenue are not
+    missing data; the absence IS the datum, and it scores zero.
+
+    A genuine data gap (no financials published at all, e.g. a recent listing or
+    a fund) also scores zero rather than being excused, because a leader we
+    cannot verify has a business is not a leader we should be buying.
+    """
+    if not fund:
+        return 0.0
+    revenue = fund.get("revenue")
+    if revenue is None or revenue <= 0:
+        return 0.0
+
+    rev = _band_score(fund.get("revenue_growth"), config.F2_REVENUE_BANDS)
+    eps = _band_score(fund.get("eps_growth"), config.F2_EPS_BANDS)
+    margin = _band_score(fund.get("operating_margin"), config.F2_MARGIN_BANDS)
+    return float(rev + eps + margin)
+
+
 # ── F5 — THEME & SECTOR ALIGNMENT ──────────────────────────────────────────
 def _current_rank_score(rank):
     """The notebook's tiering: top 5 near 100, easing to a 30 floor past 20."""

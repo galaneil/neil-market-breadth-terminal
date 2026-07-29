@@ -41,7 +41,11 @@ def fetch_industry_classification(country_cfg):
     q = (
         Query()
         .set_markets(country_cfg["tv_market"])
-        .select("name", "sector", "industry", "market_cap_basic")
+        .select("name", "sector", "industry", "market_cap_basic",
+                # Fundamentals for TMLE's F2, free in the query already being
+                # made. FMP would cost one call per ticker; this costs nothing.
+                "total_revenue_ttm", "total_revenue_yoy_growth_ttm",
+                "operating_margin_ttm", "earnings_per_share_diluted_yoy_growth_ttm")
         .where(*filters)
         .order_by("market_cap_basic", ascending=False)
         .limit(country_cfg["universe_limit"])
@@ -51,6 +55,27 @@ def fetch_industry_classification(country_cfg):
     df = df[~df["name"].str.contains("/", regex=False)]
     df = df.dropna(subset=["industry", "sector"])
     return df.reset_index(drop=True)
+
+
+def fundamentals_map(df):
+    """{ticker: {revenue, revenue_growth, eps_growth, operating_margin}}.
+
+    NaN is preserved as None rather than coerced to zero: "margin unknown" and
+    "margin is zero" are different, and only the band lookup should decide what
+    an unknown is worth.
+    """
+    def clean(v):
+        return None if v is None or pd.isna(v) else float(v)
+
+    out = {}
+    for _, row in df.iterrows():
+        out[row["name"]] = {
+            "revenue": clean(row.get("total_revenue_ttm")),
+            "revenue_growth": clean(row.get("total_revenue_yoy_growth_ttm")),
+            "eps_growth": clean(row.get("earnings_per_share_diluted_yoy_growth_ttm")),
+            "operating_margin": clean(row.get("operating_margin_ttm")),
+        }
+    return out
 
 
 if __name__ == "__main__":

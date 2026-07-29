@@ -290,7 +290,9 @@ def run_country(code, client=None):
             bench_rows = drop_partial(client.historical_eod(tmle_config.PRIMARY_BENCHMARK))
             caps = {row["name"]: row.get("market_cap_basic") or 0
                     for _, row in industry_df.iterrows()}
-            leaders = tmle_run.run(code, tmle_prices, bench_rows, dates, caps, log=log)
+            funds = tv_industry.fundamentals_map(industry_df)
+            leaders = tmle_run.run(code, tmle_prices, bench_rows, dates, caps,
+                                   fundamentals=funds, log=log)
             if leaders:
                 top = ", ".join(f"{r['ticker']} {r['composite']}" for r in leaders[:5])
                 log(f"{code}: TMLE top 5 — {top}")

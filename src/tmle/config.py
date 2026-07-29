@@ -45,7 +45,7 @@ PRIMARY_BENCHMARK = "QQQ"
 # ── Composite weights (must sum to 1.00) ───────────────────────────────────
 WEIGHTS = {
     "F1": 0.20,   # Price Leadership
-    "F2": 0.20,   # Fundamental Quality        (phase 2 — not yet wired)
+    "F2": 0.20,   # Fundamental Quality
     "F2B": 0.20,  # Fundamental Excellence     (phase 2 — not yet wired)
     "F4": 0.10,   # Price Structure
     "F4B": 0.10,  # Volume Behavior
@@ -56,11 +56,13 @@ assert abs(sum(WEIGHTS.values()) - 1.0) < 1e-9, "Weights must sum to 1.0"
 
 # Factors live today. The composite renormalises over whatever is available, so
 # adding F2/F2B later raises coverage without rescaling anything already stored.
-ACTIVE_FACTORS = ["F1", "F4", "F4B", "F5"]
+ACTIVE_FACTORS = ["F1", "F2", "F4", "F4B", "F5"]
 
-# A score built on too little of the weight is not a score. With F2/F2B absent
-# the maximum available weight is 0.60, so this must sit at or below that.
-MIN_COVERAGE = 0.55
+# A score built on too little of the weight is not a score. With F2B still
+# absent the maximum available weight is 0.80, and this sits low enough that one
+# small factor (F4B, when a name has no volume data) can drop out without
+# disqualifying it.
+MIN_COVERAGE = 0.70
 
 # ── F1 — Price Leadership ──────────────────────────────────────────────────
 F1_RS_SCALE = 200.0   # RS of +200 -> 100; RS of -100 -> 0
@@ -120,6 +122,14 @@ MIN_MARKET_CAP = 2e9
 # keeps the strength score it genuinely earned and simply never appears in a
 # buy list. A drawdown past this from the episode high is treated as damage
 # even if the 30-week has not rolled over yet.
+# A name with no reported revenue is not actionable at any rank. Scoring F2 as
+# zero demotes it but does not remove it, and MAAS — a company with no published
+# financials at all — still reached 61st of 878 on price and theme alone. A
+# leader we cannot verify has a business is not a leader worth buying, so this
+# is a gate rather than a score adjustment. It stays SCORED, so the history is
+# intact and the name is still visible under "everything scored".
+REQUIRE_REVENUE = True
+
 ACTIONABLE_STAGES = [2]
 # Neil's call: a leader is allowed a 25% pullback mid-advance and no more.
 # This does the work the stage cannot — the 30-week average is slow, and five

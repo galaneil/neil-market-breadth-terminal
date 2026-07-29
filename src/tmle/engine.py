@@ -61,9 +61,11 @@ class Engine:
     `rank_lookup`  callable(ticker, date) -> industry rank on that date, or None
     """
 
-    def __init__(self, price_rows, bench_rows, rank_lookup, market_caps=None):
+    def __init__(self, price_rows, bench_rows, rank_lookup, market_caps=None,
+                 fundamentals=None):
         self.rank_lookup = rank_lookup
         self.market_caps = market_caps or {}
+        self.fundamentals = fundamentals or {}
 
         bench = factors.prepare(bench_rows)
         if bench is None:
@@ -115,6 +117,11 @@ class Engine:
             "F4B": factors.f4b_score(arrays, i, episode),
             "F5": factors.f5_score(self.rank_lookup(ticker, date_str),
                                    self.rank_lookup(ticker, momentum_date)),
+            # Today's fundamentals are applied at every checkpoint. TradingView
+            # has no historical mode, so this is the same approximation the
+            # classification already makes — a company's business today stands
+            # in for its business three months ago.
+            "F2": factors.f2_score(self.fundamentals.get(ticker)),
         }
         comp, coverage = composite(scores)
         if comp is None or coverage < config.MIN_COVERAGE:
@@ -122,9 +129,16 @@ class Engine:
 
         stage = episode["stage"]
         drawdown = episode["drawdown"]
+        has_revenue = True
+        if config.REQUIRE_REVENUE:
+            fund = self.fundamentals.get(ticker) or {}
+            revenue = fund.get("revenue")
+            has_revenue = revenue is not None and revenue > 0
+
         actionable = (stage in config.ACTIONABLE_STAGES and
                       drawdown is not None and
-                      drawdown >= config.MAX_ACTIONABLE_DRAWDOWN)
+                      drawdown >= config.MAX_ACTIONABLE_DRAWDOWN and
+                      has_revenue)
 
         row = {
             "ticker": ticker,
@@ -139,6 +153,7 @@ class Engine:
             "episode_start": arrays["dates"][episode["start_index"]],
             "pct_below_20": episode["pct_below_20"],
             "pct_below_10w": episode["pct_below_10w"],
+            "has_revenue": has_revenue,
         }
         for key, value in scores.items():
             row[key] = round(value, 1) if value is not None else None
