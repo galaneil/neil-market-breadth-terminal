@@ -3,8 +3,8 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{ title }} — Market Breadth Terminal</title>
-<link rel="stylesheet" href="dashboard.css">
+<title>{{ title }} — {{ country_label }} — Market Breadth Terminal</title>
+<link rel="stylesheet" href="{{ asset_prefix }}dashboard.css">
 <style>
 /* Single-panel embed pages are meant to sit inside a small Notion embed
    block, not a full browser window — trim the chrome accordingly. */
@@ -23,6 +23,13 @@ footer { display: none; }
 <header>
   <h1>{{ title }}</h1>
   <div class="header-controls">
+    {%- if country_links | length > 1 %}
+    <span class="country-switch">
+      {%- for c in country_links %}
+      <a href="{{ c.href }}" title="{{ c.title }}"{% if c.active %} class="active"{% endif %}>{{ c.label }}</a>
+      {%- endfor %}
+    </span>
+    {%- endif %}
     <span class="generated-at">Updated {{ generated_at }} UTC</span>
     <button class="icon-btn" id="theme-toggle" title="Toggle dark/light">&#9788;</button>
   </div>
@@ -32,9 +39,9 @@ footer { display: none; }
 {{ body_html | safe }}
 </main>
 
-{% if needs_chartjs %}<script src="vendor/chart.umd.min.js"></script>{% endif %}
-{% if needs_lightweight %}<script src="vendor/lightweight-charts.js"></script>{% endif %}
+{% if needs_chartjs %}<script src="{{ asset_prefix }}vendor/chart.umd.min.js"></script>{% endif %}
+{% if needs_lightweight %}<script src="{{ asset_prefix }}vendor/lightweight-charts.js"></script>{% endif %}
 <script id="dashboard-data" type="application/json">{{ data_json }}</script>
-<script src="dashboard.js"></script>
+<script src="{{ asset_prefix }}dashboard.js"></script>
 </body>
 </html>

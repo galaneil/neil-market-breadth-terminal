@@ -4,3 +4,4 @@ numpy
 lxml
 tradingview-screener
 jinja2
+yfinance

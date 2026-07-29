@@ -3,18 +3,22 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Market Breadth Terminal</title>
-<link rel="stylesheet" href="dashboard.css">
+<title>{{ country_label }} — Market Breadth Terminal</title>
+<link rel="stylesheet" href="{{ asset_prefix }}dashboard.css">
 </head>
 <body>
 
 <header>
-  <h1>Market Breadth Terminal</h1>
+  <h1>Market Breadth Terminal <span class="country-tag">{{ country_label }}</span></h1>
   <div class="header-controls">
     <span class="generated-at">Updated {{ generated_at }} UTC</span>
-    <select id="country-select">
-      <option value="US">United States</option>
-    </select>
+    {%- if country_links | length > 1 %}
+    <span class="country-switch">
+      {%- for c in country_links %}
+      <a href="{{ c.href }}" title="{{ c.title }}"{% if c.active %} class="active"{% endif %}>{{ c.label }}</a>
+      {%- endfor %}
+    </span>
+    {%- endif %}
     <button class="icon-btn" id="theme-toggle" title="Toggle dark/light">&#9788;</button>
   </div>
 </header>
@@ -27,7 +31,7 @@
 
   <section id="panel-indices">
     <h2>Index Status</h2>
-    <div class="card-grid" id="indices-grid" data-keys="index_nasdaq,index_sp500,index_russell2000"></div>
+    <div class="card-grid" id="indices-grid" data-keys="{{ index_keys_csv }}"></div>
   </section>
 
   <section id="panel-sectors">
@@ -82,9 +86,9 @@
 
 <footer>US equities &middot; data from Financial Modeling Prep &amp; TradingView &middot; refreshed daily after market close</footer>
 
-<script src="vendor/chart.umd.min.js"></script>
-<script src="vendor/lightweight-charts.js"></script>
+<script src="{{ asset_prefix }}vendor/chart.umd.min.js"></script>
+<script src="{{ asset_prefix }}vendor/lightweight-charts.js"></script>
 <script id="dashboard-data" type="application/json">{{ data_json }}</script>
-<script src="dashboard.js"></script>
+<script src="{{ asset_prefix }}dashboard.js"></script>
 </body>
 </html>

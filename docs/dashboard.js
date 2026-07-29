@@ -42,7 +42,12 @@
   // Every access is wrapped, because an iframe sandboxed without
   // allow-same-origin throws on any storage access. If that happens the
   // pages simply stop talking to each other and still work standalone.
-  const SYNC_KEY = "mbt-context";
+  // Namespaced per country. The two markets have different tickers AND
+  // different trading calendars, so a US date or symbol arriving on an Indian
+  // panel is meaningless — it silently snapped the Indian charts back to
+  // whatever session the US panels were last left on. Panels sync with their
+  // own market's panels only.
+  const SYNC_KEY = "mbt-context-" + (DATA.country || "US");
   const Sync = {
     read: function () {
       try { return JSON.parse(localStorage.getItem(SYNC_KEY) || "null") || {}; }
@@ -143,6 +148,18 @@
     return n <= 3 ? 3 : 0;
   }
 
+  // The net figures are signed, so the caption has to follow the sign — a
+  // negative advance/decline average under the words "more stocks rising than
+  // falling" says the opposite of the number above it.
+  function netAdvDeclCaption(v) {
+    if (v === null || v === undefined || isNaN(v)) return "advancers versus decliners on a typical day";
+    return v >= 0 ? "more stocks rising than falling on a typical day"
+                  : "more stocks falling than rising on a typical day";
+  }
+  function netHiLoPhrase(v) {
+    return (v >= 0 ? "more new highs than new lows" : "more new lows than new highs");
+  }
+
   // ---------- Timeframe filtering ----------
   const TIMEFRAMES = ["1W", "1M", "3M", "6M", "YTD", "ALL"];
   const TIMEFRAME_DAYS = { "1W": 7, "1M": 30, "3M": 91, "6M": 182 };
@@ -222,7 +239,17 @@
   // Reads the stored daily environment record rather than deriving anything
   // here, so the browser and any later consumer (replay, trade log) always
   // agree on what the environment was on a given date.
-  const INDEX_SHORT = { nasdaq: "NASDAQ", sp500: "S&P 500", russell2000: "Russell 2000" };
+  // Keyed by the bare index key (no "index_" prefix), which is how the
+  // environment record's per_index map is keyed. Derived from the payload so
+  // India's four indices render their factor rows too — a hardcoded US map
+  // silently produced an empty factor list for any other market.
+  const INDEX_SHORT = (function () {
+    const labels = DATA.indexLabels;
+    if (!labels) return { nasdaq: "NASDAQ", sp500: "S&P 500", russell2000: "Russell 2000" };
+    const out = {};
+    Object.keys(labels).forEach(function (k) { out[k.replace(/^index_/, "")] = labels[k]; });
+    return out;
+  })();
   const MOVER_WINDOW_LABELS = { "1w": "1 week", "1m": "1 month" };
 
   // Which groups are gaining and losing traction. Shown over a week and a
@@ -288,6 +315,9 @@
       return;
     }
     const env = rows[rows.length - 1];
+    // 9 for a 3-index market, 12 for India's 4 — read off the record rather
+    // than assumed, so the caption never contradicts the chart.
+    const factorTotal = (env.trend && env.trend.factors_total) || 9;
 
     function tag(label) {
       return '<span class="env-tag ' + label + '">' + label + "</span>";
@@ -345,10 +375,10 @@
             '<div class="env-block-title">Internals ' + (i ? tag(i.label) : "") + "</div>" +
             '<div class="env-block-value ' + (i ? pctClass(i.adv_decl_avg) : "") + '">' +
               (i && i.adv_decl_avg !== null ? fmtSignedInt(Math.round(i.adv_decl_avg)) : "—") + "</div>" +
-            '<div class="env-block-sub">more stocks rising than falling on a typical day</div>' +
+            '<div class="env-block-sub">' + netAdvDeclCaption(i ? i.adv_decl_avg : null) + "</div>" +
             '<div class="env-block-extra">' +
               (i && i.new_hilo_avg !== null
-                ? fmtSignedInt(Math.round(i.new_hilo_avg)) + " more new highs than new lows &middot; both averaged over " + i.lookback_days + " sessions"
+                ? fmtSignedInt(Math.round(i.new_hilo_avg)) + " " + netHiLoPhrase(i.new_hilo_avg) + " &middot; both averaged over " + i.lookback_days + " sessions"
                 : "&nbsp;") +
             "</div>" +
           "</div>" +
@@ -357,7 +387,8 @@
         (env.leaders ? moversHtml(env.leaders) : "") +
         '<div class="env-chart-block">' +
           '<div class="env-chart-title">Trend strength over time</div>' +
-          '<div class="env-block-sub">how many of the 9 index-vs-EMA factors were favourable each day &middot; 9 is fully bullish, 0 fully bearish</div>' +
+          '<div class="env-block-sub">how many of the ' + factorTotal + " index-vs-EMA factors were favourable each day &middot; " +
+            factorTotal + " is fully bullish, 0 fully bearish</div>" +
           '<div class="tf-toggle"></div>' +
           '<div class="chart-wrap"><canvas id="environment-canvas"></canvas></div>' +
         "</div>" +
@@ -811,9 +842,9 @@
               '<div class="env-block-title">Internals ' + (i ? tag(i.label) : "") + "</div>" +
               '<div class="env-block-value ' + (i ? pctClass(i.adv_decl_avg) : "") + '">' +
                 (i && i.adv_decl_avg !== null ? fmtSignedInt(Math.round(i.adv_decl_avg)) : "—") + "</div>" +
-              '<div class="env-block-sub">more stocks rising than falling on a typical day</div>' +
+              '<div class="env-block-sub">' + netAdvDeclCaption(i ? i.adv_decl_avg : null) + "</div>" +
               '<div class="env-block-extra">' +
-                (i && i.new_hilo_avg !== null ? fmtSignedInt(Math.round(i.new_hilo_avg)) + " more new highs than new lows" : "&nbsp;") +
+                (i && i.new_hilo_avg !== null ? fmtSignedInt(Math.round(i.new_hilo_avg)) + " " + netHiLoPhrase(i.new_hilo_avg) : "&nbsp;") +
               "</div>" +
             "</div>" +
           "</div>" +
@@ -934,6 +965,14 @@
       return (values[endIdx] / values[startIdx] - 1) * 100;
     }
 
+    // "sp500" -> "S&P 500", "sensex" -> "BSE Sensex". The renderer ships the
+    // labels because the index set is per country; the raw key is a readable
+    // enough fallback if one is ever missing.
+    function benchLabel(key) {
+      const labels = DATA.indexLabels || {};
+      return labels["index_" + key] || key;
+    }
+
     function benchAt(key, dates, upto) {
       // Align a benchmark onto the stock's own trading days, carrying the last
       // known close forward across any date the benchmark doesn't share.
@@ -966,8 +1005,14 @@
       const slice = function (a) { return a.slice(startIdx, end + 1); };
       const dates = slice(d.dates), close = slice(d.close);
 
-      const spx = benchAt("sp500", d.dates, end).slice(startIdx);
-      const ndx = benchAt("nasdaq", d.dates, end).slice(startIdx);
+      // Which two indices this stock is measured against comes from the
+      // country config (S&P 500 / Nasdaq for the US, Sensex / Nifty 500 for
+      // India) rather than being hard-coded here.
+      const benchKeys = (DATA.benchmarkKeys || ["sp500", "nasdaq"])
+        .filter(function (k) { return bench && bench[k]; });
+      const benchSeries = benchKeys.map(function (k) {
+        return { key: k, label: benchLabel(k), values: benchAt(k, d.dates, end).slice(startIdx) };
+      });
       function rsLine(b) {
         const base = close[0] / b[0];
         return close.map(function (c, i) { return b[i] ? (c / b[i]) / base * 100 : null; });
@@ -978,8 +1023,6 @@
       let cards = "";
       windows.forEach(function (w) {
         const s = pctBetween(d.close, end, w[1]);
-        const bs = pctBetween(benchAt("sp500", d.dates, end), end, w[1]);
-        const bn = pctBetween(benchAt("nasdaq", d.dates, end), end, w[1]);
         // Plain "outperformed / underperformed by X%". Strictly the gap between
         // two returns is measured in percentage points, but both returns are
         // already on screen, so the precise unit costs more clarity than it buys.
@@ -994,10 +1037,12 @@
             '<div class="rs-window">' + w[0] + "</div>" +
             '<div class="rs-main ' + pctClass(s) + '">' + (s === null ? "—" : fmtSignedPct(s)) + "</div>" +
             '<div class="rs-sub">' + sym + " over " + w[0] + "</div>" +
-            '<div class="rs-line"><span>vs S&amp;P 500 (' + (bs === null ? "—" : fmtSignedPct(bs)) + ")</span>" +
-              '<span class="rs-gap">' + gap(s, bs) + "</span></div>" +
-            '<div class="rs-line"><span>vs Nasdaq (' + (bn === null ? "—" : fmtSignedPct(bn)) + ")</span>" +
-              '<span class="rs-gap">' + gap(s, bn) + "</span></div>" +
+            benchSeries.map(function (b) {
+              const bv = pctBetween(benchAt(b.key, d.dates, end), end, w[1]);
+              return '<div class="rs-line"><span>vs ' + b.label + " (" +
+                (bv === null ? "—" : fmtSignedPct(bv)) + ")</span>" +
+                '<span class="rs-gap">' + gap(s, bv) + "</span></div>";
+            }).join("") +
           "</div>";
       });
 
@@ -1030,8 +1075,10 @@
               "red while it is losing ground &middot; the longer a run of one colour, the more " +
               "persistent the move</div>" +
             '<div class="rs-charts">' +
-              '<div><div class="rs-chart-label">vs S&amp;P 500</div><div class="lw-chart rs-chart" id="rs-sp500"></div></div>' +
-              '<div><div class="rs-chart-label">vs Nasdaq</div><div class="lw-chart rs-chart" id="rs-nasdaq"></div></div>' +
+              benchSeries.map(function (b) {
+                return '<div><div class="rs-chart-label">vs ' + b.label + "</div>" +
+                  '<div class="lw-chart rs-chart" id="rs-' + b.key + '"></div></div>';
+              }).join("") +
             "</div>" +
             '<div class="rs-grid">' + cards + "</div>" +
           "</div>" +
@@ -1108,9 +1155,9 @@
       // average holds a colour for as long as the move actually persists, so
       // a run of green is a real stretch of outperformance rather than a
       // week of noise.
-      [["rs-sp500", spx], ["rs-nasdaq", ndx]].forEach(function (cfg) {
-        const chart = makeChart(cfg[0], 150);
-        const line = rsLine(cfg[1]);
+      benchSeries.forEach(function (b) {
+        const chart = makeChart("rs-" + b.key, 150);
+        const line = rsLine(b.values);
         const valid = line.map(function (v) { return v === null ? 100 : v; });
         const fast = ema(valid, 10);
         const trend = ema(valid, 30);
@@ -1241,7 +1288,11 @@
   // without needing separate JS per page — a page simply omits the
   // container element for any panel it doesn't include, and the guards
   // below skip anything not present in the DOM.
-  const INDEX_LABELS = {
+  // Supplied by the renderer, because the index set differs per country
+  // (nasdaq/sp500/russell2000 for the US, sensex/nifty500/midcap/smallcap for
+  // India). The US names are kept only as a fallback for any page rendered
+  // before indexLabels was added to the payload.
+  const INDEX_LABELS = DATA.indexLabels || {
     index_nasdaq: "NASDAQ Composite",
     index_sp500: "S&P 500",
     index_russell2000: "Russell 2000",

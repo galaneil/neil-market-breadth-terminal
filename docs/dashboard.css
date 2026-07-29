@@ -258,3 +258,21 @@ tbody tr.selected { background: var(--grid-line); outline: 1px solid var(--accen
 .drilldown .chart-wrap { height: clamp(190px, 32vh, 320px); }
 .empty-note { color: var(--text-dim); font-size: 12px; padding: 8px 0; }
 footer { text-align: center; color: var(--text-dim); font-size: 11px; padding: 24px 0; }
+
+/* ---------- Country switcher ---------- */
+/* Plain links rather than a <select>: each country is a separate static page,
+   so navigation is the actual mechanism and a link keeps it working without
+   JavaScript (and lets a Notion embed be pointed straight at one market). */
+.country-switch { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.country-switch a {
+  padding: 3px 9px; font-size: 11px; font-weight: 600; letter-spacing: 0.04em;
+  color: var(--text-dim); text-decoration: none; background: transparent;
+}
+.country-switch a + a { border-left: 1px solid var(--border); }
+.country-switch a:hover { color: var(--text); }
+.country-switch a.active { background: var(--accent); color: #fff; }
+.country-tag {
+  font-size: 11px; font-weight: 500; color: var(--text-dim);
+  border: 1px solid var(--border); border-radius: 5px; padding: 2px 7px;
+  margin-left: 8px; vertical-align: middle;
+}

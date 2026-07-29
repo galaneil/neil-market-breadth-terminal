@@ -8,3 +8,4 @@ venv/
 # thousand daily-rewritten price files into main would add tens of megabytes of
 # permanent history a day for data that is disposable by design.
 docs/tickers/
+docs/in/tickers/

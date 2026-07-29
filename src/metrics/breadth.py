@@ -80,10 +80,10 @@ def backfill_breadth_history(price_cache, tickers, n_days):
 
 
 if __name__ == "__main__":
-    from config import PRICE_CACHE_PATH, CHART_BACKFILL_DAYS
+    from config import price_cache_path, CHART_BACKFILL_DAYS, DEFAULT_COUNTRY
     import universe
 
-    price_cache = cache_mod.load(PRICE_CACHE_PATH)
+    price_cache = cache_mod.load(price_cache_path(DEFAULT_COUNTRY))
     if not price_cache:
         print("Price cache is empty — run main.py's backfill step first.")
     else:

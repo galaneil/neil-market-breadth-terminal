@@ -1,5 +1,5 @@
 """
-main.py — daily pipeline orchestration.
+main.py — daily pipeline orchestration, run once per country.
 
 Every run recomputes the FULL trailing CHART_BACKFILL_DAYS window for every
 panel (not just today) and upserts all of it via store.py, which is idempotent
@@ -8,16 +8,25 @@ pipeline is self-healing (a missed day, a widened backfill window, or a
 one-off local re-run all just work) without needing separate "first run only"
 backfill logic.
 
-Order: build universe -> backfill/update price cache -> pull TradingView
-classification (industry + sector tags) -> backfill index/breadth/sector/
-industry history from the cache -> upsert into data/*.jsonl -> render
-docs/index.html.
+Order, per country: build universe -> backfill/update price cache -> pull
+TradingView classification (industry + sector tags) -> backfill index/breadth/
+sector/industry history from the cache -> upsert into data/<country>/*.jsonl ->
+render that country's pages.
+
+Price sources differ by market and are the ONLY country-specific step:
+  US    FMP  (paid, has US coverage, no India coverage at all on Starter)
+  India Yahoo via yfinance (no key; ~8s per 100 symbols in bulk)
+Both hand back the same row shape, so everything downstream is shared.
+
+A failure in one country does not abort the other — India breaking on a Yahoo
+outage should never take the (paid, reliable) US terminal down with it.
 """
 
 import os
 import sys
 import time
-from datetime import date, datetime, timezone
+import traceback
+from datetime import datetime, timezone
 
 import config
 import cache as cache_mod
@@ -25,6 +34,7 @@ import universe
 import store
 import render
 import tv_industry
+import yf_client
 from fmp_client import FMPClient
 from metrics import indices, sectors, industries, breadth, environment, groups as groups_mod
 
@@ -33,177 +43,246 @@ def log(msg):
     print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
 
 
-# The US cash session closes at 20:00 UTC in EDT and 21:00 UTC in EST. Anything
-# earlier than this cutoff means today's daily bar is still forming, and both
-# FMP's "historical" endpoint and its live quote will hand back an in-progress
-# value that looks exactly like a finished session. Writing that into the
-# history would show a partial day as a real close (and skew its EMAs, its
-# breadth counts and the day-change figure), so the pipeline drops today's row
-# entirely until the session is genuinely over.
-SESSION_FINAL_AFTER_UTC = (21, 30)
+def todays_bar_is_incomplete(country_cfg, now=None):
+    """True while today's session is still forming for this market.
 
-
-def todays_bar_is_incomplete(now=None):
+    Both FMP's "historical" endpoint and Yahoo hand back an in-progress bar
+    mid-session that looks exactly like a finished one. Writing that into the
+    history would show a partial day as a real close (and skew its EMAs, its
+    breadth counts and the day-change figure), so today's row is dropped
+    entirely until the session is genuinely over. Cutoffs live in config:
+    21:30 UTC for the US (clears both EDT and EST closes), 10:30 UTC for India
+    (15:30 IST, no daylight saving to worry about).
+    """
     now = now or datetime.now(timezone.utc)
-    return (now.hour, now.minute) < SESSION_FINAL_AFTER_UTC
+    return (now.hour, now.minute) < country_cfg["session_final_after_utc"]
 
 
-def main():
-    api_key = os.environ.get("FMP_API_KEY")
-    if not api_key:
-        log("FMP_API_KEY is not set.")
-        sys.exit(1)
+# ---------------------------------------------------------------- price sources
 
-    client = FMPClient(api_key)
-    country_cfg = config.COUNTRIES[config.DEFAULT_COUNTRY]
-    today = datetime.now(timezone.utc).date().isoformat()
-
-    skip_today = todays_bar_is_incomplete()
-    if skip_today:
-        log(f"US session for {today} has not closed yet — today's partial bar will be "
-            f"excluded; the dashboard will report through the last completed session.")
-
-    def drop_partial(rows):
-        return [r for r in rows if r.get("date") != today] if skip_today else rows
-
-    log("Building S&P 1500 universe...")
-    uni = universe.build_sp1500()
-    stock_tickers = uni["ticker"].tolist()
-    index_tickers = list(country_cfg["index_tickers"].values())
-    extra = [t for t in config.WATCHLIST if t not in stock_tickers]
-    all_price_tickers = stock_tickers + extra + index_tickers
-    log(f"Universe: {len(stock_tickers)} stocks + {len(extra)} watchlist + {len(index_tickers)} indices")
-
-    # ---------- Price cache: backfill missing, then refresh today for all ----------
-    price_cache = cache_mod.load(config.PRICE_CACHE_PATH)
-    missing = [t for t in all_price_tickers if t not in price_cache]
+def fetch_prices_fmp(client, tickers, index_tickers, drop_partial, price_cache):
+    """US: FMP, one symbol per call (batch endpoints are plan-gated), so only
+    symbols missing from the rolling cache are backfilled; the rest get today's
+    close from the quote loop."""
+    missing = [t for t in tickers if t not in price_cache]
     if missing:
-        log(f"Backfilling price history for {len(missing)} new tickers "
-            f"(up to {config.PRICE_WINDOW_DAYS} trading days each, one-time cost)...")
+        log(f"  backfilling {len(missing)} new tickers (up to {config.PRICE_WINDOW_DAYS} days each)...")
         for i, ticker in enumerate(missing):
             hist = drop_partial(client.historical_eod(ticker))[:config.PRICE_WINDOW_DAYS]
             for row in hist:
                 cache_mod.set_value(price_cache, ticker, row["date"], row["close"])
             if (i + 1) % 100 == 0:
-                log(f"  backfilled {i + 1}/{len(missing)}")
-                cache_mod.save(price_cache, config.PRICE_CACHE_PATH)  # checkpoint
+                log(f"    {i + 1}/{len(missing)}")
+    return price_cache
 
+
+def index_ohlc_rows(country_cfg, client, symbol, drop_partial):
+    if country_cfg["price_source"] == "fmp":
+        return drop_partial(client.historical_eod(symbol))
+    return drop_partial(yf_client.historical_index(symbol, period="2y"))
+
+
+def ticker_ohlc_rows(country_cfg, client, ticker, drop_partial, bulk):
+    if country_cfg["price_source"] == "fmp":
+        return drop_partial(client.historical_eod(ticker))
+    return drop_partial(bulk.get(ticker, []))
+
+
+# ---------------------------------------------------------------- per country
+
+def run_country(code, client=None):
+    cfg = config.COUNTRIES[code]
+    today = datetime.now(timezone.utc).date().isoformat()
+
+    skip_today = todays_bar_is_incomplete(cfg)
     if skip_today:
-        log("Skipping the quote snapshot — a live quote mid-session is not a close.")
+        log(f"{code}: session for {today} has not closed yet — today's partial bar "
+            f"will be excluded; the dashboard reports through the last completed session.")
+
+    def drop_partial(rows):
+        return [r for r in rows if r.get("date") != today] if skip_today else rows
+
+    # ---------- Classification (also the universe for India) ----------
+    log(f"{code}: fetching TradingView classification...")
+    industry_df = tv_industry.fetch_industry_classification(cfg)
+    ticker_to_sector, sector_caps = sectors.extract_classification(industry_df)
+    ticker_to_industry, industry_caps = industries.extract_classification(industry_df)
+    log(f"{code}: classified {len(industry_df)} stocks — "
+        f"{industry_df['sector'].nunique()} sectors, {industry_df['industry'].nunique()} industries")
+
+    # The US breadth universe is the S&P 1500 (a defined index membership).
+    # India has no equivalent free constituent list, so the breadth universe is
+    # the same top-1000-by-market-cap set the classification pull returns.
+    if code == "US":
+        uni = universe.build_sp1500()
+        stock_tickers = uni["ticker"].tolist()
+        extra = [t for t in config.WATCHLIST if t not in stock_tickers]
     else:
-        log(f"Fetching today's quotes for {len(all_price_tickers)} tickers...")
-        quotes = client.quote_many(all_price_tickers, on_progress=lambda d, t: log(f"  quoted {d}/{t}"))
-        for q in quotes:
-            if q.get("symbol") and q.get("price") is not None:
-                cache_mod.set_value(price_cache, q["symbol"], today, q["price"])
+        stock_tickers = industry_df["name"].tolist()
+        extra = []
+
+    index_tickers = list(cfg["index_tickers"].values())
+    all_price_tickers = sorted(set(stock_tickers) | set(extra) | set(industry_df["name"]))
+    log(f"{code}: universe {len(stock_tickers)} breadth names, "
+        f"{len(all_price_tickers)} priced names, {len(index_tickers)} indices")
+
+    # ---------- Price cache ----------
+    cache_path = config.price_cache_path(code)
+    price_cache = cache_mod.load(cache_path)
+    bulk = {}
+    if cfg["price_source"] == "fmp":
+        fetch_prices_fmp(client, all_price_tickers + index_tickers, index_tickers,
+                         drop_partial, price_cache)
+        if skip_today:
+            log(f"{code}: skipping the quote snapshot — a live quote mid-session is not a close.")
+        else:
+            log(f"{code}: fetching today's quotes for {len(all_price_tickers) + len(index_tickers)} tickers...")
+            quotes = client.quote_many(all_price_tickers + index_tickers,
+                                       on_progress=lambda d, t: log(f"    quoted {d}/{t}"))
+            for q in quotes:
+                if q.get("symbol") and q.get("price") is not None:
+                    cache_mod.set_value(price_cache, q["symbol"], today, q["price"])
+    else:
+        bulk = yf_client.download_many(
+            all_price_tickers, period="2y",
+            on_progress=lambda done, total: log(f"    {done}/{total}"),
+        )
+        for ticker, rows in bulk.items():
+            for row in drop_partial(rows)[:config.PRICE_WINDOW_DAYS]:
+                cache_mod.set_value(price_cache, ticker, row["date"], row["close"])
+        log(f"{code}: {len(bulk)}/{len(all_price_tickers)} symbols returned usable history")
+        for symbol in index_tickers:
+            for row in drop_partial(yf_client.historical_index(symbol, period="2y"))[:config.PRICE_WINDOW_DAYS]:
+                cache_mod.set_value(price_cache, symbol, row["date"], row["close"])
 
     cache_mod.trim(price_cache, config.PRICE_WINDOW_DAYS)
-    cache_mod.save(price_cache, config.PRICE_CACHE_PATH)
-    log("Price cache updated.")
+    cache_mod.save(price_cache, cache_path)
+    log(f"{code}: price cache updated ({len(price_cache)} symbols)")
 
     n_days = config.CHART_BACKFILL_DAYS
 
     # ---------- Indices ----------
     # Fetched separately from the shared price cache: the cache holds closes
     # only (all the breadth maths needs), but the index panels draw HLC bars,
-    # which needs high/low too. Three extra API calls.
-    log("Backfilling index history (OHLC + EMA10/20/50)...")
-    for key, ticker in country_cfg["index_tickers"].items():
-        eod_rows = drop_partial(client.historical_eod(ticker))
+    # which needs high/low too.
+    log(f"{code}: backfilling index history (OHLC + EMA10/20/50)...")
+    for key, symbol in cfg["index_tickers"].items():
+        eod_rows = index_ohlc_rows(cfg, client, symbol, drop_partial)
         records = indices.backfill_index_history(eod_rows, n_days)
         for record in records:
-            store.write_index(key, record)
-        log(f"  {key}: {len(records)} days written")
+            store.write_index(code, key, record)
+        log(f"  {key}: {len(records)} days")
 
     # ---------- Breadth ----------
-    log("Backfilling breadth internals...")
+    log(f"{code}: backfilling breadth internals...")
     breadth_records = breadth.backfill_breadth_history(price_cache, stock_tickers, n_days)
     for record in breadth_records:
-        store.write_breadth(record)
-    log(f"Breadth: {len(breadth_records)} days written "
-        f"(today: adv={breadth_records[-1]['advancers']} decl={breadth_records[-1]['decliners']} "
-        f"new_hi={breadth_records[-1]['new_highs']} new_lo={breadth_records[-1]['new_lows']})")
+        store.write_breadth(code, record)
+    if breadth_records:
+        last = breadth_records[-1]
+        log(f"  {len(breadth_records)} days (latest: adv={last['advancers']} decl={last['decliners']} "
+            f"new_hi={last['new_highs']} new_lo={last['new_lows']})")
 
-    # ---------- Sector / industry classification (one TradingView pull, shared) ----------
-    log("Fetching TradingView classification (sector + industry tags)...")
-    industry_df = tv_industry.fetch_industry_classification()
-    ticker_to_sector, sector_caps = sectors.extract_classification(industry_df)
-    ticker_to_industry, industry_caps = industries.extract_classification(industry_df)
-    log(f"Classified {len(industry_df)} stocks: "
-        f"{industry_df['sector'].nunique()} sectors, {industry_df['industry'].nunique()} industries")
-
-    store.write_classification({
+    store.write_classification(code, {
         row["name"]: [row["sector"], row["industry"]]
         for _, row in industry_df.iterrows()
         if row.get("sector") and row.get("industry")
     })
 
-    dates = groups_mod.trading_calendar(price_cache, country_cfg["index_tickers"]["sp500"], n_days)
+    dates = groups_mod.trading_calendar(
+        price_cache, cfg["index_tickers"][cfg["calendar_index"]], n_days)
 
-    log("Backfilling sector performance/rank...")
+    log(f"{code}: backfilling sector performance/rank...")
     sector_history = sectors.backfill_sector_history(price_cache, ticker_to_sector, sector_caps, dates)
     for d, records in sector_history.items():
         if records:
-            store.write_sector_ranks(d, records)
-    log(f"Sector ranks: {sum(1 for r in sector_history.values() if r)} days written")
+            store.write_sector_ranks(code, d, records)
+    log(f"  {sum(1 for r in sector_history.values() if r)} days")
 
-    log("Backfilling industry performance/rank...")
+    log(f"{code}: backfilling industry performance/rank...")
     industry_history = industries.backfill_industry_history(price_cache, ticker_to_industry, industry_caps, dates)
     for d, records in industry_history.items():
         if records:
-            store.write_industry_ranks(d, records)
-    log(f"Industry ranks: {sum(1 for r in industry_history.values() if r)} days written")
+            store.write_industry_ranks(code, d, records)
+    log(f"  {sum(1 for r in industry_history.values() if r)} days")
 
     # ---------- Environment read ----------
     # Computed here (not in the browser) so the label exists for every past
     # date too — the replay view and, later, the trade log both need to ask
     # "what was the environment on this date" without recomputing anything.
-    log("Computing environment read...")
+    log(f"{code}: computing environment read...")
+    data_dir = config.data_dir(code)
     env_records = environment.backfill_environment(
-        {key: store.read_jsonl(os.path.join(config.DATA_DIR, f"index_{key}.jsonl"))
-         for key in country_cfg["index_tickers"]},
-        store.read_jsonl(os.path.join(config.DATA_DIR, "sector_ranks.jsonl")),
-        store.read_jsonl(os.path.join(config.DATA_DIR, "industry_ranks.jsonl")),
-        store.read_jsonl(os.path.join(config.DATA_DIR, "breadth_adv_decl.jsonl")),
-        store.read_jsonl(os.path.join(config.DATA_DIR, "breadth_new_hilo.jsonl")),
+        {key: store.read_jsonl(os.path.join(data_dir, f"index_{key}.jsonl"))
+         for key in cfg["index_tickers"]},
+        store.read_jsonl(os.path.join(data_dir, "sector_ranks.jsonl")),
+        store.read_jsonl(os.path.join(data_dir, "industry_ranks.jsonl")),
+        store.read_jsonl(os.path.join(data_dir, "breadth_adv_decl.jsonl")),
+        store.read_jsonl(os.path.join(data_dir, "breadth_new_hilo.jsonl")),
         dates,
+        cfg["largecap_keys"],
     )
     for record in env_records:
-        store.write_environment(record)
-    latest_env = env_records[-1]
-    log(f"Environment: {len(env_records)} days written (latest {latest_env['date']}: "
-        f"{latest_env['overall']}, trend {latest_env['trend']['factors_favourable']}"
-        f"/{latest_env['trend']['factors_total']})")
+        store.write_environment(code, record)
+    if env_records:
+        latest = env_records[-1]
+        log(f"  {len(env_records)} days (latest {latest['date']}: {latest['overall']}, "
+            f"trend {latest['trend']['factors_favourable']}/{latest['trend']['factors_total']})")
 
     # ---------- Per-ticker OHLC for the stock page ----------
     # Every classified name, not a watchlist: the whole point of the stock page
     # is looking up something unfamiliar, which a curated list can never cover.
-    # Names FMP has no history for are skipped rather than failing the run.
     lookup_tickers = sorted(set(industry_df["name"]) | set(stock_tickers))
-    log(f"Fetching OHLC for {len(lookup_tickers)} names (this is the long step)...")
-    written, skipped = [], 0
+    log(f"{code}: writing OHLC for {len(lookup_tickers)} names...")
+    written, skipped = 0, 0
     for i, ticker in enumerate(lookup_tickers):
         try:
-            rows = drop_partial(client.historical_eod(ticker))[:config.TICKER_HISTORY_DAYS]
+            rows = ticker_ohlc_rows(cfg, client, ticker, drop_partial, bulk)[:config.TICKER_HISTORY_DAYS]
         except Exception:
             skipped += 1
             continue
-        name = store.write_ticker_ohlc(ticker, rows)
-        if name:
-            written.append(name)
+        if store.write_ticker_ohlc(code, ticker, rows):
+            written += 1
         else:
             skipped += 1
         if (i + 1) % 250 == 0:
-            log(f"  {i + 1}/{len(lookup_tickers)} fetched")
-    store.write_benchmarks(price_cache, country_cfg["index_tickers"])
-    log(f"Wrote {len(written)} per-ticker OHLC files ({skipped} had no usable history)")
+            log(f"    {i + 1}/{len(lookup_tickers)}")
+    store.write_benchmarks(code, price_cache, cfg["index_tickers"])
+    log(f"{code}: wrote {written} per-ticker files ({skipped} had no usable history)")
 
     # ---------- Render ----------
-    log("Rendering combined dashboard...")
-    out_path = render.render_dashboard()
-    log("Rendering individual panel pages...")
-    panel_paths = render.render_all_panels()
-    log(f"Done. Dashboard written to {out_path}, plus {len(panel_paths)} individual panel pages")
+    dashboard, panels = render.render_country(code)
+    log(f"{code}: rendered {dashboard} + {len(panels)} panel pages")
+
+
+def main():
+    only = sys.argv[1].upper() if len(sys.argv) > 1 else None
+    codes = [only] if only else list(config.COUNTRIES)
+
+    client = None
+    if any(config.COUNTRIES[c]["price_source"] == "fmp" for c in codes):
+        api_key = os.environ.get("FMP_API_KEY")
+        if not api_key:
+            log("FMP_API_KEY is not set.")
+            sys.exit(1)
+        client = FMPClient(api_key)
+
+    failures = []
+    for code in codes:
+        started = time.time()
+        try:
+            run_country(code, client)
+            log(f"{code}: done in {time.time() - started:.0f}s")
+        except Exception:
+            # One market failing must not take the other down with it.
+            failures.append(code)
+            log(f"{code}: FAILED after {time.time() - started:.0f}s")
+            traceback.print_exc()
+
+    if failures:
+        log(f"Completed with failures: {', '.join(failures)}")
+        sys.exit(1)
+    log("All countries complete.")
 
 
 if __name__ == "__main__":

@@ -1,11 +1,22 @@
 """
 config.py — single source of truth for paths, thresholds, and per-country setup.
 
-Only "US" is populated today. Adding a second country (e.g. India: Nifty 50 /
-Midcap / Smallcap) later means adding an entry to COUNTRIES with its own index
-tickers/universe source, plus an NSE equivalent for the FMP-specific calls in
-metrics/* — no changes to cache.py, store.py, or render.py's storage/rendering
-logic, which are all country-agnostic.
+Two countries are wired up: US (prices from FMP) and India (prices from Yahoo
+via yfinance). Everything downstream of the price fetch — cache.py, store.py,
+metrics/*, render.py — is country-agnostic and works off the COUNTRIES entry it
+is handed, so adding a third market means adding a dict entry and a price
+source, not touching the metrics or rendering logic.
+
+Path layout, and why it is asymmetric:
+
+    data/us/*.jsonl        docs/panel-*.html      docs/tickers/
+    data/in/*.jsonl        docs/in/panel-*.html   docs/in/tickers/
+
+Data directories are symmetric. The published docs paths are NOT: the US pages
+stay at the root because those URLs are already embedded in Notion, and moving
+them to docs/us/ would silently break every existing embed. India is nested
+under docs/in/ instead. `docs_subdir` carries that difference so no other
+module has to know about it.
 """
 
 import os
@@ -13,10 +24,7 @@ import os
 SRC_DIR = os.path.dirname(os.path.abspath(__file__))
 ROOT_DIR = os.path.dirname(SRC_DIR)
 DATA_DIR = os.path.join(ROOT_DIR, "data")
-CACHE_DIR = os.path.join(DATA_DIR, "_cache")
 DOCS_DIR = os.path.join(ROOT_DIR, "docs")
-
-PRICE_CACHE_PATH = os.path.join(CACHE_DIR, "price_window.json")
 
 # Rolling internal calc-buffer window (NOT chart history — see cache.py docstring).
 # Sized as CHART_BACKFILL_DAYS + NEW_HIGH_LOW_WINDOW so that even the OLDEST day
@@ -35,9 +43,12 @@ GROUP_CHG_WINDOWS = {"chg_1d": 1, "chg_5d": 5, "chg_20d": 20}
 MIN_GROUP_MEMBERS = 5  # drop sectors/industries too small to be a meaningful bucket
 
 # Environment thresholds (metrics/environment.py).
-# Trend: of the 9 index-vs-EMA factors, how many must be favourable.
-TREND_BULL_MIN = 7
-TREND_BEAR_MAX = 2
+# Trend: of the index-vs-EMA factors, how many must be favourable. Expressed as
+# a FRACTION of the total rather than a raw count, because the number of
+# factors depends on how many indices a country tracks (3 US indices x 3 EMAs =
+# 9 factors; 4 Indian indices x 3 = 12).
+TREND_BULL_FRACTION = 7 / 9
+TREND_BEAR_FRACTION = 2 / 9
 # Participation: % of sectors/industries with a positive 20-day return.
 PARTICIPATION_BULL_MIN = 65
 PARTICIPATION_BEAR_MAX = 35
@@ -51,11 +62,10 @@ INTERNALS_LOOKBACK_DAYS = 10
 TOP_MOVERS_COUNT = 3
 MOVER_WINDOWS = {"1w": "chg_5d", "1m": "chg_20d"}
 
-# Names to track for the stock-context page beyond the S&P 1500 breadth
-# universe. Neil trades plenty of names that aren't index members (CRDO, ALAB,
-# AXTI, AAOI and friends), and those would otherwise have no price history to
-# chart. Seeded from the prior TMLE project's universe plus names discussed
-# since; edit freely, each addition is one extra API call a day.
+# Names to track for the stock-context page beyond the index breadth universe.
+# Neil trades plenty of names that aren't index members (CRDO, ALAB, AXTI, AAOI
+# and friends). Largely superseded now that every classified ticker gets a
+# price file, but kept so these are guaranteed present in the price cache.
 WATCHLIST = [
     "AAOI", "AEIS", "ALAB", "ALKS", "APLS", "ARM", "ARWR", "AXTI", "BE", "BEAM",
     "CDE", "COHR", "CRDO", "CRH", "CW", "DOCN", "DRAM", "FLEX", "FN", "FTI",
@@ -68,21 +78,106 @@ WATCHLIST = [
 # name TradingView classifies, so any traded ticker can be looked up rather
 # than only a curated list. These are regenerated in full on every run and
 # published to the gh-pages branch, which is replaced wholesale each time;
-# committing ~3,300 daily-rewritten files into main would grow the repo by
-# tens of megabytes a day and never release it.
+# committing thousands of daily-rewritten files into main would grow the repo
+# by tens of megabytes a day and never release it.
 TICKER_DIR_NAME = "tickers"
 TICKER_HISTORY_DAYS = 252
 
 COUNTRIES = {
     "US": {
         "label": "United States",
+        "short": "US",
+        "data_subdir": "us",
+        "docs_subdir": "",          # root — protects the live Notion embed URLs
+        "price_source": "fmp",
+        "tv_market": "america",
         "exchanges": ["NASDAQ", "NYSE", "AMEX"],
+        "min_market_cap": 300e6,
+        "universe_limit": 5000,
         "index_tickers": {
             "nasdaq": "^IXIC",
             "sp500": "^GSPC",
             "russell2000": "^RUT",
         },
+        "index_labels": {
+            "nasdaq": "NASDAQ Composite",
+            "sp500": "S&P 500",
+            "russell2000": "Russell 2000",
+        },
+        # The index whose trading days define the calendar every other series
+        # is aligned to.
+        "calendar_index": "sp500",
+        # The broad/large-cap indices, used for the "large caps only" read in
+        # the environment summary (i.e. the same call with small caps excluded).
+        "largecap_keys": ["nasdaq", "sp500"],
+        # US cash session closes at 20:00 UTC under EDT and 21:00 UTC under EST.
+        # Before this cutoff, today's daily bar is still forming and both FMP's
+        # historical endpoint and its live quote hand back an in-progress value
+        # that looks exactly like a finished session.
+        "session_final_after_utc": (21, 30),
+    },
+    "IN": {
+        "label": "India",
+        "short": "IN",
+        "data_subdir": "in",
+        "docs_subdir": "in",
+        "price_source": "yahoo",
+        "tv_market": "india",
+        "exchanges": ["NSE"],
+        # India is capped by COUNT rather than by market cap: below the top 1000
+        # (~Rs 3,200 crore) the tail thins into names that barely trade, and
+        # illiquid constituents distort breadth counts far more than they add
+        # coverage. 2,934 NSE names carry a market cap; we take the largest 1000.
+        "min_market_cap": 0,
+        "universe_limit": 1000,
+        "index_tickers": {
+            "sensex": "^BSESN",
+            "nifty500": "^CRSLDX",
+            "niftymidcap150": "NIFTYMIDCAP150.NS",
+            "niftysmallcap250": "NIFTYSMLCAP250.NS",
+        },
+        "index_labels": {
+            "sensex": "BSE Sensex",
+            "nifty500": "Nifty 500",
+            "niftymidcap150": "Nifty Midcap 150",
+            "niftysmallcap250": "Nifty Smallcap 250",
+        },
+        "calendar_index": "nifty500",
+        "largecap_keys": ["sensex", "nifty500"],
+        # NSE/BSE close at 15:30 IST = 10:00 UTC year-round (India observes no
+        # daylight saving), so a 10:30 UTC cutoff clears the bell with margin.
+        "session_final_after_utc": (10, 30),
     },
 }
 
 DEFAULT_COUNTRY = "US"
+
+
+def data_dir(country):
+    return os.path.join(DATA_DIR, COUNTRIES[country]["data_subdir"])
+
+
+def cache_dir(country):
+    return os.path.join(data_dir(country), "_cache")
+
+
+def price_cache_path(country):
+    return os.path.join(cache_dir(country), "price_window.json")
+
+
+def docs_dir(country):
+    sub = COUNTRIES[country]["docs_subdir"]
+    return os.path.join(DOCS_DIR, sub) if sub else DOCS_DIR
+
+
+def ticker_dir(country):
+    return os.path.join(docs_dir(country), TICKER_DIR_NAME)
+
+
+def trend_thresholds(n_factors):
+    """Bull/bear factor counts scaled to however many index-vs-EMA factors this
+    country actually has, so a 4-index market isn't held to a 3-index bar."""
+    return (
+        int(round(TREND_BULL_FRACTION * n_factors)),
+        int(round(TREND_BEAR_FRACTION * n_factors)),
+    )

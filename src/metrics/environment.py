@@ -30,14 +30,13 @@ import os
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from config import (
-    TREND_BULL_MIN, TREND_BEAR_MAX,
+    trend_thresholds,
     PARTICIPATION_BULL_MIN, PARTICIPATION_BEAR_MAX,
     INTERNALS_LOOKBACK_DAYS,
     TOP_MOVERS_COUNT, MOVER_WINDOWS,
 )
 
 EMA_KEYS = ["above_ema10", "above_ema20", "above_ema50"]
-LARGE_CAP_KEYS = ["nasdaq", "sp500"]
 
 
 def _label(value, bull_min, bear_max):
@@ -59,9 +58,13 @@ def _row_for_date(rows, date_str):
     return match
 
 
-def compute_trend(index_series, date_str):
-    """index_series: {"nasdaq": [rows], "sp500": [rows], "russell2000": [rows]}.
-    Counts how many of the 9 close-vs-EMA comparisons are favourable."""
+def compute_trend(index_series, date_str, large_cap_keys=()):
+    """index_series: {index_key: [rows]} for whichever indices this country
+    tracks. Counts how many of the close-vs-EMA comparisons are favourable —
+    9 for a 3-index market like the US, 12 for India's 4.
+
+    `large_cap_keys` names the broad/large-cap indices, so the summary can also
+    report the read with the small-cap index excluded."""
     per_index = {}
     favourable = 0
     total = 0
@@ -81,7 +84,7 @@ def compute_trend(index_series, date_str):
         }
         favourable += hits
         total += len(EMA_KEYS)
-        if key in LARGE_CAP_KEYS:
+        if key in large_cap_keys:
             large_favourable += hits
             large_total += len(EMA_KEYS)
 
@@ -91,7 +94,7 @@ def compute_trend(index_series, date_str):
     return {
         "factors_favourable": favourable,
         "factors_total": total,
-        "label": _label(favourable, TREND_BULL_MIN, TREND_BEAR_MAX),
+        "label": _label(favourable, *trend_thresholds(total)),
         "large_cap_favourable": large_favourable,
         "large_cap_total": large_total,
         "per_index": per_index,
@@ -215,8 +218,8 @@ def _overall(labels):
 
 
 def compute_environment(index_series, sector_rows, industry_rows,
-                        adv_decl_rows, new_hilo_rows, date_str):
-    trend = compute_trend(index_series, date_str)
+                        adv_decl_rows, new_hilo_rows, date_str, large_cap_keys=()):
+    trend = compute_trend(index_series, date_str, large_cap_keys)
     participation = compute_participation(sector_rows, industry_rows, date_str)
     internals = compute_internals(adv_decl_rows, new_hilo_rows, date_str)
     leaders = compute_leaders(sector_rows, industry_rows, date_str)
@@ -238,9 +241,9 @@ def compute_environment(index_series, sector_rows, industry_rows,
 
 
 def backfill_environment(index_series, sector_rows, industry_rows,
-                         adv_decl_rows, new_hilo_rows, dates):
+                         adv_decl_rows, new_hilo_rows, dates, large_cap_keys=()):
     return [
         compute_environment(index_series, sector_rows, industry_rows,
-                            adv_decl_rows, new_hilo_rows, d)
+                            adv_decl_rows, new_hilo_rows, d, large_cap_keys)
         for d in dates
     ]
