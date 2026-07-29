@@ -53,7 +53,7 @@ def write_industry_ranks(country, date_str, industry_records):
                  {"date": date_str, "industries": industry_records})
 
 
-def write_ticker_ohlc(country, ticker, eod_rows):
+def write_ticker_ohlc(country, ticker, eod_rows, rs_by_date=None):
     """One small JSON per name under docs/, fetched on demand by the stock page.
     Carries full OHLC rather than the close-only series the shared price cache
     holds, because the stock chart draws HLC bars."""
@@ -71,7 +71,15 @@ def write_ticker_ohlc(country, ticker, eod_rows):
         "high": [round(r.get("high") or r["close"], 4) for r in rows],
         "low": [round(r.get("low") or r["close"], 4) for r in rows],
         "close": [round(r["close"], 4) for r in rows],
+        # Volume was being dropped even though every price source returns it.
+        # TMLE's volume-behaviour factor needs it, and it costs nothing to keep.
+        "volume": [int(r["volume"]) if r.get("volume") else None for r in rows],
     }
+    # RS rating per session, so the stock page can show the number for whatever
+    # PAST date is selected rather than only for today — the whole point is
+    # logging what the setup looked like on the day it triggered.
+    if rs_by_date:
+        payload["rs"] = [rs_by_date.get(r["date"]) for r in rows]
     # "/" would create a subdirectory; "&" is legal on disk and in a URL path
     # but several Indian symbols carry it (M&M, J&KBANK), so it is percent-safe
     # only because the page encodes the ticker before fetching.

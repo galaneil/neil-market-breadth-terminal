@@ -36,7 +36,9 @@ import render
 import tv_industry
 import yf_client
 from fmp_client import FMPClient
-from metrics import indices, sectors, industries, breadth, environment, groups as groups_mod
+from metrics import (indices, sectors, industries, breadth, environment,
+                     groups as groups_mod, relative_strength as rs_mod)
+from tmle import config as tmle_config, run as tmle_run
 
 
 def log(msg):
@@ -67,12 +69,24 @@ def fetch_prices_fmp(client, tickers, index_tickers, drop_partial, price_cache):
     missing = [t for t in tickers if t not in price_cache]
     if missing:
         log(f"  backfilling {len(missing)} new tickers (up to {config.PRICE_WINDOW_DAYS} days each)...")
+        failed = []
         for i, ticker in enumerate(missing):
-            hist = drop_partial(client.historical_eod(ticker))[:config.PRICE_WINDOW_DAYS]
+            # One unfetchable symbol must never take the run down. Share-class
+            # tickers like AGM.A return 402 on this plan, and a single one of
+            # them was enough to abort the entire daily refresh before it wrote
+            # anything at all.
+            try:
+                hist = drop_partial(client.historical_eod(ticker))[:config.PRICE_WINDOW_DAYS]
+            except Exception:
+                failed.append(ticker)
+                continue
             for row in hist:
                 cache_mod.set_value(price_cache, ticker, row["date"], row["close"])
             if (i + 1) % 100 == 0:
                 log(f"    {i + 1}/{len(missing)}")
+        if failed:
+            preview = ", ".join(failed[:8]) + (" ..." if len(failed) > 8 else "")
+            log(f"  {len(failed)} symbols had no fetchable history and were skipped: {preview}")
     return price_cache
 
 
@@ -167,7 +181,11 @@ def run_country(code, client=None):
     # which needs high/low too.
     log(f"{code}: backfilling index history (OHLC + EMA10/20/50)...")
     for key, symbol in cfg["index_tickers"].items():
-        eod_rows = index_ohlc_rows(cfg, client, symbol, drop_partial)
+        try:
+            eod_rows = index_ohlc_rows(cfg, client, symbol, drop_partial)
+        except Exception:
+            log(f"  {key}: fetch failed, leaving the stored history untouched")
+            continue
         records = indices.backfill_index_history(eod_rows, n_days)
         for record in records:
             store.write_index(code, key, record)
@@ -232,16 +250,31 @@ def run_country(code, client=None):
     # ---------- Per-ticker OHLC for the stock page ----------
     # Every classified name, not a watchlist: the whole point of the stock page
     # is looking up something unfamiliar, which a curated list can never cover.
+    # Cross-sectional RS ratings, computed once for the whole universe: a
+    # percentile only means something relative to everyone else that day, so it
+    # cannot be produced per ticker inside the loop below.
+    log(f"{code}: computing relative strength ratings...")
+    rs_ratings = rs_mod.compute_ratings(price_cache)
+    log(f"{code}: rated {len(rs_ratings)} names")
+
     lookup_tickers = sorted(set(industry_df["name"]) | set(stock_tickers))
     log(f"{code}: writing OHLC for {len(lookup_tickers)} names...")
     written, skipped = 0, 0
+    # TMLE needs a deeper window than the stock page draws (a trailing-year
+    # factor measured across a year of checkpoints needs two years behind it),
+    # so the untruncated rows are kept as they go past rather than re-fetched.
+    tmle_prices = {}
+    want_tmle = cfg.get("run_tmle")
     for i, ticker in enumerate(lookup_tickers):
         try:
-            rows = ticker_ohlc_rows(cfg, client, ticker, drop_partial, bulk)[:config.TICKER_HISTORY_DAYS]
+            all_rows = ticker_ohlc_rows(cfg, client, ticker, drop_partial, bulk)
         except Exception:
             skipped += 1
             continue
-        if store.write_ticker_ohlc(code, ticker, rows):
+        if want_tmle and all_rows:
+            tmle_prices[ticker] = all_rows
+        if store.write_ticker_ohlc(code, ticker, all_rows[:config.TICKER_HISTORY_DAYS],
+                                   rs_ratings.get(ticker)):
             written += 1
         else:
             skipped += 1
@@ -249,6 +282,23 @@ def run_country(code, client=None):
             log(f"    {i + 1}/{len(lookup_tickers)}")
     store.write_benchmarks(code, price_cache, cfg["index_tickers"])
     log(f"{code}: wrote {written} per-ticker files ({skipped} had no usable history)")
+
+    # ---------- TMLE ----------
+    if want_tmle and tmle_prices:
+        log(f"{code}: running TMLE over {len(tmle_prices)} names...")
+        try:
+            bench_rows = drop_partial(client.historical_eod(tmle_config.PRIMARY_BENCHMARK))
+            caps = {row["name"]: row.get("market_cap_basic") or 0
+                    for _, row in industry_df.iterrows()}
+            leaders = tmle_run.run(code, tmle_prices, bench_rows, dates, caps, log=log)
+            if leaders:
+                top = ", ".join(f"{r['ticker']} {r['composite']}" for r in leaders[:5])
+                log(f"{code}: TMLE top 5 — {top}")
+        except Exception:
+            # A scoring failure must not cost the breadth refresh, which is the
+            # part that has to be right every day.
+            log(f"{code}: TMLE FAILED (breadth data is unaffected)")
+            traceback.print_exc()
 
     # ---------- Render ----------
     dashboard, panels = render.render_country(code)

@@ -988,6 +988,28 @@
       return out;
     }
 
+
+    // The one number worth logging in a setups database. Everything else on
+    // this page is a pair of returns that only means something next to its own
+    // history; this is a percentile against the whole market that day, so 92
+    // means the same thing on every ticker and on every date. It is read at
+    // the SELECTED date, not today — the point is recording what the setup
+    // looked like on the day it triggered.
+    function rsRatingBlock(d, end) {
+      const rs = (d.rs || [])[end];
+      if (rs === null || rs === undefined) return "";
+      const band = rs >= 90 ? "rs-elite" : (rs >= 70 ? "rs-strong"
+                 : (rs >= 40 ? "rs-mid" : "rs-weak"));
+      const words = rs >= 90 ? "stronger than " + rs + "% of the market"
+                  : (rs >= 70 ? "outperforming most of the market"
+                  : (rs >= 40 ? "middle of the pack" : "lagging the market"));
+      return '<div class="rs-rating ' + band + '">' +
+        '<div class="rs-rating-num">' + rs + "</div>" +
+        "<div><div class='rs-rating-label'>RS Rating</div>" +
+        '<div class="rs-rating-sub">' + words + " &middot; on " + d.dates[end] + "</div></div>" +
+      "</div>";
+    }
+
     function draw() {
       if (!current) return;
       const d = current.data, sym = current.symbol;
@@ -1057,6 +1079,7 @@
             '<div class="stock-price"><div class="card-value">' + fmtNum(d.close[end], 2) + "</div>" +
               '<div class="card-sub">close on ' + d.dates[end] + "</div></div>" +
           "</div>" +
+          rsRatingBlock(d, end) +
           '<div class="tf-toggle stock-tf">' +
             RANGES.map(function (r) {
               // A range longer than the stored history would just render the
@@ -1277,10 +1300,338 @@
     }
   }
 
+  // ---------- TMLE: the leader engine ----------
+  // Score and stage are shown together everywhere and never merged. The score
+  // says how strong the advance has been; the stage says whether it is still
+  // intact. A broken ex-leader keeps a high score — that history is real — and
+  // is simply marked not actionable rather than quietly demoted, which would
+  // hide both facts at once.
+  const STAGE_CLASS = { 1: "stage-1", 2: "stage-2", 3: "stage-3", 4: "stage-4" };
+  const STAGE_NAME = { 1: "Basing", 2: "Advancing", 3: "Topping", 4: "Declining" };
+
+  function stageBadge(stage, actionable) {
+    const cls = STAGE_CLASS[stage] || "";
+    const name = STAGE_NAME[stage] || "—";
+    const flag = actionable ? "" : ' <span class="nogo">no-go</span>';
+    return '<span class="stage-badge ' + cls + '">' + name + "</span>" + flag;
+  }
+
+  // Company logo, same source the stock page uses. Hidden on failure rather
+  // than leaving a broken-image box in the middle of a table row.
+  function logoImg(ticker, cls) {
+    return '<img class="' + (cls || "row-logo") + '" alt="" loading="lazy" ' +
+      'src="https://images.financialmodelingprep.com/symbol/' + encodeURIComponent(ticker) + '.png" ' +
+      "onerror=\"this.style.visibility='hidden'\">";
+  }
+
+  // A score of 66 means nothing on its own. Bands give it a shape, matching
+  // the colour language the rest of the terminal already uses.
+  function scoreClass(v) {
+    if (v === null || v === undefined || isNaN(v)) return "";
+    if (v >= 65) return "score-strong";
+    if (v >= 55) return "score-good";
+    if (v >= 45) return "score-fair";
+    return "score-weak";
+  }
+
+  // The one-line read. This is the difference between a table of numbers and
+  // something that tells you what it thinks — the same job the environment
+  // panel's headline does for breadth.
+  function leaderVerdict(r) {
+    const dd = r.drawdown, days = r.episode_days, weeks = days ? Math.round(days / 5) : null;
+    const bits = [];
+    if (r.stage === 2 && r.actionable) {
+      bits.push("Advancing");
+    } else if (r.stage === 2) {
+      bits.push("Was advancing, now damaged");
+    } else if (r.stage === 4) {
+      bits.push("In decline");
+    } else if (r.stage === 3) {
+      bits.push("Topping");
+    } else {
+      bits.push("Basing");
+    }
+    if (weeks) bits.push(weeks + (weeks === 1 ? " week" : " weeks") + " into the move");
+    if (r.gain !== null && r.gain !== undefined) bits.push("up " + Math.round(r.gain) + "% from its low");
+    if (dd !== null && dd !== undefined) {
+      bits.push(dd <= -1 ? Math.abs(Math.round(dd)) + "% off its high" : "at its high");
+    }
+    if (r.pct_below_10w === 0) bits.push("never lost the 10-week");
+    else if (r.pct_below_10w !== undefined && r.pct_below_10w !== null) {
+      bits.push("below the 10-week " + Math.round(r.pct_below_10w) + "% of the move");
+    }
+    return bits.join(" &middot; ");
+  }
+
+  // Clicking a row anywhere sends that ticker to every other panel on the
+  // page — leaderboard to score card, and on to the stock and replay pages.
+  function makeRowsClickable(table) {
+    table.addEventListener("click", function (e) {
+      const tr = e.target.closest("tr");
+      if (!tr || !tr.dataset.ticker) return;
+      table.querySelectorAll("tr.selected").forEach(function (x) { x.classList.remove("selected"); });
+      tr.classList.add("selected");
+      Sync.publish({ ticker: tr.dataset.ticker });
+    });
+  }
+
+  function sortRows(rows, key, dir) {
+    return rows.slice().sort(function (a, b) {
+      let x = a[key], y = b[key];
+      if (x === null || x === undefined) return 1;
+      if (y === null || y === undefined) return -1;
+      if (typeof x === "string") return dir * x.localeCompare(y);
+      return dir * (x - y);
+    });
+  }
+
+  function attachSorting(table, rows, draw, initialKey, initialDir) {
+    let key = initialKey, dir = initialDir;
+    table.querySelectorAll("th[data-sort]").forEach(function (th) {
+      th.addEventListener("click", function () {
+        const next = th.dataset.sort;
+        dir = (next === key) ? -dir : (next === "ticker" ? 1 : -1);
+        key = next;
+        draw(sortRows(rows, key, dir));
+      });
+    });
+    draw(sortRows(rows, key, dir));
+  }
+
+  function renderTmleLeaders() {
+    const table = document.getElementById("tmle-leaders-table");
+    if (!table) return;
+    const all = DATA.leaders || [];
+    const body = table.querySelector("tbody");
+    let filter = "actionable";
+
+    function visible() {
+      return filter === "all" ? all : all.filter(function (r) { return r.actionable; });
+    }
+    function draw(rows) {
+      if (!rows.length) {
+        body.innerHTML = '<tr><td colspan="11" class="empty-note">Nothing qualifies right now — no name is advancing within ' +
+          Math.abs(DATA.maxDrawdown || 25) + '% of its high.</td></tr>';
+        return;
+      }
+      body.innerHTML = rows.map(function (r) {
+        return '<tr data-ticker="' + r.ticker + '" title="' + leaderVerdict(r).replace(/&middot;/g, "-") + '">' +
+          "<td>" + (r.rank === null || r.rank === undefined ? "—" : r.rank) + "</td>" +
+          '<td class="name-cell">' + logoImg(r.ticker) +
+            "<span><b>" + r.ticker + "</b>" +
+            (r.industry ? '<span class="row-sub">' + r.industry + "</span>" : "") +
+            "</span></td>" +
+          '<td class="score-cell ' + scoreClass(r.composite) + '">' + fmtNum(r.composite, 1) + "</td>" +
+          "<td>" + fmtNum(r.F1, 0) + "</td><td>" + fmtNum(r.F4, 0) + "</td>" +
+          "<td>" + fmtNum(r.F4B, 0) + "</td><td>" + fmtNum(r.F5, 0) + "</td>" +
+          '<td class="pct up">' + (r.gain === null ? "—" : "+" + fmtNum(r.gain, 0) + "%") + "</td>" +
+          '<td class="pct ' + pctClass(r.drawdown) + '">' + (r.drawdown === null ? "—" : fmtNum(r.drawdown, 0) + "%") + "</td>" +
+          "<td>" + (r.episode_days || "—") + "</td>" +
+          "<td>" + stageBadge(r.stage, r.actionable) + "</td>" +
+        "</tr>";
+      }).join("");
+    }
+
+    // Ascending on rank, so #1 is at the top; unranked (non-actionable) names
+    // sort last because sortRows pushes nulls to the end either way.
+    let rows = visible();
+    attachSorting(table, rows, draw, "rank", 1);
+    makeRowsClickable(table);
+
+    const filterBox = document.getElementById("tmle-filter");
+    if (filterBox) {
+      filterBox.querySelectorAll("button").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          filterBox.querySelectorAll("button").forEach(function (b) { b.classList.remove("active"); });
+          btn.classList.add("active");
+          filter = btn.dataset.filter;
+          rows = visible();
+          draw(sortRows(rows, filter === "all" ? "composite" : "rank", filter === "all" ? -1 : 1));
+        });
+      });
+    }
+  }
+
+  function renderTmleEmerging() {
+    const table = document.getElementById("tmle-emerging-table");
+    if (!table) return;
+    const rows = DATA.emerging || [];
+    const body = table.querySelector("tbody");
+
+    function delta(v) {
+      if (v === null || v === undefined) return '<span class="rs-new">new</span>';
+      const cls = v > 0 ? "up" : (v < 0 ? "down" : "");
+      return '<span class="' + cls + '">' + (v >= 0 ? "+" : "") + v.toFixed(1) + "</span>";
+    }
+    function draw(sorted) {
+      if (!sorted.length) {
+        body.innerHTML = '<tr><td colspan="7" class="empty-note">No actionable names yet.</td></tr>';
+        return;
+      }
+      body.innerHTML = sorted.map(function (r) {
+        return '<tr data-ticker="' + r.ticker + '" title="' + leaderVerdict(r).replace(/&middot;/g, "-") + '">' +
+          '<td class="name-cell">' + logoImg(r.ticker) +
+            "<span><b>" + r.ticker + "</b>" +
+            (r.industry ? '<span class="row-sub">' + r.industry + "</span>" : "") +
+            "</span></td>" +
+          '<td class="score-cell ' + scoreClass(r.composite) + '">' + fmtNum(r.composite, 1) + "</td>" +
+          "<td>" + delta(r.d4) + "</td><td>" + delta(r.d12) + "</td>" +
+          '<td class="pct up">' + (r.gain === null ? "—" : "+" + fmtNum(r.gain, 0) + "%") + "</td>" +
+          '<td class="pct ' + pctClass(r.drawdown) + '">' + (r.drawdown === null ? "—" : fmtNum(r.drawdown, 0) + "%") + "</td>" +
+          "<td>" + (r.episode_days || "—") + "</td>" +
+        "</tr>";
+      }).join("");
+    }
+    attachSorting(table, rows, draw, "d4", -1);
+    makeRowsClickable(table);
+  }
+
+  function renderTmleStock() {
+    const host = document.getElementById("tmle-stock-panel");
+    if (!host) return;
+    const input = document.getElementById("tmle-ticker");
+    const statusEl = document.getElementById("tmle-status");
+    const body = document.getElementById("tmle-stock-body");
+    const dir = DATA.tmleDir || "tmle";
+    let chart = null;
+
+    const scored = (DATA.scored || []).slice().sort();
+    const list = document.getElementById("tmle-tickers");
+    if (list && scored.length) {
+      list.innerHTML = scored.map(function (t) { return '<option value="' + t + '">'; }).join("");
+      input.placeholder = "Search " + scored.length.toLocaleString() + " scored names";
+    }
+
+    function factorBar(key, value) {
+      const meta = (DATA.factorMeta || {})[key] || {};
+      const pct = value === null || value === undefined ? 0 : Math.max(0, Math.min(100, value));
+      return '<div class="factor-line">' +
+        '<div class="factor-head"><span class="factor-key">' + key + "</span>" +
+          "<span>" + (meta.label || key) + "</span>" +
+          '<span class="factor-val">' + (value === null ? "—" : fmtNum(value, 0)) + "</span></div>" +
+        '<div class="factor-track"><div class="factor-fill" style="width:' + pct + '%"></div></div>' +
+        '<div class="factor-blurb">' + (meta.blurb || "") + "</div>" +
+      "</div>";
+    }
+
+    function draw(data) {
+      const n = data.dates.length - 1;
+      const stage = data.stage[n];
+      const score = data.composite[n];
+      const dd = data.drawdown[n];
+      const actionable = stage === 2 && dd !== null && dd >= (DATA.maxDrawdown || -25);
+
+      const cls = (DATA.classification || {})[data.ticker];
+      const verdict = leaderVerdict({
+        stage: stage, actionable: actionable, drawdown: dd,
+        gain: (data.gain || [])[n],
+        episode_days: (data.episode_days || [])[n],
+        pct_below_10w: (data.pct_below_10w || [])[n],
+      });
+
+      body.innerHTML =
+        '<div class="card">' +
+          '<div class="tmle-head">' +
+            logoImg(data.ticker, "stock-logo") +
+            "<div>" +
+              '<div class="stock-sym">' + data.ticker + "</div>" +
+              '<div class="card-sub">' + (cls ? cls[1] + " &middot; " + cls[0] + "<br>" : "") +
+                stageBadge(stage, actionable) + "</div>" +
+            "</div>" +
+            '<div class="tmle-score"><div class="card-value ' + scoreClass(score) + '">' + fmtNum(score, 1) + "</div>" +
+              '<div class="card-sub">leader score &middot; ' + data.dates[n] + "</div></div>" +
+          "</div>" +
+          '<div class="tmle-verdict ' + (actionable ? "ok" : "nope") + '">' + verdict + "</div>" +
+          '<div class="env-block-sub">' +
+            (actionable
+              ? "Advancing and within " + Math.abs(DATA.maxDrawdown || 25) + "% of its high — the engine will let you buy this."
+              : "Not actionable: " + (stage !== 2 ? "not in a confirmed advance." :
+                 "more than " + Math.abs(DATA.maxDrawdown || 25) + "% off its high (" + fmtNum(dd, 0) + "%).")) +
+          "</div>" +
+          '<div class="factor-list">' +
+            Object.keys(DATA.factorMeta || {}).map(function (key) {
+              const arr = (data.factors || {})[key] || [];
+              return factorBar(key, arr[n]);
+            }).join("") +
+          "</div>" +
+          '<div class="env-chart-title">Score over time</div>' +
+          '<div class="env-block-sub">the level matters less than the slope &middot; a score climbing week after week is leadership forming</div>' +
+          '<div class="chart-wrap"><canvas id="tmle-canvas"></canvas></div>' +
+        "</div>";
+
+      const th = themeColors();
+      if (chart) chart.destroy();
+      chart = new Chart(document.getElementById("tmle-canvas"), {
+        type: "line",
+        data: {
+          labels: data.dates,
+          datasets: [{
+            data: data.composite,
+            borderColor: th.accent,
+            backgroundColor: "rgba(41,98,255,0.10)",
+            fill: true, tension: 0.25, borderWidth: 2,
+            pointRadius: dotRadius(data.dates.length),
+            // Colour each point by the stage it was in, so the chart shows not
+            // just how the score moved but when the move stopped being safe.
+            pointBackgroundColor: data.stage.map(function (s) {
+              return s === 2 ? th.up : (s === 4 ? th.down : th.text);
+            }),
+          }],
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { grid: { color: th.grid }, ticks: { color: th.text, maxTicksLimit: 8 } },
+            y: { grid: { color: th.grid }, ticks: { color: th.text }, suggestedMin: 0, suggestedMax: 100 },
+          },
+        },
+      });
+    }
+
+    function load(sym) {
+      sym = (sym || "").trim().toUpperCase();
+      if (!sym) return;
+      statusEl.className = "replay-miss";
+      statusEl.textContent = "loading…";
+      fetch(dir + "/" + encodeURIComponent(sym) + ".json")
+        .then(function (r) { if (!r.ok) throw new Error("404"); return r.json(); })
+        .then(function (data) {
+          statusEl.textContent = "";
+          draw(data);
+        })
+        .catch(function () {
+          statusEl.className = "replay-miss";
+          statusEl.textContent = sym + " has no leader score — it has not reached the scored set.";
+          body.innerHTML = "";
+        });
+    }
+
+    input.addEventListener("change", function () {
+      load(input.value);
+      Sync.publish({ ticker: input.value.trim().toUpperCase() });
+    });
+    Sync.subscribe(function (ctx) {
+      const want = typeof ctx.ticker === "string" ? ctx.ticker.trim().toUpperCase() : null;
+      if (want && scored.indexOf(want) !== -1 && want !== input.value.trim().toUpperCase()) {
+        input.value = want;
+        load(want);
+      }
+    });
+
+    const shared = Sync.read();
+    const initial = (shared.ticker && scored.indexOf(shared.ticker) !== -1)
+      ? shared.ticker : (scored.length ? scored[0] : null);
+    if (initial) { input.value = initial; load(initial); }
+  }
+
   // ---------- Wire everything up ----------
   renderEnvironmentPanel();
   renderReplayPanel();
   renderStockPanel();
+  renderTmleLeaders();
+  renderTmleEmerging();
+  renderTmleStock();
 
   // Each grid container's data-keys attribute lists which series to render
   // there (comma-separated). This lets the same script serve both the full

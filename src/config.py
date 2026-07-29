@@ -115,6 +115,11 @@ COUNTRIES = {
         # historical endpoint and its live quote hand back an in-progress value
         # that looks exactly like a finished session.
         "session_final_after_utc": (21, 30),
+        # TMLE runs here only. Its fundamental factors depend on FMP income
+        # statements, which have no India coverage on this plan, so scoring
+        # India would silently mean a different (price-only) engine wearing the
+        # same name. US first; it can scale once it has earned it.
+        "run_tmle": True,
     },
     "IN": {
         "label": "India",
@@ -147,6 +152,7 @@ COUNTRIES = {
         # NSE/BSE close at 15:30 IST = 10:00 UTC year-round (India observes no
         # daylight saving), so a 10:30 UTC cutoff clears the bell with margin.
         "session_final_after_utc": (10, 30),
+        "run_tmle": False,
     },
 }
 

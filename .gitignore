@@ -9,3 +9,4 @@ venv/
 # permanent history a day for data that is disposable by design.
 docs/tickers/
 docs/in/tickers/
+docs/tmle/

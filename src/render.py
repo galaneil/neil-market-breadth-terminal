@@ -240,6 +240,101 @@ def build_replay_payload(country, series, generated_at):
     }
 
 
+def _tmle_leaders_body():
+    return """
+<div class="empty-note">Scored across the current advance, not a calendar or trailing year — see the stage column. Only <b>Advancing</b> names within 25% of their high are actionable; everything else is shown for context but never ranked.</div>
+<div class="tf-toggle" id="tmle-filter">
+  <button class="tf-btn active" data-filter="actionable">Actionable only</button>
+  <button class="tf-btn" data-filter="all">Everything scored</button>
+</div>
+<div class="table-wrap"><table id="tmle-leaders-table">
+  <thead><tr>
+    <th data-sort="rank">#</th><th data-sort="ticker">Ticker</th>
+    <th data-sort="composite">Score</th>
+    <th data-sort="F1">F1</th><th data-sort="F4">F4</th>
+    <th data-sort="F4B">F4B</th><th data-sort="F5">F5</th>
+    <th data-sort="gain">Move</th><th data-sort="drawdown">Off high</th>
+    <th data-sort="episode_days">Days</th><th data-sort="stage">Stage</th>
+  </tr></thead><tbody></tbody>
+</table></div>
+""".strip()
+
+
+def _tmle_emerging_body():
+    return """
+<div class="empty-note">Ranked by how much the score has <b>climbed</b>, not by the score itself — leadership forming rather than leadership confirmed. Actionable names only.</div>
+<div class="table-wrap"><table id="tmle-emerging-table">
+  <thead><tr>
+    <th data-sort="ticker">Ticker</th><th data-sort="composite">Score</th>
+    <th data-sort="d4">4-week change</th><th data-sort="d12">12-week change</th>
+    <th data-sort="gain">Move</th><th data-sort="drawdown">Off high</th>
+    <th data-sort="episode_days">Days</th>
+  </tr></thead><tbody></tbody>
+</table></div>
+""".strip()
+
+
+def _tmle_stock_body():
+    return """
+<div id="tmle-stock-panel">
+  <div class="replay-controls">
+    <input type="search" id="tmle-ticker" placeholder="Ticker" list="tmle-tickers" autocomplete="off">
+    <datalist id="tmle-tickers"></datalist>
+    <span id="tmle-status"></span>
+  </div>
+  <div id="tmle-stock-body"></div>
+</div>
+""".strip()
+
+
+def _tmle_latest(country):
+    """Most recent leaderboard row, plus the score changes that drive the
+    emerging view. Both are derived here rather than in the browser: the full
+    score history is megabytes, and the page only needs the answer."""
+    data_dir = config.data_dir(country)
+    leaders_rows = store.read_jsonl(os.path.join(data_dir, "tmle_leaders.jsonl"))
+    score_rows = store.read_jsonl(os.path.join(data_dir, "tmle_scores.jsonl"))
+    if not leaders_rows:
+        return {"date": None, "leaders": [], "emerging": []}
+
+    latest = leaders_rows[-1]
+    leaders = latest.get("leaders", [])
+
+    # Attach each name's sector/industry here rather than shipping the whole
+    # classification map to these pages — 250 rows need 250 lookups, not 3,300.
+    classification = _load_classification(country)
+    for item in leaders:
+        tags = classification.get(item["ticker"])
+        if tags:
+            item["sector"], item["industry"] = tags[0], tags[1]
+
+    def scores_at(offset):
+        """Composite by ticker `offset` checkpoints back (one per week)."""
+        if len(score_rows) <= offset:
+            return {}
+        row = score_rows[-1 - offset]
+        return dict(zip(row.get("t", []), row.get("c", [])))
+
+    now, four, twelve = scores_at(0), scores_at(4), scores_at(12)
+    emerging = []
+    for item in leaders:
+        ticker = item["ticker"]
+        if not item.get("actionable"):
+            continue
+        current = now.get(ticker)
+        if current is None:
+            continue
+        entry = dict(item)
+        entry["d4"] = round(current - four[ticker], 1) if ticker in four else None
+        entry["d12"] = round(current - twelve[ticker], 1) if ticker in twelve else None
+        emerging.append(entry)
+    # A name with no prior reading is new to the scored set, which is itself
+    # interesting — sort those last rather than dropping them.
+    emerging.sort(key=lambda e: (e["d4"] is not None, e["d4"] or 0), reverse=True)
+
+    return {"date": latest["date"], "leaders": leaders, "emerging": emerging[:60]}
+
+
 def _breadth_body(key):
     return f'<div class="card-grid" id="breadth-grid" data-keys="{key}"></div>'
 
@@ -369,6 +464,45 @@ def render_all_panels(country):
         paths.append(render_panel(country, filename, label, _breadth_body(key),
                                   [key], series, generated_at))
 
+    if cfg.get("run_tmle"):
+        paths.extend(render_tmle_panels(country, generated_at))
+
+    return paths
+
+
+def render_tmle_panels(country, generated_at):
+    """The three leader-engine pages. Built only where TMLE runs."""
+    import tmle.config as tmle_config
+
+    tmle_data = _tmle_latest(country)
+    factor_meta = {
+        key: {"label": tmle_config.FACTOR_LABELS[key], "blurb": tmle_config.FACTOR_BLURBS[key]}
+        for key in tmle_config.ACTIVE_FACTORS
+    }
+    common = {
+        "generated_at": generated_at,
+        "country": country,
+        "asOf": tmle_data["date"],
+        "factorMeta": factor_meta,
+        "maxDrawdown": tmle_config.MAX_ACTIONABLE_DRAWDOWN,
+    }
+
+    paths = []
+    paths.append(_write_panel(
+        country, "panel-tmle-leaders.html", "Market Leaders", _tmle_leaders_body(),
+        dict(common, leaders=tmle_data["leaders"]), generated_at,
+    ))
+    paths.append(_write_panel(
+        country, "panel-tmle-emerging.html", "Emerging Leaders", _tmle_emerging_body(),
+        dict(common, emerging=tmle_data["emerging"]), generated_at,
+    ))
+    paths.append(_write_panel(
+        country, "panel-tmle-stock.html", "Leader Score", _tmle_stock_body(),
+        dict(common, classification=_load_classification(country),
+             tmleDir="tmle",
+             scored=[item["ticker"] for item in tmle_data["leaders"]]),
+        generated_at, needs_chartjs=True,
+    ))
     return paths
 
 

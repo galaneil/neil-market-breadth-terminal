@@ -287,3 +287,79 @@ footer { text-align: center; color: var(--text-dim); font-size: 11px; padding: 2
 .country-switch .flag { width: 15px; height: 10px; margin-right: 5px; vertical-align: -1px; border-radius: 1px; }
 header h1 { display: flex; align-items: center; }
 .country-switch a { display: inline-flex; align-items: center; }
+
+/* ---------- TMLE: leader engine ---------- */
+.stage-badge {
+  display: inline-block; padding: 2px 8px; border-radius: 10px;
+  font-size: 11px; font-weight: 600; letter-spacing: 0.02em;
+}
+.stage-1 { background: rgba(120,120,120,0.18); color: var(--text-dim); }
+.stage-2 { background: rgba(22,163,74,0.18); color: var(--up); }
+.stage-3 { background: rgba(234,150,20,0.20); color: #b8860b; }
+.stage-4 { background: rgba(220,38,38,0.18); color: var(--down); }
+.nogo {
+  margin-left: 6px; font-size: 10px; font-weight: 700; letter-spacing: 0.06em;
+  text-transform: uppercase; color: var(--down);
+}
+.score-cell { font-weight: 700; }
+.mono { font-variant-numeric: tabular-nums; font-weight: 600; }
+.rs-new { color: var(--text-dim); font-size: 11px; }
+
+.tmle-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; }
+.tmle-score { text-align: right; }
+
+.factor-list { margin: 14px 0 4px; display: grid; gap: 12px; }
+.factor-head {
+  display: flex; align-items: baseline; gap: 8px;
+  font-size: 12px; color: var(--text-dim);
+}
+.factor-key {
+  font-weight: 700; font-size: 10px; color: var(--text-dim);
+  border: 1px solid var(--border); border-radius: 3px; padding: 0 4px;
+}
+.factor-val { margin-left: auto; font-weight: 700; color: var(--text); font-size: 14px; }
+.factor-track { height: 6px; background: var(--grid-line); border-radius: 3px; overflow: hidden; margin-top: 4px; }
+.factor-fill { height: 100%; background: var(--accent); border-radius: 3px; }
+.factor-blurb { font-size: 11px; color: var(--text-dim); margin-top: 3px; }
+
+/* Row identity: logo + ticker + what it does, so a table reads as companies
+   rather than as symbols. */
+.name-cell { display: flex; align-items: center; gap: 8px; }
+.name-cell > span { display: flex; flex-direction: column; line-height: 1.25; }
+.row-logo { width: 18px; height: 18px; border-radius: 3px; object-fit: contain; flex: none; }
+.row-sub { font-size: 10px; color: var(--text-dim); }
+
+/* Score bands — same colour language as the rest of the terminal. */
+.score-strong { color: var(--up); font-weight: 700; }
+.score-good   { color: var(--up); }
+.score-fair   { color: var(--text); }
+.score-weak   { color: var(--text-dim); }
+
+/* The one-line read, the way the environment panel states its headline. */
+.tmle-verdict {
+  margin: 10px 0 2px; padding: 8px 11px; border-radius: 6px; font-size: 12.5px;
+  border-left: 3px solid var(--border); background: var(--grid-line);
+}
+.tmle-verdict.ok { border-left-color: var(--up); }
+.tmle-verdict.nope { border-left-color: var(--down); }
+
+#tmle-leaders-table tbody tr, #tmle-emerging-table tbody tr { cursor: pointer; }
+#tmle-leaders-table tbody tr:hover, #tmle-emerging-table tbody tr:hover { background: var(--grid-line); }
+
+/* ---------- RS Rating: the single loggable number ---------- */
+.rs-rating {
+  display: flex; align-items: center; gap: 14px;
+  margin: 12px 0 4px; padding: 10px 14px;
+  border-radius: 8px; border: 1px solid var(--border);
+  border-left-width: 4px;
+}
+.rs-rating-num { font-size: 34px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }
+.rs-rating-label { font-size: 12px; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--text-dim); }
+.rs-rating-sub { font-size: 12px; color: var(--text-dim); margin-top: 2px; }
+.rs-elite  { border-left-color: var(--up); }
+.rs-elite  .rs-rating-num { color: var(--up); }
+.rs-strong { border-left-color: var(--up); }
+.rs-strong .rs-rating-num { color: var(--up); }
+.rs-mid    { border-left-color: var(--border); }
+.rs-weak   { border-left-color: var(--down); }
+.rs-weak   .rs-rating-num { color: var(--down); }
