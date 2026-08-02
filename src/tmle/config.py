@@ -168,6 +168,11 @@ THEME_FACTORS = ["F2", "F2B", "F6", "F5", "F4B"]
 # is scored; only the top slice is worth accumulating forever.
 LEADERBOARD_SIZE = 250
 
+# How many broken ex-leaders to keep. Shorter than the main list on purpose:
+# this is a warning list, and a warning list nobody reads to the end is not a
+# warning.
+BROKEN_LIST_SIZE = 40
+
 # ── Validation set (Neil's seeded true market leaders) ─────────────────────
 SEEDED_TMLS = {
     2021: ["NVDA", "AMD", "FTNT"],

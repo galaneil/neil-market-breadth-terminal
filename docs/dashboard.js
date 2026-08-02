@@ -2344,16 +2344,61 @@
     const table = document.getElementById("tmle-leaders-table");
     if (!table) return;
     const all = DATA.leaders || [];
+    const broken = DATA.broken || [];
+    const counts = DATA.counts || {};
     const body = table.querySelector("tbody");
     let filter = "actionable";
 
     function visible() {
-      return filter === "all" ? all : all.filter(function (r) { return r.actionable; });
+      if (filter === "broken") return broken;
+      if (filter === "all") return all;
+      return all.filter(function (r) { return r.actionable; });
+    }
+
+    // The verdict, before the table. A 250-row leaderboard does not tell you
+    // what kind of market it is; two sentences and three numbers do.
+    function drawDigest() {
+      const host = document.getElementById("tmle-digest");
+      if (!host) return;
+      const buyable = all.filter(function (r) { return r.actionable; });
+      const nActionable = counts.actionable !== undefined ? counts.actionable : buyable.length;
+
+      // Where the buyable names actually are — the one-line "what is working".
+      const byIndustry = {};
+      buyable.slice(0, 40).forEach(function (r) {
+        if (r.industry) byIndustry[r.industry] = (byIndustry[r.industry] || 0) + 1;
+      });
+      const leadIndustries = Object.keys(byIndustry)
+        .sort(function (a, b) { return byIndustry[b] - byIndustry[a]; })
+        .slice(0, 3);
+
+      const verdict = nActionable === 0
+        ? "Nothing is buyable. Every name that scores is either broken or below its 30-week."
+        : leadIndustries.length
+          ? "Leadership is in " + leadIndustries.join(", ") + "."
+          : "Leadership is thin.";
+
+      host.innerHTML =
+        '<div class="digest-head">' + (DATA.asOf || "") + "</div>" +
+        '<div class="digest-verdict">' + verdict + "</div>" +
+        '<div class="tmle-stats">' +
+          '<div class="tmle-stat"><div class="tmle-stat-label">Buyable now</div>' +
+            '<div class="tmle-stat-num up">' + nActionable + "</div></div>" +
+          '<div class="tmle-stat"><div class="tmle-stat-label">Broken ex-leaders</div>' +
+            '<div class="tmle-stat-num down">' + (counts.broken || broken.length) + "</div></div>" +
+          '<div class="tmle-stat"><div class="tmle-stat-label">Scored</div>' +
+            '<div class="tmle-stat-num">' + (counts.scored || all.length) + "</div></div>" +
+        "</div>" +
+        '<div class="digest-note">Score ranks, stage permits. A broken name keeps the score it earned and never appears in the buyable list.</div>';
     }
     function draw(rows) {
       if (!rows.length) {
-        body.innerHTML = '<tr><td colspan="11" class="empty-note">Nothing qualifies right now — no name is advancing within ' +
-          Math.abs(DATA.maxDrawdown || 25) + '% of its high.</td></tr>';
+        body.innerHTML = '<tr><td colspan="11" class="empty-note">' +
+          (filter === "broken"
+            ? "No name that scored well has broken down."
+            : "Nothing qualifies right now — no name is advancing within " +
+              Math.abs(DATA.maxDrawdown || 25) + "% of its high.") +
+          "</td></tr>";
         return;
       }
       body.innerHTML = rows.map(function (r) {
@@ -2376,6 +2421,7 @@
 
     // Ascending on rank, so #1 is at the top; unranked (non-actionable) names
     // sort last because sortRows pushes nulls to the end either way.
+    drawDigest();
     let rows = visible();
     attachSorting(table, rows, draw, "rank", 1);
     makeRowsClickable(table);
@@ -2388,7 +2434,8 @@
           btn.classList.add("active");
           filter = btn.dataset.filter;
           rows = visible();
-          draw(sortRows(rows, filter === "all" ? "composite" : "rank", filter === "all" ? -1 : 1));
+          const key = filter === "actionable" ? "rank" : "composite";
+          draw(sortRows(rows, key, key === "rank" ? 1 : -1));
         });
       });
     }

@@ -273,9 +273,10 @@ def build_replay_payload(country, series, generated_at):
 
 def _tmle_leaders_body():
     return """
-<div class="empty-note">Scored across the current advance, not a calendar or trailing year — see the stage column. Only <b>Advancing</b> names within 25% of their high are actionable; everything else is shown for context but never ranked.</div>
+<div id="tmle-digest"></div>
 <div class="tf-toggle" id="tmle-filter">
-  <button class="tf-btn active" data-filter="actionable">Actionable only</button>
+  <button class="tf-btn active" data-filter="actionable">Buyable now</button>
+  <button class="tf-btn" data-filter="broken">Broken ex-leaders</button>
   <button class="tf-btn" data-filter="all">Everything scored</button>
 </div>
 <div class="table-wrap"><table id="tmle-leaders-table">
@@ -286,7 +287,7 @@ def _tmle_leaders_body():
     <th data-sort="F4B">F4B</th><th data-sort="F5">F5</th>
     <th data-sort="gain" title="Rise from the low this advance started at">Up from low</th>
     <th data-sort="drawdown" title="How far below the highest close of this advance">Off high</th>
-    <th data-sort="episode_days" title="Trading sessions since this advance began">Sessions in move</th>
+    <th data-sort="episode_days" title="Trading sessions the advance lasted">Sessions</th>
     <th data-sort="stage">Stage</th>
   </tr></thead><tbody></tbody>
 </table></div>
@@ -334,11 +335,12 @@ def _tmle_latest(country):
 
     latest = leaders_rows[-1]
     leaders = latest.get("leaders", [])
+    broken = latest.get("broken", [])
 
     # Attach each name's sector/industry here rather than shipping the whole
     # classification map to these pages — 250 rows need 250 lookups, not 3,300.
     classification = _load_classification(country)
-    for item in leaders:
+    for item in leaders + broken:
         tags = classification.get(item["ticker"])
         if tags:
             item["sector"], item["industry"] = tags[0], tags[1]
@@ -367,7 +369,8 @@ def _tmle_latest(country):
     # interesting — sort those last rather than dropping them.
     emerging.sort(key=lambda e: (e["d4"] is not None, e["d4"] or 0), reverse=True)
 
-    return {"date": latest["date"], "leaders": leaders, "emerging": emerging[:60]}
+    return {"date": latest["date"], "leaders": leaders, "broken": broken,
+            "counts": latest.get("counts", {}), "emerging": emerging[:60]}
 
 
 def _screener_body():
@@ -692,7 +695,8 @@ def render_tmle_panels(country, generated_at):
     paths = []
     paths.append(_write_panel(
         country, "panel-tmle-leaders.html", "Market Leaders", _tmle_leaders_body(),
-        dict(common, leaders=tmle_data["leaders"]), generated_at,
+        dict(common, leaders=tmle_data["leaders"], broken=tmle_data["broken"],
+             counts=tmle_data["counts"]), generated_at,
     ))
     paths.append(_write_panel(
         country, "panel-tmle-emerging.html", "Emerging Leaders", _tmle_emerging_body(),

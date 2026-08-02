@@ -161,7 +161,13 @@ class Engine:
             revenue = fund.get("revenue")
             has_revenue = revenue is not None and revenue > 0
 
-        actionable = (stage in config.ACTIONABLE_STAGES and
+        # A finished advance is never actionable, whatever the stage flag says.
+        # The stage is computed from a 150-day average and can still read
+        # "advancing" for weeks after price has broken it, which is exactly the
+        # SNDK failure. `ended` is the fast, unambiguous version of the same
+        # judgement: price is below its 30-week average today.
+        actionable = (not episode.get("ended") and
+                      stage in config.ACTIONABLE_STAGES and
                       drawdown is not None and
                       drawdown >= config.MAX_ACTIONABLE_DRAWDOWN and
                       has_revenue)
@@ -179,6 +185,13 @@ class Engine:
             "gain": round(episode["stock_gain"], 1) if episode.get("stock_gain") is not None else None,
             "episode_days": episode["length"],
             "episode_start": arrays["dates"][episode["start_index"]],
+            # Set once the advance is over, with the date it ended and how long
+            # ago that was — the "broken ex-leader" flag.
+            "episode_ended": bool(episode.get("ended")),
+            "episode_end": arrays["dates"][episode["end_index"]] if episode.get("ended") else None,
+            "days_since_end": episode.get("days_since_end", 0),
+            # Above the 30-week again, but only just — not yet a move.
+            "young": bool(episode.get("young")),
             "pct_below_20": episode["pct_below_20"],
             "pct_below_10w": episode["pct_below_10w"],
             "has_revenue": has_revenue,

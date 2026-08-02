@@ -140,19 +140,40 @@ def write_theme_leaders(country, date_str, rows):
     )
 
 
+FIELDS = ("ticker", "rank", "composite", "coverage", "stage", "stage_label",
+          "actionable", "drawdown", "gain", "episode_days", "episode_start",
+          "episode_ended", "episode_end", "days_since_end", "young",
+          "pct_below_20", "pct_below_10w",
+          "F1", "F2", "F2B", "F6", "F4", "F4B", "F5")
+
+
 def write_leaders(country, date_str, rows):
+    """Two lists, written together.
+
+    `leaders` is the top slice as before. `broken` is the highest-scoring names
+    whose advance is OVER — the ones that earned real leadership and then lost
+    it. They were previously absent from the file entirely, so the panel had
+    nothing to warn with; a broken ex-leader is exactly what Neil wants flagged,
+    and a name is far more dangerous when it still looks like a leader on the
+    numbers.
+    """
     top = rows[:config.LEADERBOARD_SIZE]
+    broken = sorted(
+        (r for r in rows if r.get("episode_ended") and r.get("composite") is not None),
+        key=lambda r: r["composite"], reverse=True,
+    )[:config.BROKEN_LIST_SIZE]
+
     store.upsert_jsonl(
         store.series_path(country, "tmle_leaders.jsonl"),
         {
             "date": date_str,
-            "leaders": [
-                {k: r.get(k) for k in
-                 ("ticker", "rank", "composite", "coverage", "stage", "actionable",
-                  "drawdown", "gain", "episode_days", "episode_start",
-                  "pct_below_20", "pct_below_10w", "F1", "F2", "F2B", "F6", "F4", "F4B", "F5")}
-                for r in top
-            ],
+            "leaders": [{k: r.get(k) for k in FIELDS} for r in top],
+            "broken": [{k: r.get(k) for k in FIELDS} for r in broken],
+            "counts": {
+                "scored": len(rows),
+                "actionable": sum(1 for r in rows if r.get("actionable")),
+                "broken": sum(1 for r in rows if r.get("episode_ended")),
+            },
         },
     )
 
