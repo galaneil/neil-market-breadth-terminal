@@ -1085,21 +1085,28 @@
     // does not.
     function composition() {
       const period = namesInPeriod();
-      const hiTotals = {}, loTotals = {};
+      const hiTotals = {}, loTotals = {};      // distinct companies over the period
+      const hiDaily = {}, loDaily = {};        // summed daily counts, for the rate
       const seen = { hi: {}, lo: {} };
       period.forEach(function (r) {
         ["hi", "lo"].forEach(function (which) {
           (((r[win] || {})[which]) || []).forEach(function (t) {
-            if (!inIndex(t) || seen[which][t]) return;
-            seen[which][t] = true;   // distinct companies, not daily hits
+            if (!inIndex(t)) return;
             const tags = cls[t] || ["", ""];
             const key = groupBy === "sector" ? tags[0] : tags[1];
             if (!key) return;
+            // Two tallies from one pass. The daily one counts every session a
+            // name prints on; the distinct one counts the name once.
+            const daily = which === "hi" ? hiDaily : loDaily;
+            daily[key] = (daily[key] || 0) + 1;
+            if (seen[which][t]) return;
+            seen[which][t] = true;
             const bucket = which === "hi" ? hiTotals : loTotals;
             bucket[key] = (bucket[key] || 0) + 1;
           });
         });
       });
+      const sessions = period.length || 1;
 
       const members = memberCounts();
       const groups = {};
@@ -1110,11 +1117,23 @@
         const hi = hiTotals[k] || 0, lo = loTotals[k] || 0;
         const size = members[k] || 0;
         return {
-          group: k, hi: hi, lo: lo, size: size,
-          // As a share of the group's own members, both sides. This is what
-          // makes a 40-name industry comparable with a 350-name one.
-          hiRate: size ? 100 * hi / size : 0,
-          loRate: size ? 100 * lo / size : 0,
+          group: k, hi: hi, lo: lo, size: size, sessions: sessions,
+          // AVERAGE DAILY PARTICIPATION — the share of the group at a new
+          // high on a typical session.
+          //
+          // The obvious measure, "what fraction of the group made a high at
+          // some point in this period", is the one this replaces, because it
+          // saturates: over six months 100% of S&P semiconductors made a
+          // 13-week high AND 89% made a 13-week low, netting to +11% and
+          // telling you nothing except that six months is a long time. A rate
+          // does not accumulate — semis read +10% net at 52-week over both
+          // three and six months, which is the stable fact about them.
+          hiRate: size ? 100 * (hiDaily[k] || 0) / sessions / size : 0,
+          loRate: size ? 100 * (loDaily[k] || 0) / sessions / size : 0,
+          // Kept for the "total companies" view, where cumulative is the
+          // point rather than the bug.
+          hiShare: size ? 100 * hi / size : 0,
+          loShare: size ? 100 * lo / size : 0,
           eligible: size >= 5,
         };
       }).filter(function (g) {
@@ -1187,11 +1206,13 @@
       return out;
     }
 
-    // Net participation drives colour: (highs - lows) as a share of the
-    // group's members. Capped at 30% so one extreme group does not wash every
-    // other tile to grey — beyond that the colour is saturated anyway.
-    function heatColor(net) {
-      const capped = Math.max(-30, Math.min(30, net)) / 30;
+    // Colour is scaled to the strongest group currently on screen rather than
+    // to a fixed ceiling. Daily-participation rates run small (a group at 10%
+    // is very strong), and different windows and timeframes produce different
+    // ranges — a fixed cap left whole maps washed to grey.
+    function heatColor(net, cap) {
+      const scale = Math.max(cap || 0, 1.5);   // floor, so a flat map is not all-saturated
+      const capped = Math.max(-scale, Math.min(scale, net)) / scale;
       const strength = Math.abs(capped);
       const base = capped >= 0 ? [22, 163, 74] : [220, 38, 38];
       const alpha = 0.12 + 0.78 * strength;
@@ -1201,11 +1222,27 @@
     function drawHeatmap() {
       const host = document.getElementById("hilo-heatmap");
       if (!host) return;
+
+      // Say what is being measured, in the words of the current selection.
+      // Nobody should have to infer what "45%" meant.
+      const capEl = document.getElementById("hilo-heat-caption");
+      if (capEl) {
+        const scopeName = (SCOPES.filter(function (s) { return s.code === indexFilter; })[0] || {}).label || "all listed";
+        const winName = HILO_WINDOWS.filter(function (w) { return w[0] === win; })[0][1];
+        const tfName = tf === "ALL" ? "since inception" : "the last " + tf;
+        capEl.textContent =
+          "Each tile is one " + (groupBy === "sector" ? "sector" : "industry") +
+          " of the " + scopeName + ". Its number is how many of its companies sat at a " +
+          winName + " high on an average session over " + tfName +
+          ", minus how many sat at a " + winName + " low — in percentage points of the group. " +
+          "Green means more of it was making highs than lows. Tile size is how many companies the group holds.";
+      }
       const items = composition()
         .map(function (g) {
           return {
             group: g.group, hi: g.hi, lo: g.lo, size: g.size,
-            net: g.size ? 100 * (g.hi - g.lo) / g.size : 0,
+            hiRate: g.hiRate, loRate: g.loRate, sessions: g.sessions,
+            net: g.hiRate - g.loRate,
             // Area is the group's SIZE, not its hit count, so the map keeps
             // the same shape as you change window and timeframe and only the
             // colours move. A map whose boxes jump around cannot be compared
@@ -1223,6 +1260,7 @@
       }
 
       const W = host.clientWidth || 900, H = host.clientHeight || 420;
+      const cap = Math.max.apply(null, items.map(function (i) { return Math.abs(i.net); }));
       squarify(items, 0, 0, W, H).forEach(function (t) {
         const el = document.createElement("div");
         el.className = "heat-tile";
@@ -1230,16 +1268,23 @@
         el.style.top = t.y + "px";
         el.style.width = Math.max(0, t.w - 2) + "px";
         el.style.height = Math.max(0, t.h - 2) + "px";
-        el.style.background = heatColor(t.item.net);
-        el.title = t.item.group + " — " + t.item.hi + " highs, " + t.item.lo +
-                   " lows, of " + t.item.size + " members (net " +
-                   (t.item.net >= 0 ? "+" : "") + t.item.net.toFixed(1) + "%)";
+        el.style.background = heatColor(t.item.net, cap);
+        // Spelled out, because "45%" on its own was unreadable: it is a share
+        // of the group, on an average day, not a share of anything cumulative.
+        el.title = t.item.group + " — " + t.item.size + " companies. On an " +
+          "average session: " + t.item.hiRate.toFixed(1) + "% of them at a new high, " +
+          t.item.loRate.toFixed(1) + "% at a new low. Net " +
+          (t.item.net >= 0 ? "+" : "") + t.item.net.toFixed(1) +
+          " points. Over the period, " + t.item.hi + " of " + t.item.size +
+          " printed a high at least once and " + t.item.lo + " printed a low.";
         // Below roughly this size a label is unreadable noise, so the tile
         // carries only its colour and its tooltip.
         if (t.w > 70 && t.h > 34) {
           el.innerHTML = '<div class="heat-name">' + t.item.group + "</div>" +
             '<div class="heat-net">' + (t.item.net >= 0 ? "+" : "") +
-            t.item.net.toFixed(0) + "%</div>";
+            t.item.net.toFixed(1) + "</div>" +
+            (t.h > 58 ? '<div class="heat-sub">' + t.item.hiRate.toFixed(1) +
+              "% hi / " + t.item.loRate.toFixed(1) + "% lo</div>" : "");
         }
         el.addEventListener("click", function () {
           const sel = groupBy === "sector" ? sectorSel : industrySel;

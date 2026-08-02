@@ -423,6 +423,7 @@ def _groups_body():
   <div class="tf-toggle" id="hilo-groupby"></div>
   <div class="tf-toggle" id="hilo-groupmode"></div>
 </div>
+<div class="composition-note" id="hilo-heat-caption"></div>
 <div class="heatmap" id="hilo-heatmap"></div>
 <div class="composition">
   <div class="chart-wrap chart-tall"><canvas id="hilo-composition-canvas"></canvas></div>
@@ -431,7 +432,7 @@ def _groups_body():
   <span class="heat-swatch heat-neg"></span> more lows
   <span class="heat-swatch heat-mid"></span> balanced
   <span class="heat-swatch heat-pos"></span> more highs
-  <span class="heat-legend-note">Tile size is how many companies the group holds; colour is highs minus lows as a share of them. Click a tile to filter.</span>
+  <span class="heat-legend-note">Colour is scaled to the strongest group on screen, so the map stays readable at any window. Click a tile to filter.</span>
 </div>
 """.strip()
 
