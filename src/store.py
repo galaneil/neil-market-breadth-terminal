@@ -172,6 +172,14 @@ def write_hilo(country, count_records, name_records, quotes):
             json.dump(payload, f, separators=(",", ":"))
 
 
+def write_index_membership(country, membership):
+    """{ticker: [index codes]} — a snapshot, rewritten each run."""
+    path = series_path(country, "index_membership.json")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(membership, f, separators=(",", ":"), sort_keys=True)
+
+
 def write_breadth_members(country, counts):
     """{sector: member count} for the breadth universe, rewritten each run."""
     path = series_path(country, "breadth_sector_members.json")

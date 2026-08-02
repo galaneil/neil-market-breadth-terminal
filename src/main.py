@@ -201,25 +201,6 @@ def run_country(code, client=None):
     # Sector weights for the breadth universe specifically, so the panel can
     # ask "more highs than its size implies?" rather than "most highs", which
     # the largest sector wins by default.
-    # New highs/lows at 13, 26 and 52 weeks, with the ticker names — the
-    # screener's data. Same price cache, no extra API calls.
-    # Run over EVERY priced name, not the breadth universe. Breadth counts are
-    # a property of the index and are correctly scoped to its 1,500 members,
-    # but a screener scoped that way cannot show the names worth finding —
-    # AAOI is not in the S&P 1500, and the turns Neil is hunting happen in
-    # exactly the smaller names the index excludes.
-    log(f"{code}: building high/low screener data (13/26/52 week)...")
-    screener_tickers = [t for t in all_price_tickers if t in ticker_to_sector]
-    hilo_counts, hilo_names = hilo.compute(price_cache, screener_tickers, n_days,
-                                           ticker_to_sector)
-    store.write_hilo(code, hilo_counts, hilo_names,
-                     hilo.last_quotes(price_cache, screener_tickers))
-    if hilo_counts:
-        last = hilo_counts[-1]
-        log("  " + " · ".join(
-            f"{hilo.WINDOW_LABELS[k]}: {last[k]['hi']}h/{last[k]['lo']}l"
-            for k in hilo.WINDOWS))
-
     store.write_breadth_members(code, {
         s: sum(1 for t in stock_tickers if ticker_to_sector.get(t) == s)
         for s in sorted(set(filter(None, (ticker_to_sector.get(t) for t in stock_tickers))))
@@ -230,6 +211,8 @@ def run_country(code, client=None):
         last = breadth_records[-1]
         log(f"  {len(breadth_records)} days (latest: adv={last['advancers']} decl={last['decliners']} "
             f"new_hi={last['new_highs']} new_lo={last['new_lows']})")
+
+    store.write_index_membership(code, tv_industry.index_membership(industry_df, code))
 
     store.write_classification(code, {
         row["name"]: [row["sector"], row["industry"]]
@@ -294,6 +277,10 @@ def run_country(code, client=None):
     # factor measured across a year of checkpoints needs two years behind it),
     # so the untruncated rows are kept as they go past rather than re-fetched.
     tmle_prices = {}
+    # ADR needs the daily high/low, which the close-only price cache does not
+    # carry. Computed here rather than in a second pass because the OHLC is
+    # already in hand at this point and would otherwise be re-fetched.
+    adr_by_ticker = {}
     want_tmle = cfg.get("run_tmle")
     for i, ticker in enumerate(lookup_tickers):
         try:
@@ -303,6 +290,12 @@ def run_country(code, client=None):
             continue
         if want_tmle and all_rows:
             tmle_prices[ticker] = all_rows
+        if all_rows:
+            ordered = sorted(all_rows, key=lambda r: r["date"])
+            adr = hilo.adr_percent([r.get("high") for r in ordered],
+                                   [r.get("low") for r in ordered])
+            if adr is not None:
+                adr_by_ticker[ticker] = adr
         if store.write_ticker_ohlc(code, ticker, all_rows[:config.TICKER_HISTORY_DAYS],
                                    rs_ratings.get(ticker)):
             written += 1
@@ -312,6 +305,25 @@ def run_country(code, client=None):
             log(f"    {i + 1}/{len(lookup_tickers)}")
     store.write_benchmarks(code, price_cache, cfg["index_tickers"])
     log(f"{code}: wrote {written} per-ticker files ({skipped} had no usable history)")
+
+    # New highs/lows at 13, 26 and 52 weeks, with the ticker names — the
+    # screener's data. Same price cache, no extra API calls.
+    # Run over EVERY priced name, not the breadth universe. Breadth counts are
+    # a property of the index and are correctly scoped to its 1,500 members,
+    # but a screener scoped that way cannot show the names worth finding —
+    # AAOI is not in the S&P 1500, and the turns Neil is hunting happen in
+    # exactly the smaller names the index excludes.
+    log(f"{code}: building high/low screener data (13/26/52 week)...")
+    screener_tickers = [t for t in all_price_tickers if t in ticker_to_sector]
+    hilo_counts, hilo_names = hilo.compute(price_cache, screener_tickers, n_days,
+                                           ticker_to_sector)
+    store.write_hilo(code, hilo_counts, hilo_names,
+                     hilo.last_quotes(price_cache, screener_tickers, adr_by_ticker))
+    if hilo_counts:
+        last = hilo_counts[-1]
+        log("  " + " · ".join(
+            f"{hilo.WINDOW_LABELS[k]}: {last[k]['hi']}h/{last[k]['lo']}l"
+            for k in hilo.WINDOWS))
 
     # ---------- TMLE ----------
     if want_tmle and tmle_prices:

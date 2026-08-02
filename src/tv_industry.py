@@ -45,7 +45,14 @@ def fetch_industry_classification(country_cfg):
                 # Fundamentals for TMLE's F2, free in the query already being
                 # made. FMP would cost one call per ticker; this costs nothing.
                 "total_revenue_ttm", "total_revenue_yoy_growth_ttm",
-                "operating_margin_ttm", "earnings_per_share_diluted_yoy_growth_ttm")
+                "operating_margin_ttm", "earnings_per_share_diluted_yoy_growth_ttm",
+                # Index membership, so the screener can be narrowed to real
+                # index constituents instead of every listed shell. Comes free
+                # in this query. The alternatives were all dead ends: iShares'
+                # holdings CSVs need a cookie a plain request cannot set, FMP's
+                # constituent endpoints are 402 on this plan, and Wikipedia has
+                # no Russell 2000 table at all.
+                "indexes")
         .where(*filters)
         .order_by("market_cap_basic", ascending=False)
         .limit(country_cfg["universe_limit"])
@@ -75,6 +82,30 @@ def fundamentals_map(df):
             "eps_growth": clean(row.get("earnings_per_share_diluted_yoy_growth_ttm")),
             "operating_margin": clean(row.get("operating_margin_ttm")),
         }
+    return out
+
+
+def index_membership(df, country_code):
+    """{ticker: [codes]} for the indices that country's screener filters by.
+
+    TradingView returns every index a name belongs to — often 25 of them,
+    including STOXX and ESG variants nobody screens on. Only the tracked ones
+    are kept, so the payload carries a few short codes per name instead of a
+    paragraph.
+    """
+    if "indexes" not in df.columns:
+        return {}
+    import config
+    by_name = {tv: code for code, _label, tv in config.SCREENER_INDEXES.get(country_code, [])}
+    out = {}
+    for _, row in df.iterrows():
+        memberships = row.get("indexes")
+        if not isinstance(memberships, list):
+            continue
+        codes = [by_name[m.get("name")] for m in memberships
+                 if isinstance(m, dict) and m.get("name") in by_name]
+        if codes:
+            out[row["name"]] = sorted(codes)
     return out
 
 

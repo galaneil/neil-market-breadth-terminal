@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>New Highs & Lows Screener — India — Market Breadth Terminal</title>
+<title>Highs & Lows by Group — India — Market Breadth Terminal</title>
 <link rel="stylesheet" href="../dashboard.css?v=e8b90d404d">
 <style>
 /* Single-panel embed pages are meant to sit inside a small Notion embed
@@ -21,11 +21,11 @@ footer { display: none; }
 <body>
 
 <header>
-  <h1><svg class="flag" width="18" height="12" viewBox="0 0 24 16" role="img" aria-label="India"><rect width="24" height="5.333" fill="#FF9933"/><rect y="5.333" width="24" height="5.334" fill="#fff"/><rect y="10.667" width="24" height="5.333" fill="#138808"/><circle cx="12" cy="8" r="2.1" fill="none" stroke="#000080" stroke-width="0.45"/><circle cx="12" cy="8" r="0.45" fill="#000080"/></svg>New Highs & Lows Screener</h1>
+  <h1><svg class="flag" width="18" height="12" viewBox="0 0 24 16" role="img" aria-label="India"><rect width="24" height="5.333" fill="#FF9933"/><rect y="5.333" width="24" height="5.334" fill="#fff"/><rect y="10.667" width="24" height="5.333" fill="#138808"/><circle cx="12" cy="8" r="2.1" fill="none" stroke="#000080" stroke-width="0.45"/><circle cx="12" cy="8" r="0.45" fill="#000080"/></svg>Highs & Lows by Group</h1>
   <div class="header-controls">
     <span class="country-switch">
-      <a href="../panel-screener.html" title="United States"><svg class="flag" width="18" height="12" viewBox="0 0 24 16" role="img" aria-label="United States"><rect width="24" height="16" fill="#fff"/><g fill="#B22234"><rect y="0.000" width="24" height="1.231"/><rect y="2.462" width="24" height="1.231"/><rect y="4.923" width="24" height="1.231"/><rect y="7.385" width="24" height="1.231"/><rect y="9.846" width="24" height="1.231"/><rect y="12.308" width="24" height="1.231"/><rect y="14.769" width="24" height="1.231"/></g><rect width="10" height="8.615" fill="#3C3B6E"/></svg>US</a>
-      <a href="panel-screener.html" title="India" class="active"><svg class="flag" width="18" height="12" viewBox="0 0 24 16" role="img" aria-label="India"><rect width="24" height="5.333" fill="#FF9933"/><rect y="5.333" width="24" height="5.334" fill="#fff"/><rect y="10.667" width="24" height="5.333" fill="#138808"/><circle cx="12" cy="8" r="2.1" fill="none" stroke="#000080" stroke-width="0.45"/><circle cx="12" cy="8" r="0.45" fill="#000080"/></svg>IN</a>
+      <a href="../panel-groups.html" title="United States"><svg class="flag" width="18" height="12" viewBox="0 0 24 16" role="img" aria-label="United States"><rect width="24" height="16" fill="#fff"/><g fill="#B22234"><rect y="0.000" width="24" height="1.231"/><rect y="2.462" width="24" height="1.231"/><rect y="4.923" width="24" height="1.231"/><rect y="7.385" width="24" height="1.231"/><rect y="9.846" width="24" height="1.231"/><rect y="12.308" width="24" height="1.231"/><rect y="14.769" width="24" height="1.231"/></g><rect width="10" height="8.615" fill="#3C3B6E"/></svg>US</a>
+      <a href="panel-groups.html" title="India" class="active"><svg class="flag" width="18" height="12" viewBox="0 0 24 16" role="img" aria-label="India"><rect width="24" height="5.333" fill="#FF9933"/><rect y="5.333" width="24" height="5.334" fill="#fff"/><rect y="10.667" width="24" height="5.333" fill="#138808"/><circle cx="12" cy="8" r="2.1" fill="none" stroke="#000080" stroke-width="0.45"/><circle cx="12" cy="8" r="0.45" fill="#000080"/></svg>IN</a>
     </span>
     <span class="generated-at">Updated 2026-08-02 06:52 UTC</span>
     <button class="icon-btn" id="theme-toggle" title="Toggle dark/light">&#9788;</button>
@@ -33,41 +33,27 @@ footer { display: none; }
 </header>
 
 <main>
-<div class="empty-note">Counts are <b>distinct companies</b> over the selected period, not daily totals — a stock printing highs five days running is one company, not five. Pick a lookback, a period, then filter and click any row to send the ticker to the other panels.</div>
+<div class="empty-note">Distinct companies at new highs and new lows, by group. Lows extend left, highs extend right, ranked by the gap between them — so a group leading both sides sits in the middle, where it belongs, instead of topping both lists for no reason other than its size.</div>
 <div class="screener-controls">
   <div class="tf-toggle" id="hilo-index"></div>
   <div class="tf-toggle" id="hilo-window"></div>
-  <div class="tf-toggle" id="hilo-side"></div>
+  <div class="tf-toggle" id="hilo-timeframe"></div>
 </div>
-<div class="hilo-pair">
-  <div class="hilo-side"><div class="card-value up" data-hi>&nbsp;</div>
-    <div class="hilo-label" data-hi-label>&nbsp;</div></div>
-  <div class="hilo-side"><div class="card-value down" data-lo>&nbsp;</div>
-    <div class="hilo-label" data-lo-label>&nbsp;</div></div>
+<div class="composition-head">
+  <div class="tf-toggle" id="hilo-view"></div>
+  <div class="tf-toggle" id="hilo-groupby"></div>
+  <div class="tf-toggle" id="hilo-groupmode"></div>
 </div>
-<div class="hilo-lead"></div>
-<div class="tf-toggle" id="hilo-timeframe"></div>
-<div class="chart-wrap"><canvas id="hilo-screener-canvas"></canvas></div>
-<div class="screener-filters">
-  <span class="filter-label">ADR</span>
-  <div class="tf-toggle" id="hilo-adr"></div>
-  <select id="hilo-sector"><option value="">All sectors</option></select>
-  <select id="hilo-industry"><option value="">All industries</option></select>
-  <input type="search" id="hilo-search" placeholder="Filter by ticker">
-  <span id="hilo-result-count"></span>
+<div class="heatmap" id="hilo-heatmap"></div>
+<div class="composition">
+  <div class="chart-wrap chart-tall"><canvas id="hilo-composition-canvas"></canvas></div>
 </div>
-<div class="table-wrap"><table id="hilo-screener-table">
-  <thead><tr>
-    <th data-sort="ticker">Ticker</th>
-    <th data-sort="sector">Sector</th>
-    <th data-sort="industry">Industry</th>
-    <th data-sort="close">Close</th>
-    <th data-sort="chg">1D %</th>
-    <th data-sort="adr" title="Average daily range over 20 sessions: mean of high/low - 1. How much room the stock gives you intraday.">ADR %</th>
-    <th data-sort="hits" title="Sessions in the selected period on which it printed a new high or low">Sessions</th>
-    <th data-sort="last" title="Most recent session on which it printed one">Latest</th>
-  </tr></thead><tbody></tbody>
-</table></div>
+<div class="heat-legend">
+  <span class="heat-swatch heat-neg"></span> more lows
+  <span class="heat-swatch heat-mid"></span> balanced
+  <span class="heat-swatch heat-pos"></span> more highs
+  <span class="heat-legend-note">Tile size is how many companies the group holds; colour is highs minus lows as a share of them. Click a tile to filter.</span>
+</div>
 </main>
 
 <script src="../vendor/chart.umd.min.js"></script>

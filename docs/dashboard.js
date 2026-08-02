@@ -860,14 +860,18 @@
   const HILO_WINDOWS = [["w13", "13-week"], ["w26", "26-week"], ["w52", "52-week"]];
 
   function renderHiloScreener() {
+    // Two pages share this: the screener (table) and the group chart, split
+    // apart so each can be embedded on its own. Every section below is
+    // guarded, so a page carrying only one of them works untouched.
     const table = document.getElementById("hilo-screener-table");
-    if (!table) return;
+    const compositionCanvas = document.getElementById("hilo-composition-canvas");
+    if (!table && !compositionCanvas) return;
 
     const counts = DATA.hiloCounts || [];
     const names = DATA.hiloNames || [];
     const quotes = DATA.quotes || {};
     const cls = DATA.classification || {};
-    const body = table.querySelector("tbody");
+    const body = table ? table.querySelector("tbody") : null;
     const hiEl = document.querySelector("[data-hi]");
     const loEl = document.querySelector("[data-lo]");
     const hiLabelEl = document.querySelector("[data-hi-label]");
@@ -881,7 +885,17 @@
     let win = "w52";
     let side = "hi";
     let tf = "1M";
+    let indexFilter = "";
+    let adrBand = "";
     let rows = [];
+
+    // ADR bands, from the actual distribution of the US universe: median
+    // 3.6%, a tenth below 1.9%, a tenth above 7.1%. A 2% ADR name at a new
+    // high is a different instrument from a 9% one — same signal, but one
+    // cannot be traded on a stop that sits outside the daily noise.
+    const ADR_BANDS = {
+      low: [0, 3], mid: [3, 7], high: [7, Infinity],
+    };
 
     function buildToggle(id, items, get, set) {
       const host = document.getElementById(id);
@@ -909,6 +923,16 @@
       return filtered.length ? filtered : names;
     }
 
+    // Index membership. Screening the whole 3,300-name tape buries the real
+    // constituents under shells and microcaps, so the default is to look at
+    // one index at a time.
+    const MEMBERSHIP = DATA.indexMembership || {};
+    function inIndex(ticker) {
+      if (!indexFilter) return true;
+      const codes = MEMBERSHIP[ticker];
+      return !!codes && codes.indexOf(indexFilter) !== -1;
+    }
+
     // One row per distinct company, with how many sessions it printed on and
     // when it last did. The session count separates a name making highs every
     // day from one that touched a high once and rolled over.
@@ -918,6 +942,7 @@
       period.forEach(function (r) {
         const list = ((r[win] || {})[side]) || [];
         list.forEach(function (t) {
+          if (!inIndex(t)) return;
           hits[t] = (hits[t] || 0) + 1;
           if (!lastSeen[t] || r.date > lastSeen[t]) lastSeen[t] = r.date;
         });
@@ -926,7 +951,8 @@
         const tags = cls[t] || ["", ""];
         const q = quotes[t] || [null, null];
         return { ticker: t, sector: tags[0] || "—", industry: tags[1] || "—",
-                 close: q[0], chg: q[1], hits: hits[t], last: lastSeen[t] };
+                 close: q[0], chg: q[1], adr: q[2] === undefined ? null : q[2],
+                 hits: hits[t], last: lastSeen[t] };
       });
     }
 
@@ -945,10 +971,14 @@
     function visibleRows() {
       const s = sectorSel.value, ind = industrySel.value;
       const q = (searchEl.value || "").trim().toUpperCase();
+      const band = ADR_BANDS[adrBand];
       return rows.filter(function (r) {
         if (s && r.sector !== s) return false;
         if (ind && r.industry !== ind) return false;
         if (q && r.ticker.indexOf(q) === -1) return false;
+        // A name with no ADR is dropped by an ADR filter rather than passed
+        // through it — "unknown" is not "matches".
+        if (band && (r.adr === null || r.adr < band[0] || r.adr >= band[1])) return false;
         return true;
       });
     }
@@ -959,8 +989,9 @@
     const MAX_ROWS = 400;
 
     function draw(sorted) {
+      if (!body) return;
       const shown = sorted.slice(0, MAX_ROWS);
-      resultEl.textContent = sorted.length === rows.length
+      if (resultEl) resultEl.textContent = sorted.length === rows.length
         ? rows.length + " companies" + (sorted.length > MAX_ROWS ? " — showing the first " + MAX_ROWS : "")
         : sorted.length + " of " + rows.length + " companies" +
           (sorted.length > MAX_ROWS ? " — showing the first " + MAX_ROWS : "");
@@ -974,17 +1005,26 @@
           "<td>" + r.sector + "</td><td>" + r.industry + "</td>" +
           "<td>" + (r.close === null ? "—" : r.close.toFixed(2)) + "</td>" +
           '<td class="pct ' + pctClass(r.chg) + '">' + (r.chg === null ? "—" : fmtSignedPct(r.chg)) + "</td>" +
+          "<td>" + (r.adr === null ? "—" : r.adr.toFixed(1) + "%") + "</td>" +
           "<td>" + r.hits + "</td><td>" + r.last + "</td>" +
         "</tr>";
       }).join("");
     }
 
     function redrawTable() {
-      const shown = visibleRows();
-      draw(sortRows(shown, "hits", -1));
+      if (!table) return;
+      draw(sortRows(visibleRows(), "hits", -1));
     }
 
-    function redrawAll() { redrawTable(); drawComposition(); }
+    function drawGroups() {
+      const bars = document.querySelector(".composition");
+      const heat = document.getElementById("hilo-heatmap");
+      if (bars) bars.style.display = groupView === "bars" ? "" : "none";
+      if (heat) heat.style.display = groupView === "heat" ? "" : "none";
+      if (groupView === "bars") drawComposition(); else drawHeatmap();
+    }
+
+    function redrawAll() { redrawTable(); drawGroups(); }
 
     // ---- Composition: which groups these names are coming from ----
     //
@@ -1008,38 +1048,211 @@
     // nothing. A share of members is bounded at 100%, and 100% means something.
     let groupBy = "sector";
     let groupMode = "count";
+    let groupView = "heat";
+    // Group sizes must be counted WITHIN the selected index, not across the
+    // whole universe. The precomputed map covers all 3,311 priced names, so
+    // scoped to the S&P 500 it reported Finance as 846 members and diluted
+    // every participation figure roughly tenfold. Counted here instead, from
+    // the same universe the rows come from, and memoised because the answer
+    // only changes when the scope or the grouping does.
     const GROUP_MEMBERS = DATA.groupMembers || {};
-
-    function composition() {
-      const shown = visibleRows();
-      const totals = {};
-      shown.forEach(function (r) {
-        const key = groupBy === "sector" ? r.sector : r.industry;
-        if (key && key !== "—") totals[key] = (totals[key] || 0) + 1;
+    const memberCache = {};
+    function memberCounts() {
+      const key = groupBy + "|" + indexFilter;
+      if (memberCache[key]) return memberCache[key];
+      // With no index filter the precomputed map is already correct.
+      if (!indexFilter) {
+        memberCache[key] = GROUP_MEMBERS[groupBy] || {};
+        return memberCache[key];
+      }
+      const counts = {};
+      Object.keys(quotes).forEach(function (t) {
+        if (!inIndex(t)) return;
+        const tags = cls[t];
+        if (!tags) return;
+        const name = groupBy === "sector" ? tags[0] : tags[1];
+        if (name) counts[name] = (counts[name] || 0) + 1;
       });
-      const members = GROUP_MEMBERS[groupBy] || {};
-      const all = shown.length;
+      memberCache[key] = counts;
+      return counts;
+    }
 
-      return Object.keys(totals).map(function (k) {
+    // Both sides at once, per group, so "Finance is number one" stops being
+    // ambiguous. Reading the highs list and the lows list separately, Finance
+    // and Health Technology topped BOTH — which says nothing except that they
+    // are the two largest groups. Side by side on one row, a group with 40
+    // highs and 38 lows visibly cancels while one with 40 highs and 2 lows
+    // does not.
+    function composition() {
+      const period = namesInPeriod();
+      const hiTotals = {}, loTotals = {};
+      const seen = { hi: {}, lo: {} };
+      period.forEach(function (r) {
+        ["hi", "lo"].forEach(function (which) {
+          (((r[win] || {})[which]) || []).forEach(function (t) {
+            if (!inIndex(t) || seen[which][t]) return;
+            seen[which][t] = true;   // distinct companies, not daily hits
+            const tags = cls[t] || ["", ""];
+            const key = groupBy === "sector" ? tags[0] : tags[1];
+            if (!key) return;
+            const bucket = which === "hi" ? hiTotals : loTotals;
+            bucket[key] = (bucket[key] || 0) + 1;
+          });
+        });
+      });
+
+      const members = memberCounts();
+      const groups = {};
+      Object.keys(hiTotals).forEach(function (k) { groups[k] = true; });
+      Object.keys(loTotals).forEach(function (k) { groups[k] = true; });
+
+      return Object.keys(groups).map(function (k) {
+        const hi = hiTotals[k] || 0, lo = loTotals[k] || 0;
         const size = members[k] || 0;
-        // What fraction of this group's own members are on the list.
-        const rate = size ? 100 * totals[k] / size : null;
-        return { group: k, count: totals[k], size: size, rate: rate,
-                 share: all ? Math.round(100 * totals[k] / all) : 0,
-                 // A four-name industry at 100% is arithmetic, not a theme.
-                 eligible: size >= 5 };
+        return {
+          group: k, hi: hi, lo: lo, size: size,
+          // As a share of the group's own members, both sides. This is what
+          // makes a 40-name industry comparable with a 350-name one.
+          hiRate: size ? 100 * hi / size : 0,
+          loRate: size ? 100 * lo / size : 0,
+          eligible: size >= 5,
+        };
+      }).filter(function (g) {
+        return g.eligible && (g.hi || g.lo);
       }).sort(function (a, b) {
-        if (groupMode === "weighted") {
-          if (a.eligible !== b.eligible) return a.eligible ? -1 : 1;
-          const d = (b.rate || 0) - (a.rate || 0);
-          return d !== 0 ? d : b.count - a.count;
+        // Ranked by the GAP, not by either side. A group at the top is
+        // genuinely one-sided; a group in the middle is split.
+        const av = groupMode === "weighted" ? a.hiRate - a.loRate : a.hi - a.lo;
+        const bv = groupMode === "weighted" ? b.hiRate - b.loRate : b.hi - b.lo;
+        return bv - av;
+      });
+    }
+
+    // Top and bottom of the ranking, not the top 14 — the groups being sold
+    // are as much of the story as the ones being bought, and a straight
+    // "first 14" shows only the buying.
+    function compositionShown() {
+      const all = composition();
+      if (all.length <= 16) return all;
+      return all.slice(0, 8).concat(all.slice(-8));
+    }
+
+    // ---- Heat map ----
+    //
+    // The bar chart ranks groups but makes you read fourteen labels to find
+    // the shape of the market. A treemap gives it in one look, the way a
+    // TradingView heat map does: area is how big the group IS, colour is how
+    // one-sided it is. A big red block and a small green one is a different
+    // market from the reverse, and no ranking conveys that as fast.
+    //
+    // Squarified layout — rows are packed until adding another tile would make
+    // the aspect ratios worse, which keeps tiles near-square and readable
+    // rather than the slivers a naive slice-and-dice produces.
+    function squarify(items, x, y, w, h) {
+      const out = [];
+      const total = items.reduce(function (a, i) { return a + i.value; }, 0);
+      if (!total) return out;
+      let list = items.slice();
+      let scale = (w * h) / total;
+
+      function worst(row, side) {
+        const sum = row.reduce(function (a, i) { return a + i.value * scale; }, 0);
+        const mx = Math.max.apply(null, row.map(function (i) { return i.value * scale; }));
+        const mn = Math.min.apply(null, row.map(function (i) { return i.value * scale; }));
+        const s2 = sum * sum, s3 = side * side;
+        return Math.max(s3 * mx / s2, s2 / (s3 * mn));
+      }
+
+      while (list.length) {
+        const horizontal = w >= h;
+        const side = horizontal ? h : w;
+        let row = [list[0]];
+        let i = 1;
+        while (i < list.length && worst(row.concat([list[i]]), side) <= worst(row, side)) {
+          row.push(list[i]); i++;
         }
-        return b.count - a.count;
-      }).slice(0, 14);
+        const rowSum = row.reduce(function (a, it) { return a + it.value * scale; }, 0);
+        const thickness = rowSum / side;
+        let offset = 0;
+        row.forEach(function (it) {
+          const length = (it.value * scale) / thickness;
+          out.push(horizontal
+            ? { item: it, x: x, y: y + offset, w: thickness, h: length }
+            : { item: it, x: x + offset, y: y, w: length, h: thickness });
+          offset += length;
+        });
+        if (horizontal) { x += thickness; w -= thickness; } else { y += thickness; h -= thickness; }
+        list = list.slice(row.length);
+      }
+      return out;
+    }
+
+    // Net participation drives colour: (highs - lows) as a share of the
+    // group's members. Capped at 30% so one extreme group does not wash every
+    // other tile to grey — beyond that the colour is saturated anyway.
+    function heatColor(net) {
+      const capped = Math.max(-30, Math.min(30, net)) / 30;
+      const strength = Math.abs(capped);
+      const base = capped >= 0 ? [22, 163, 74] : [220, 38, 38];
+      const alpha = 0.12 + 0.78 * strength;
+      return "rgba(" + base[0] + "," + base[1] + "," + base[2] + "," + alpha.toFixed(3) + ")";
+    }
+
+    function drawHeatmap() {
+      const host = document.getElementById("hilo-heatmap");
+      if (!host) return;
+      const items = composition()
+        .map(function (g) {
+          return {
+            group: g.group, hi: g.hi, lo: g.lo, size: g.size,
+            net: g.size ? 100 * (g.hi - g.lo) / g.size : 0,
+            // Area is the group's SIZE, not its hit count, so the map keeps
+            // the same shape as you change window and timeframe and only the
+            // colours move. A map whose boxes jump around cannot be compared
+            // with the one you looked at yesterday.
+            value: g.size,
+          };
+        })
+        .sort(function (a, b) { return b.value - a.value; })
+        .slice(0, 40);
+
+      host.innerHTML = "";
+      if (!items.length) {
+        host.innerHTML = '<div class="empty-note">Nothing to show for this selection.</div>';
+        return;
+      }
+
+      const W = host.clientWidth || 900, H = host.clientHeight || 420;
+      squarify(items, 0, 0, W, H).forEach(function (t) {
+        const el = document.createElement("div");
+        el.className = "heat-tile";
+        el.style.left = t.x + "px";
+        el.style.top = t.y + "px";
+        el.style.width = Math.max(0, t.w - 2) + "px";
+        el.style.height = Math.max(0, t.h - 2) + "px";
+        el.style.background = heatColor(t.item.net);
+        el.title = t.item.group + " — " + t.item.hi + " highs, " + t.item.lo +
+                   " lows, of " + t.item.size + " members (net " +
+                   (t.item.net >= 0 ? "+" : "") + t.item.net.toFixed(1) + "%)";
+        // Below roughly this size a label is unreadable noise, so the tile
+        // carries only its colour and its tooltip.
+        if (t.w > 70 && t.h > 34) {
+          el.innerHTML = '<div class="heat-name">' + t.item.group + "</div>" +
+            '<div class="heat-net">' + (t.item.net >= 0 ? "+" : "") +
+            t.item.net.toFixed(0) + "%</div>";
+        }
+        el.addEventListener("click", function () {
+          const sel = groupBy === "sector" ? sectorSel : industrySel;
+          if (!sel) return;
+          sel.value = (sel.value === t.item.group) ? "" : t.item.group;
+          redrawAll();
+        });
+        host.appendChild(el);
+      });
     }
 
     function drawComposition() {
-      const items = composition();
+      const items = compositionShown();
       const colors = themeColors();
       const canvas = document.getElementById("hilo-composition-canvas");
       if (!canvas) return;
@@ -1047,18 +1260,22 @@
       if (!items.length) return;
 
       const weighted = groupMode === "weighted";
-      const color = side === "hi" ? colors.up : colors.down;
+      const hiOf_ = function (i) { return weighted ? i.hiRate : i.hi; };
+      const loOf_ = function (i) { return weighted ? i.loRate : i.lo; };
 
       charts["hilo-composition-canvas"] = new Chart(canvas, {
         type: "bar",
         data: {
           labels: items.map(function (i) { return i.group; }),
-          datasets: [{
-            label: weighted ? "% of the group" : "companies",
-            data: items.map(function (i) { return weighted ? (i.rate || 0) : i.count; }),
-            backgroundColor: color,
-            borderWidth: 0,
-          }],
+          datasets: [
+            // Lows are plotted NEGATIVE so they run left from a zero line.
+            // The axis then reads as one scale, and the eye compares bar
+            // lengths across the middle instead of across two charts.
+            { label: "New lows", data: items.map(function (i) { return -loOf_(i); }),
+              backgroundColor: colors.down, borderWidth: 0, stack: "s" },
+            { label: "New highs", data: items.map(function (i) { return hiOf_(i); }),
+              backgroundColor: colors.up, borderWidth: 0, stack: "s" },
+          ],
         },
         options: {
           indexAxis: "y",
@@ -1066,27 +1283,32 @@
           maintainAspectRatio: false,
           animation: false,
           plugins: {
-            legend: { display: false },
+            legend: { display: true, labels: { color: colors.text, boxWidth: 10, font: { size: 10 } } },
             tooltip: {
               callbacks: {
                 label: function (ctx) {
                   const i = items[ctx.dataIndex];
-                  return i.count + " of the group's " + i.size + " members" +
-                    (i.rate === null ? "" : " (" + Math.round(i.rate) + "%)") +
-                    " · " + i.share + "% of everything listed";
+                  const isHi = ctx.datasetIndex === 1;
+                  const n = isHi ? i.hi : i.lo;
+                  const rate = isHi ? i.hiRate : i.loRate;
+                  return (isHi ? "Highs: " : "Lows: ") + n + " of " + i.size +
+                    " members (" + Math.round(rate) + "%)";
                 },
               },
             },
           },
           scales: {
             x: {
+              stacked: true,
               ticks: {
                 color: colors.text, font: { size: 10 },
-                callback: function (v) { return weighted ? v + "%" : v; },
+                // The left half is drawn negative but represents a count of
+                // lows, not a negative number of anything.
+                callback: function (v) { return Math.abs(v) + (weighted ? "%" : ""); },
               },
               grid: { color: colors.grid },
             },
-            y: { ticks: { color: colors.text, font: { size: 10 }, autoSkip: false }, grid: { display: false } },
+            y: { stacked: true, ticks: { color: colors.text, font: { size: 10 }, autoSkip: false }, grid: { display: false } },
           },
           onClick: function (evt, els) {
             if (!els.length) return;
@@ -1095,8 +1317,7 @@
             // Clicking the group you are already filtered to clears it, so the
             // chart is a toggle rather than a one-way trip.
             sel.value = (sel.value === picked) ? "" : picked;
-            redrawTable();
-            drawComposition();
+            redrawAll();
           },
         },
       });
@@ -1110,8 +1331,8 @@
       // option.
       const secs = {}, inds = {};
       rows.forEach(function (r) { secs[r.sector] = true; inds[r.industry] = true; });
-      fillSelect(sectorSel, Object.keys(secs).sort(), sectorSel.value);
-      fillSelect(industrySel, Object.keys(inds).sort(), industrySel.value);
+      if (sectorSel) fillSelect(sectorSel, Object.keys(secs).sort(), sectorSel.value);
+      if (industrySel) fillSelect(industrySel, Object.keys(inds).sort(), industrySel.value);
 
       const period = filterByTimeframe(counts, tf);
       const n = namesInPeriod().length;
@@ -1123,16 +1344,20 @@
       const distinct = function (which) {
         const seen = {};
         namesInPeriod().forEach(function (r) {
-          (((r[win] || {})[which]) || []).forEach(function (t) { seen[t] = true; });
+          (((r[win] || {})[which]) || []).forEach(function (t) {
+            if (inIndex(t)) seen[t] = true;
+          });
         });
         return Object.keys(seen).length;
       };
-      hiEl.textContent = distinct("hi");
-      loEl.textContent = distinct("lo");
-      hiLabelEl.textContent = "companies at " + winLabel + " highs · " + tf;
-      loLabelEl.textContent = "companies at " + winLabel + " lows · " + tf;
+      const match = SCOPES.filter(function (s) { return s.code === indexFilter; })[0];
+      const scope = match ? match.label : "all listed";
+      if (hiEl) hiEl.textContent = distinct("hi");
+      if (loEl) loEl.textContent = distinct("lo");
+      if (hiLabelEl) hiLabelEl.textContent = scope + " at " + winLabel + " highs · " + tf;
+      if (loLabelEl) loLabelEl.textContent = scope + " at " + winLabel + " lows · " + tf;
 
-      if (leadEl) {
+      if (leadEl && table) {
         const last = period.length ? period[period.length - 1] : null;
         leadEl.textContent = last
           ? "Latest session " + last.date + ": " + (last[win] || {}).hi + " " + winLabel +
@@ -1143,7 +1368,7 @@
 
       const colors = themeColors();
       const dotR = dotRadius(period.length);
-      lineChart("hilo-screener-canvas", period.map(function (r) { return r.date; }), [
+      if (document.getElementById("hilo-screener-canvas")) lineChart("hilo-screener-canvas", period.map(function (r) { return r.date; }), [
         { label: winLabel + " highs", data: period.map(function (r) { return (r[win] || {}).hi; }),
           borderColor: colors.up, borderWidth: 1.5, pointRadius: dotR, tension: 0.15 },
         { label: winLabel + " lows", data: period.map(function (r) { return (r[win] || {}).lo; }),
@@ -1151,7 +1376,7 @@
       ]);
 
       redrawTable();
-      drawComposition();
+      drawGroups();
     }
 
     buildToggle("hilo-window", HILO_WINDOWS, function () { return win; },
@@ -1162,23 +1387,49 @@
       return [t, t === "ALL" ? "Since Inception" : t];
     }), function () { return tf; }, function (v) { tf = v; });
 
+    buildToggle("hilo-adr", [["", "Any"], ["low", "Low <3%"],
+                             ["mid", "Tradeable 3-7%"], ["high", "High >7%"]],
+                function () { return adrBand; }, function (v) { adrBand = v; });
+
     [sectorSel, industrySel].forEach(function (el) {
-      el.addEventListener("change", redrawAll);
+      if (el) el.addEventListener("change", redrawAll);
     });
-    searchEl.addEventListener("input", redrawAll);
-    attachSorting(table, [], function () {}, "hits", -1);
-    table.querySelectorAll("th[data-sort]").forEach(function (th) {
-      th.addEventListener("click", function () {
-        draw(sortRows(visibleRows(), th.dataset.sort,
-                      th.dataset.sort === "ticker" ? 1 : -1));
+    if (searchEl) searchEl.addEventListener("input", redrawAll);
+    if (table) {
+      table.querySelectorAll("th[data-sort]").forEach(function (th) {
+        th.addEventListener("click", function () {
+          draw(sortRows(visibleRows(), th.dataset.sort,
+                        th.dataset.sort === "ticker" ? 1 : -1));
+        });
       });
-    });
+    }
+    // Index scopes are supplied per country (S&P 500 / Nasdaq 100 / Russell
+    // 2000 for the US; Nifty 100 / Midcap 150 / Smallcap 250 / Nifty 500 for
+    // India). There is deliberately no "everything" option: the untracked tape
+    // is what the filter exists to exclude.
+    const SCOPES = DATA.screenerIndexes || [];
+    if (SCOPES.length) {
+      indexFilter = SCOPES[0].code;
+      buildToggle("hilo-index", SCOPES.map(function (s) { return [s.code, s.label]; }),
+                  function () { return indexFilter; }, function (v) { indexFilter = v; });
+    }
+    buildToggle("hilo-view", [["heat", "Heat map"], ["bars", "Bars"]],
+                function () { return groupView; }, function (v) { groupView = v; });
     buildToggle("hilo-groupby", [["sector", "By sector"], ["industry", "By industry"]],
                 function () { return groupBy; }, function (v) { groupBy = v; });
-    buildToggle("hilo-groupmode", [["count", "Count"], ["weighted", "vs its size"]],
+    buildToggle("hilo-groupmode", [["count", "Companies"], ["weighted", "% of group"]],
                 function () { return groupMode; }, function (v) { groupMode = v; });
 
-    makeRowsClickable(table);
+    if (table) makeRowsClickable(table);
+    if (window.ResizeObserver && document.getElementById("hilo-heatmap")) {
+      let last = 0;
+      new ResizeObserver(function () {
+        const w = document.getElementById("hilo-heatmap").clientWidth;
+        if (Math.abs(w - last) < 8) return;   // ignore sub-pixel churn
+        last = w;
+        if (groupView === "heat") drawHeatmap();
+      }).observe(document.getElementById("hilo-heatmap"));
+    }
     refresh();
   }
 

@@ -374,6 +374,7 @@ def _screener_body():
     return """
 <div class="empty-note">Counts are <b>distinct companies</b> over the selected period, not daily totals — a stock printing highs five days running is one company, not five. Pick a lookback, a period, then filter and click any row to send the ticker to the other panels.</div>
 <div class="screener-controls">
+  <div class="tf-toggle" id="hilo-index"></div>
   <div class="tf-toggle" id="hilo-window"></div>
   <div class="tf-toggle" id="hilo-side"></div>
 </div>
@@ -386,16 +387,9 @@ def _screener_body():
 <div class="hilo-lead"></div>
 <div class="tf-toggle" id="hilo-timeframe"></div>
 <div class="chart-wrap"><canvas id="hilo-screener-canvas"></canvas></div>
-<div class="composition">
-  <div class="composition-head">
-    <div class="composition-title">Where they are coming from</div>
-    <div class="tf-toggle" id="hilo-groupby"></div>
-    <div class="tf-toggle" id="hilo-groupmode"></div>
-  </div>
-  <div class="composition-note">Click a bar to filter the table to it.</div>
-  <div class="chart-wrap chart-tall"><canvas id="hilo-composition-canvas"></canvas></div>
-</div>
 <div class="screener-filters">
+  <span class="filter-label">ADR</span>
+  <div class="tf-toggle" id="hilo-adr"></div>
   <select id="hilo-sector"><option value="">All sectors</option></select>
   <select id="hilo-industry"><option value="">All industries</option></select>
   <input type="search" id="hilo-search" placeholder="Filter by ticker">
@@ -408,10 +402,37 @@ def _screener_body():
     <th data-sort="industry">Industry</th>
     <th data-sort="close">Close</th>
     <th data-sort="chg">1D %</th>
+    <th data-sort="adr" title="Average daily range over 20 sessions: mean of high/low - 1. How much room the stock gives you intraday.">ADR %</th>
     <th data-sort="hits" title="Sessions in the selected period on which it printed a new high or low">Sessions</th>
     <th data-sort="last" title="Most recent session on which it printed one">Latest</th>
   </tr></thead><tbody></tbody>
 </table></div>
+""".strip()
+
+
+def _groups_body():
+    return """
+<div class="empty-note">Distinct companies at new highs and new lows, by group. Lows extend left, highs extend right, ranked by the gap between them — so a group leading both sides sits in the middle, where it belongs, instead of topping both lists for no reason other than its size.</div>
+<div class="screener-controls">
+  <div class="tf-toggle" id="hilo-index"></div>
+  <div class="tf-toggle" id="hilo-window"></div>
+  <div class="tf-toggle" id="hilo-timeframe"></div>
+</div>
+<div class="composition-head">
+  <div class="tf-toggle" id="hilo-view"></div>
+  <div class="tf-toggle" id="hilo-groupby"></div>
+  <div class="tf-toggle" id="hilo-groupmode"></div>
+</div>
+<div class="heatmap" id="hilo-heatmap"></div>
+<div class="composition">
+  <div class="chart-wrap chart-tall"><canvas id="hilo-composition-canvas"></canvas></div>
+</div>
+<div class="heat-legend">
+  <span class="heat-swatch heat-neg"></span> more lows
+  <span class="heat-swatch heat-mid"></span> balanced
+  <span class="heat-swatch heat-pos"></span> more highs
+  <span class="heat-legend-note">Tile size is how many companies the group holds; colour is highs minus lows as a share of them. Click a tile to filter.</span>
+</div>
 """.strip()
 
 
@@ -462,6 +483,11 @@ def _screener_payload(country):
         "classification": classification,
         "sectorMembers": sector_member_counts(country),
         "groupMembers": group_members,
+        "indexMembership": _read_json("index_membership.json", {}),
+        "screenerIndexes": [
+            {"code": code, "label": label}
+            for code, label, _tv in config.SCREENER_INDEXES.get(country, [])
+        ],
     }
 
 
@@ -615,6 +641,12 @@ def render_all_panels(country):
         country, "panel-industries.html", "Industry Performance",
         _rank_body("Industry", "industry-table", "industry-drilldown", "industry"),
         ["industry_ranks"], series, generated_at,
+    ))
+
+    paths.append(render_panel(
+        country, "panel-groups.html", "Highs & Lows by Group",
+        _groups_body(), [], series, generated_at,
+        extra=_screener_payload(country),
     ))
 
     paths.append(render_panel(

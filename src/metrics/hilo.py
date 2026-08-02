@@ -40,6 +40,7 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 import pandas as pd
 import cache as cache_mod
+import config
 
 # Trading sessions per lookback. Keyed by the label the UI shows.
 WINDOWS = {"w13": 65, "w26": 130, "w52": 252}
@@ -118,12 +119,33 @@ def compute(price_cache, tickers, n_days, ticker_to_sector=None):
     return counts, names
 
 
-def last_quotes(price_cache, tickers):
-    """{ticker: [last_close, pct_change_1d]} — what the screener shows per row.
+def adr_percent(highs, lows, window=None):
+    """Average Daily Range as a percent: mean of (high/low - 1) over `window`.
 
-    Taken from the price cache rather than a quote call: the cache is already
-    loaded, already current as of the run, and this costs no API budget.
+    The measure Neil screens by, and one a percentage change cannot give you.
+    Two stocks can both be at a new high with the same 1-day move while one
+    travels 1% intraday and the other 7% — only the second is tradeable on a
+    stop that isn't inside the noise.
+
+    Uses the true daily range rather than close-to-close, which is why it needs
+    OHLC and not the close-only price cache.
     """
+    window = window or config.ADR_WINDOW
+    pairs = [(h, l) for h, l in zip(highs[-window:], lows[-window:])
+             if h and l and l > 0]
+    if len(pairs) < 5:
+        return None
+    return round(100 * sum(h / l - 1 for h, l in pairs) / len(pairs), 2)
+
+
+def last_quotes(price_cache, tickers, adr_by_ticker=None):
+    """{ticker: [last_close, pct_change_1d, adr_percent]} — the screener's row.
+
+    Close and change come from the price cache rather than a quote call: it is
+    already loaded, already current as of the run, and costs no API budget.
+    ADR is passed in, since it needs the OHLC the cache does not hold.
+    """
+    adr_by_ticker = adr_by_ticker or {}
     out = {}
     for t in tickers:
         s = cache_mod.to_series(price_cache, t)
@@ -132,7 +154,7 @@ def last_quotes(price_cache, tickers):
         last = float(s.iloc[-1])
         prev = float(s.iloc[-2]) if len(s) > 1 else None
         chg = round((last / prev - 1) * 100, 2) if prev else None
-        out[t] = [round(last, 2), chg]
+        out[t] = [round(last, 2), chg, adr_by_ticker.get(t)]
     return out
 
 

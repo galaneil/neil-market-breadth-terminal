@@ -191,3 +191,28 @@ def trend_thresholds(n_factors):
         int(round(TREND_BULL_FRACTION * n_factors)),
         int(round(TREND_BEAR_FRACTION * n_factors)),
     )
+
+# ── Screener index scopes ──────────────────────────────────────────────────
+# The screener only ever looks at real index constituents. Screening the whole
+# listed tape buries the names worth finding under shells and microcaps, and
+# Neil does not trade that paper. Values are TradingView's own index names,
+# matched exactly against the `indexes` field.
+SCREENER_INDEXES = {
+    "US": [
+        ("SPX", "S&P 500", "S&P 500"),
+        ("NDX", "Nasdaq 100", "NASDAQ 100"),
+        ("RUT", "Russell 2000", "Russell 2000"),
+    ],
+    "IN": [
+        ("N100", "Nifty 100", "Nifty 100"),
+        ("NMID", "Midcap 150", "Nifty MidCap 150"),
+        ("NSML", "Smallcap 250", "Nifty SmallCap 250"),
+        ("N500", "Nifty 500", "Nifty 500"),
+    ],
+}
+
+# ── ADR (Average Daily Range) ──────────────────────────────────────────────
+# Mean of (high/low - 1) over this many sessions, as a percent. It answers a
+# question a percentage move cannot: how much room a name gives you intraday.
+# A 1% ADR stock making new highs is not tradeable the way a 6% ADR one is.
+ADR_WINDOW = 20
