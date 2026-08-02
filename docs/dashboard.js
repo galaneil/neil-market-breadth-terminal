@@ -847,6 +847,217 @@
     setupTimeframeToggle(card.querySelector(".tf-toggle"), draw);
   }
 
+  // ---------- New highs / lows screener ----------
+  // The panel above this one counts hits per session. This one counts
+  // COMPANIES over a period, which is a different number and the one worth
+  // acting on: 215 distinct names made a 52-week high in the week to
+  // 2026-07-29, while the daily totals for that week sum past 400 because a
+  // stock printing highs all week is counted every day.
+  //
+  // Three lookbacks, because a 52-week high is a late signal for anything
+  // coming off a deep base — a stock 70% off its high can double and still be
+  // nowhere near a one-year high, but it will print 13-week highs immediately.
+  const HILO_WINDOWS = [["w13", "13-week"], ["w26", "26-week"], ["w52", "52-week"]];
+
+  function renderHiloScreener() {
+    const table = document.getElementById("hilo-screener-table");
+    if (!table) return;
+
+    const counts = DATA.hiloCounts || [];
+    const names = DATA.hiloNames || [];
+    const quotes = DATA.quotes || {};
+    const cls = DATA.classification || {};
+    const body = table.querySelector("tbody");
+    const hiEl = document.querySelector("[data-hi]");
+    const loEl = document.querySelector("[data-lo]");
+    const hiLabelEl = document.querySelector("[data-hi-label]");
+    const loLabelEl = document.querySelector("[data-lo-label]");
+    const leadEl = document.querySelector(".hilo-lead");
+    const sectorSel = document.getElementById("hilo-sector");
+    const industrySel = document.getElementById("hilo-industry");
+    const searchEl = document.getElementById("hilo-search");
+    const resultEl = document.getElementById("hilo-result-count");
+
+    let win = "w52";
+    let side = "hi";
+    let tf = "1M";
+    let rows = [];
+
+    function buildToggle(id, items, get, set) {
+      const host = document.getElementById(id);
+      if (!host) return;
+      host.innerHTML = "";
+      items.forEach(function (item) {
+        const btn = document.createElement("button");
+        btn.className = "tf-btn" + (item[0] === get() ? " active" : "");
+        btn.textContent = item[1];
+        btn.addEventListener("click", function () {
+          host.querySelectorAll(".tf-btn").forEach(function (b) { b.classList.remove("active"); });
+          btn.classList.add("active");
+          set(item[0]);
+          refresh();
+        });
+        host.appendChild(btn);
+      });
+    }
+
+    // Sessions in the chosen period that we hold NAMES for. Ticker lists are
+    // capped at six months while counts run a full year, so a longer timeframe
+    // silently falls back to the names we have rather than under-reporting.
+    function namesInPeriod() {
+      const filtered = filterByTimeframe(names, tf);
+      return filtered.length ? filtered : names;
+    }
+
+    // One row per distinct company, with how many sessions it printed on and
+    // when it last did. The session count separates a name making highs every
+    // day from one that touched a high once and rolled over.
+    function buildRows() {
+      const period = namesInPeriod();
+      const hits = {}, lastSeen = {};
+      period.forEach(function (r) {
+        const list = ((r[win] || {})[side]) || [];
+        list.forEach(function (t) {
+          hits[t] = (hits[t] || 0) + 1;
+          if (!lastSeen[t] || r.date > lastSeen[t]) lastSeen[t] = r.date;
+        });
+      });
+      return Object.keys(hits).map(function (t) {
+        const tags = cls[t] || ["", ""];
+        const q = quotes[t] || [null, null];
+        return { ticker: t, sector: tags[0] || "—", industry: tags[1] || "—",
+                 close: q[0], chg: q[1], hits: hits[t], last: lastSeen[t] };
+      });
+    }
+
+    function fillSelect(sel, values, keepValue) {
+      const first = sel.options[0].cloneNode(true);
+      sel.innerHTML = "";
+      sel.appendChild(first);
+      values.forEach(function (v) {
+        const o = document.createElement("option");
+        o.value = v; o.textContent = v;
+        sel.appendChild(o);
+      });
+      if (keepValue && values.indexOf(keepValue) !== -1) sel.value = keepValue;
+    }
+
+    function visibleRows() {
+      const s = sectorSel.value, ind = industrySel.value;
+      const q = (searchEl.value || "").trim().toUpperCase();
+      return rows.filter(function (r) {
+        if (s && r.sector !== s) return false;
+        if (ind && r.industry !== ind) return false;
+        if (q && r.ticker.indexOf(q) === -1) return false;
+        return true;
+      });
+    }
+
+    // A broad screen returns 1,500+ names, and building that many rows makes
+    // the panel stutter inside an iframe. The list is always sorted, so the cap
+    // only ever hides the tail — narrow with the filters to see further in.
+    const MAX_ROWS = 400;
+
+    function draw(sorted) {
+      const shown = sorted.slice(0, MAX_ROWS);
+      resultEl.textContent = sorted.length === rows.length
+        ? rows.length + " companies" + (sorted.length > MAX_ROWS ? " — showing the first " + MAX_ROWS : "")
+        : sorted.length + " of " + rows.length + " companies" +
+          (sorted.length > MAX_ROWS ? " — showing the first " + MAX_ROWS : "");
+      if (!sorted.length) {
+        body.innerHTML = '<tr><td colspan="7" class="empty-note">Nothing matches.</td></tr>';
+        return;
+      }
+      body.innerHTML = shown.map(function (r) {
+        return '<tr data-ticker="' + r.ticker + '">' +
+          '<td class="name-cell">' + logoImg(r.ticker) + "<span><b>" + r.ticker + "</b></span></td>" +
+          "<td>" + r.sector + "</td><td>" + r.industry + "</td>" +
+          "<td>" + (r.close === null ? "—" : r.close.toFixed(2)) + "</td>" +
+          '<td class="pct ' + pctClass(r.chg) + '">' + (r.chg === null ? "—" : fmtSignedPct(r.chg)) + "</td>" +
+          "<td>" + r.hits + "</td><td>" + r.last + "</td>" +
+        "</tr>";
+      }).join("");
+    }
+
+    function redrawTable() {
+      const shown = visibleRows();
+      draw(sortRows(shown, "hits", -1));
+    }
+
+    function refresh() {
+      rows = buildRows();
+
+      // Filter options come from the rows actually on screen, so a sector with
+      // nothing making new highs this week does not sit in the list as a dead
+      // option.
+      const secs = {}, inds = {};
+      rows.forEach(function (r) { secs[r.sector] = true; inds[r.industry] = true; });
+      fillSelect(sectorSel, Object.keys(secs).sort(), sectorSel.value);
+      fillSelect(industrySel, Object.keys(inds).sort(), industrySel.value);
+
+      const period = filterByTimeframe(counts, tf);
+      const n = namesInPeriod().length;
+      const sideLabel = side === "hi" ? "highs" : "lows";
+      const winLabel = HILO_WINDOWS.filter(function (w) { return w[0] === win; })[0][1];
+
+      // Distinct companies on each side over the period — computed from the
+      // names, which is the only way to get it right.
+      const distinct = function (which) {
+        const seen = {};
+        namesInPeriod().forEach(function (r) {
+          (((r[win] || {})[which]) || []).forEach(function (t) { seen[t] = true; });
+        });
+        return Object.keys(seen).length;
+      };
+      hiEl.textContent = distinct("hi");
+      loEl.textContent = distinct("lo");
+      hiLabelEl.textContent = "companies at " + winLabel + " highs · " + tf;
+      loLabelEl.textContent = "companies at " + winLabel + " lows · " + tf;
+
+      if (leadEl) {
+        const last = period.length ? period[period.length - 1] : null;
+        leadEl.textContent = last
+          ? "Latest session " + last.date + ": " + (last[win] || {}).hi + " " + winLabel +
+            " highs, " + (last[win] || {}).lo + " lows · showing " + sideLabel +
+            " over " + n + " session" + (n === 1 ? "" : "s")
+          : "";
+      }
+
+      const colors = themeColors();
+      const dotR = dotRadius(period.length);
+      lineChart("hilo-screener-canvas", period.map(function (r) { return r.date; }), [
+        { label: winLabel + " highs", data: period.map(function (r) { return (r[win] || {}).hi; }),
+          borderColor: colors.up, borderWidth: 1.5, pointRadius: dotR, tension: 0.15 },
+        { label: winLabel + " lows", data: period.map(function (r) { return (r[win] || {}).lo; }),
+          borderColor: colors.down, borderWidth: 1.5, pointRadius: dotR, tension: 0.15 },
+      ]);
+
+      redrawTable();
+    }
+
+    buildToggle("hilo-window", HILO_WINDOWS, function () { return win; },
+                function (v) { win = v; });
+    buildToggle("hilo-side", [["hi", "New highs"], ["lo", "New lows"]],
+                function () { return side; }, function (v) { side = v; });
+    buildToggle("hilo-timeframe", TIMEFRAMES.map(function (t) {
+      return [t, t === "ALL" ? "Since Inception" : t];
+    }), function () { return tf; }, function (v) { tf = v; });
+
+    [sectorSel, industrySel].forEach(function (el) {
+      el.addEventListener("change", redrawTable);
+    });
+    searchEl.addEventListener("input", redrawTable);
+    attachSorting(table, [], function () {}, "hits", -1);
+    table.querySelectorAll("th[data-sort]").forEach(function (th) {
+      th.addEventListener("click", function () {
+        draw(sortRows(visibleRows(), th.dataset.sort,
+                      th.dataset.sort === "ticker" ? 1 : -1));
+      });
+    });
+    makeRowsClickable(table);
+    refresh();
+  }
+
   // ---------- Sector / industry rank tables + drill-down ----------
   function renderRankPanel(seriesKey, itemsField, nameField, tableId, drilldownId) {
     const rows = S[seriesKey] || [];
@@ -1855,6 +2066,7 @@
   renderTmleLeaders();
   renderTmleEmerging();
   renderTmleStock();
+  renderHiloScreener();
 
   // Each grid container's data-keys attribute lists which series to render
   // there (comma-separated). This lets the same script serve both the full

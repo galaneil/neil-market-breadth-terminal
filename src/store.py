@@ -158,6 +158,20 @@ def write_breadth(country, breadth_record):
         })
 
 
+def write_hilo(country, count_records, name_records, quotes):
+    """Multi-window high/low data: counts accumulate, names and quotes are
+    snapshots rewritten each run (they describe the present, not a series)."""
+    for record in count_records:
+        upsert_jsonl(series_path(country, "hilo_counts.jsonl"), record)
+
+    for filename, payload in (("hilo_names.json", name_records),
+                              ("hilo_quotes.json", quotes)):
+        path = series_path(country, filename)
+        os.makedirs(os.path.dirname(path), exist_ok=True)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, separators=(",", ":"))
+
+
 def write_breadth_members(country, counts):
     """{sector: member count} for the breadth universe, rewritten each run."""
     path = series_path(country, "breadth_sector_members.json")

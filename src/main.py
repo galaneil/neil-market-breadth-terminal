@@ -37,7 +37,7 @@ import render
 import tv_industry
 import yf_client
 from fmp_client import FMPClient
-from metrics import (indices, sectors, industries, breadth, environment,
+from metrics import (indices, sectors, industries, breadth, environment, hilo,
                      groups as groups_mod, relative_strength as rs_mod)
 from tmle import config as tmle_config, run as tmle_run
 
@@ -201,6 +201,25 @@ def run_country(code, client=None):
     # Sector weights for the breadth universe specifically, so the panel can
     # ask "more highs than its size implies?" rather than "most highs", which
     # the largest sector wins by default.
+    # New highs/lows at 13, 26 and 52 weeks, with the ticker names — the
+    # screener's data. Same price cache, no extra API calls.
+    # Run over EVERY priced name, not the breadth universe. Breadth counts are
+    # a property of the index and are correctly scoped to its 1,500 members,
+    # but a screener scoped that way cannot show the names worth finding —
+    # AAOI is not in the S&P 1500, and the turns Neil is hunting happen in
+    # exactly the smaller names the index excludes.
+    log(f"{code}: building high/low screener data (13/26/52 week)...")
+    screener_tickers = [t for t in all_price_tickers if t in ticker_to_sector]
+    hilo_counts, hilo_names = hilo.compute(price_cache, screener_tickers, n_days,
+                                           ticker_to_sector)
+    store.write_hilo(code, hilo_counts, hilo_names,
+                     hilo.last_quotes(price_cache, screener_tickers))
+    if hilo_counts:
+        last = hilo_counts[-1]
+        log("  " + " · ".join(
+            f"{hilo.WINDOW_LABELS[k]}: {last[k]['hi']}h/{last[k]['lo']}l"
+            for k in hilo.WINDOWS))
+
     store.write_breadth_members(code, {
         s: sum(1 for t in stock_tickers if ticker_to_sector.get(t) == s)
         for s in sorted(set(filter(None, (ticker_to_sector.get(t) for t in stock_tickers))))

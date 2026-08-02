@@ -346,6 +346,77 @@ def _tmle_latest(country):
     return {"date": latest["date"], "leaders": leaders, "emerging": emerging[:60]}
 
 
+def _screener_body():
+    return """
+<div class="empty-note">Counts are <b>distinct companies</b> over the selected period, not daily totals — a stock printing highs five days running is one company, not five. Pick a lookback, a period, then filter and click any row to send the ticker to the other panels.</div>
+<div class="screener-controls">
+  <div class="tf-toggle" id="hilo-window"></div>
+  <div class="tf-toggle" id="hilo-side"></div>
+</div>
+<div class="hilo-pair">
+  <div class="hilo-side"><div class="card-value up" data-hi>&nbsp;</div>
+    <div class="hilo-label" data-hi-label>&nbsp;</div></div>
+  <div class="hilo-side"><div class="card-value down" data-lo>&nbsp;</div>
+    <div class="hilo-label" data-lo-label>&nbsp;</div></div>
+</div>
+<div class="hilo-lead"></div>
+<div class="tf-toggle" id="hilo-timeframe"></div>
+<div class="chart-wrap"><canvas id="hilo-screener-canvas"></canvas></div>
+<div class="screener-filters">
+  <select id="hilo-sector"><option value="">All sectors</option></select>
+  <select id="hilo-industry"><option value="">All industries</option></select>
+  <input type="search" id="hilo-search" placeholder="Filter by ticker">
+  <span id="hilo-result-count"></span>
+</div>
+<div class="table-wrap"><table id="hilo-screener-table">
+  <thead><tr>
+    <th data-sort="ticker">Ticker</th>
+    <th data-sort="sector">Sector</th>
+    <th data-sort="industry">Industry</th>
+    <th data-sort="close">Close</th>
+    <th data-sort="chg">1D %</th>
+    <th data-sort="hits" title="Sessions in the selected period on which it printed a new high or low">Sessions</th>
+    <th data-sort="last" title="Most recent session on which it printed one">Latest</th>
+  </tr></thead><tbody></tbody>
+</table></div>
+""".strip()
+
+
+def _screener_payload(country):
+    """Everything the screener page needs, and nothing else.
+
+    The stored counts file carries a per-sector breakdown for every session and
+    window, which the screener's chart does not use — stripping it here halves
+    the page weight, and a Notion embed has to parse all of it before first
+    paint.
+    """
+    data_dir = config.data_dir(country)
+
+    def _read_json(name, default):
+        path = os.path.join(data_dir, name)
+        if not os.path.exists(path):
+            return default
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+
+    counts = store.read_jsonl(os.path.join(data_dir, "hilo_counts.jsonl"))
+    compact = []
+    for row in counts:
+        entry = {"date": row["date"]}
+        for key in ("w13", "w26", "w52"):
+            w = row.get(key) or {}
+            entry[key] = {"hi": w.get("hi", 0), "lo": w.get("lo", 0)}
+        compact.append(entry)
+
+    return {
+        "hiloCounts": compact,
+        "hiloNames": _read_json("hilo_names.json", []),
+        "quotes": _read_json("hilo_quotes.json", {}),
+        "classification": _load_classification(country),
+        "sectorMembers": sector_member_counts(country),
+    }
+
+
 def _breadth_body(key):
     return f'<div class="card-grid" id="breadth-grid" data-keys="{key}"></div>'
 
@@ -495,6 +566,12 @@ def render_all_panels(country):
         country, "panel-industries.html", "Industry Performance",
         _rank_body("Industry", "industry-table", "industry-drilldown", "industry"),
         ["industry_ranks"], series, generated_at,
+    ))
+
+    paths.append(render_panel(
+        country, "panel-screener.html", "New Highs & Lows Screener",
+        _screener_body(), [], series, generated_at,
+        extra=_screener_payload(country),
     ))
 
     members = sector_member_counts(country)
