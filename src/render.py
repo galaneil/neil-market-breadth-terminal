@@ -40,6 +40,11 @@ COMMON_SERIES_FILES = {
     "industry_ranks": "industry_ranks.jsonl",
     "breadth_adv_decl": "breadth_adv_decl.jsonl",
     "breadth_new_hilo": "breadth_new_hilo.jsonl",
+    # Same file, second view. The net figure answers "which side is winning";
+    # it cannot tell 200-vs-190 from 12-vs-2, which are opposite markets with
+    # the same net of 10. This key carries the two raw counts so both are
+    # readable on their own.
+    "breadth_hilo_counts": "breadth_new_hilo.jsonl",
     "breadth_pct_up20": "breadth_pct_up20.jsonl",
     "breadth_pct_up30": "breadth_pct_up30.jsonl",
     "breadth_pct_down20": "breadth_pct_down20.jsonl",
@@ -49,6 +54,7 @@ COMMON_SERIES_FILES = {
 BREADTH_LABELS = {
     "breadth_adv_decl": "Net Advancers − Decliners",
     "breadth_new_hilo": "Net New Highs − New Lows",
+    "breadth_hilo_counts": "52-Week Highs & Lows",
     "breadth_pct_up20": "% Up 20%+ (5D)",
     "breadth_pct_up30": "% Up 30%+ (5D)",
     "breadth_pct_down20": "% Down 20%+ (5D)",
@@ -237,6 +243,7 @@ def build_replay_payload(country, series, generated_at):
         "sectors": _compact_groups(series.get("sector_ranks", []), "sectors", "sector"),
         "industries": _compact_groups(series.get("industry_ranks", []), "industries", "industry"),
         "classification": _load_classification(country),
+        "sectorMembers": sector_member_counts(country),
     }
 
 
@@ -253,8 +260,10 @@ def _tmle_leaders_body():
     <th data-sort="composite">Score</th>
     <th data-sort="F1">F1</th><th data-sort="F4">F4</th>
     <th data-sort="F4B">F4B</th><th data-sort="F5">F5</th>
-    <th data-sort="gain">Move</th><th data-sort="drawdown">Off high</th>
-    <th data-sort="episode_days">Days</th><th data-sort="stage">Stage</th>
+    <th data-sort="gain" title="Rise from the low this advance started at">Up from low</th>
+    <th data-sort="drawdown" title="How far below the highest close of this advance">Off high</th>
+    <th data-sort="episode_days" title="Trading sessions since this advance began">Sessions in move</th>
+    <th data-sort="stage">Stage</th>
   </tr></thead><tbody></tbody>
 </table></div>
 """.strip()
@@ -266,9 +275,11 @@ def _tmle_emerging_body():
 <div class="table-wrap"><table id="tmle-emerging-table">
   <thead><tr>
     <th data-sort="ticker">Ticker</th><th data-sort="composite">Score</th>
-    <th data-sort="d4">4-week change</th><th data-sort="d12">12-week change</th>
-    <th data-sort="gain">Move</th><th data-sort="drawdown">Off high</th>
-    <th data-sort="episode_days">Days</th>
+    <th data-sort="d4" title="Change in the composite score over 4 weeks, in points">4-week change (pts)</th>
+    <th data-sort="d12" title="Change in the composite score over 12 weeks, in points">12-week change (pts)</th>
+    <th data-sort="gain" title="Rise from the low this advance started at">Up from low</th>
+    <th data-sort="drawdown" title="How far below the highest close of this advance">Off high</th>
+    <th data-sort="episode_days" title="Trading sessions since this advance began">Sessions in move</th>
   </tr></thead><tbody></tbody>
 </table></div>
 """.strip()
@@ -384,8 +395,34 @@ def _write_panel(country, filename, title, body_html, payload, generated_at,
     return out_path
 
 
+def sector_member_counts(country):
+    """{sector: how many breadth-universe members it has}.
+
+    Needed because a raw count of new highs rewards the biggest sector by
+    membership rather than the strongest one. Finance is 348 of 1,500 US names,
+    so it tops a raw count on an average day without leading anything. Dividing
+    by these weights turns "most highs" into "most highs relative to its size",
+    which is the question actually being asked.
+
+    Counted over the BREADTH universe (the 1,500 names the highs and lows are
+    measured across), not the full classified list — the classification covers
+    every priced name, and dividing a breadth share by a whole-market weight
+    understates every sector's true concentration.
+    """
+    path = os.path.join(config.data_dir(country), "breadth_sector_members.json")
+    if os.path.exists(path):
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    # Fallback for a country whose pipeline has not written the file yet.
+    counts = {}
+    for tags in _load_classification(country).values():
+        if tags and tags[0]:
+            counts[tags[0]] = counts.get(tags[0], 0) + 1
+    return counts
+
+
 def render_panel(country, filename, title, body_html, data_keys, series, generated_at,
-                 chart_lib="chartjs"):
+                 chart_lib="chartjs", extra=None):
     """Renders one standalone single-panel page, embedding only `data_keys`
     from the full series set (keeps individual embed pages lightweight).
 
@@ -399,6 +436,7 @@ def render_panel(country, filename, title, body_html, data_keys, series, generat
         "indexLabels": index_labels(country),
         "series": {k: series.get(k, []) for k in data_keys},
     }
+    payload.update(extra or {})
     return _write_panel(
         country, filename, title, body_html, payload, generated_at,
         needs_chartjs=(chart_lib == "chartjs"),
@@ -459,10 +497,14 @@ def render_all_panels(country):
         ["industry_ranks"], series, generated_at,
     ))
 
+    members = sector_member_counts(country)
     for key, label in BREADTH_LABELS.items():
         filename = f"panel-{key.replace('_', '-')}.html"
+        # Only the highs/lows counts panel needs the sector weights, and it is
+        # the one panel that would mislead without them.
+        extra = {"sectorMembers": members} if key == "breadth_hilo_counts" else None
         paths.append(render_panel(country, filename, label, _breadth_body(key),
-                                  [key], series, generated_at))
+                                  [key], series, generated_at, extra=extra))
 
     if cfg.get("run_tmle"):
         paths.extend(render_tmle_panels(country, generated_at))

@@ -141,6 +141,10 @@ def write_breadth(country, breadth_record):
         "new_highs": breadth_record["new_highs"],
         "new_lows": breadth_record["new_lows"],
         "net": breadth_record["net_new_hilo"],
+        # Which sectors those highs and lows came from. Only non-zero sectors
+        # are present, so a quiet day carries a near-empty map.
+        "hi_by_sector": breadth_record.get("hi_by_sector") or {},
+        "lo_by_sector": breadth_record.get("lo_by_sector") or {},
     })
     for metric_key, filename in [
         ("pct_up20", "breadth_pct_up20.jsonl"),
@@ -152,6 +156,14 @@ def write_breadth(country, breadth_record):
             "date": date_str,
             "value": breadth_record[metric_key],
         })
+
+
+def write_breadth_members(country, counts):
+    """{sector: member count} for the breadth universe, rewritten each run."""
+    path = series_path(country, "breadth_sector_members.json")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(counts, f, indent=1, sort_keys=True)
 
 
 def read_jsonl(path):

@@ -648,6 +648,205 @@
     });
   }
 
+  // ---------- 52-week highs and lows, as two separate counts ----------
+  // The net card next to this one collapses both sides into one number, which
+  // hides the thing that matters: 210 highs against 200 lows and 12 against 2
+  // both net to +10, and they are not the same market. Here each side keeps its
+  // own number and its own line.
+  //
+  // The headline is the LATEST session (the number to write down), while the
+  // sub-line carries the average over the selected timeframe — the opposite
+  // emphasis to the other breadth cards, because a raw count is what gets
+  // logged and an average is the context for it.
+  function renderHiLoCountsCard(seriesKey, label, grid) {
+    const rows = S[seriesKey] || [];
+    const card = document.createElement("div");
+    card.className = "card";
+    grid.appendChild(card);
+    const canvasId = seriesKey + "-canvas";
+
+    if (!rows.length) {
+      card.innerHTML = '<div class="card-title">' + label + '</div><div class="empty-note">No data yet.</div>';
+      return;
+    }
+
+    const latest = rows[rows.length - 1];
+
+    // Every sector that has ever contributed a high or a low, so the selector
+    // is built from the data rather than a hardcoded taxonomy — the US and
+    // India use different sector names and neither is enumerated here.
+    const sectorSet = {};
+    rows.forEach(function (r) {
+      Object.keys(r.hi_by_sector || {}).forEach(function (s) { sectorSet[s] = true; });
+      Object.keys(r.lo_by_sector || {}).forEach(function (s) { sectorSet[s] = true; });
+    });
+    const sectors = Object.keys(sectorSet).sort();
+
+    // A row's count for the current selection: the whole-market total, or one
+    // sector's share of it. Rows written before sector composition was stored
+    // have no map at all, which reads as zero rather than breaking the line.
+    function hiOf(r, sector) {
+      return sector ? ((r.hi_by_sector || {})[sector] || 0) : r.new_highs;
+    }
+    function loOf(r, sector) {
+      return sector ? ((r.lo_by_sector || {})[sector] || 0) : r.new_lows;
+    }
+
+    // Which sector is contributing more highs (or lows) than its size alone
+    // would produce.
+    //
+    // A RAW count answers the wrong question. Finance is 348 of the 1,500 US
+    // names — 23% of the universe — so it tops a raw count on an ordinary day
+    // without leading anything at all. Over the full history it supplied 23% of
+    // all new highs: exactly its weight, i.e. no signal. So the leader is
+    // chosen by share ÷ weight, and the multiple is shown, which is the
+    // "is this sector genuinely strong or just big" test.
+    //
+    // The minimum-count guard stops a three-member sector with two highs from
+    // claiming an 8x lead off a sample too small to mean anything.
+    const MEMBERS = DATA.sectorMembers || {};
+    const UNIVERSE = Object.keys(MEMBERS).reduce(function (a, s) { return a + MEMBERS[s]; }, 0);
+
+    function concentration(items, field) {
+      const totals = {};
+      let all = 0;
+      items.forEach(function (r) {
+        const m = r[field];
+        // Sessions stored before sector composition existed have no map. They
+        // are skipped on both sides, so the share is a percentage of the days
+        // it can actually account for rather than a diluted one.
+        if (!m) return;
+        Object.keys(m).forEach(function (s) { totals[s] = (totals[s] || 0) + m[s]; });
+        all += (field === "hi_by_sector" ? r.new_highs : r.new_lows);
+      });
+      const names = Object.keys(totals);
+      if (!names.length || !all) return null;
+
+      // A small sector clears a low bar on noise: Communications is ~15 names,
+      // and 4 hits out of 78 read as an 8.5x lead. Requiring a tenth of the
+      // total keeps the claim proportional to the sample it rests on.
+      const floor = Math.max(5, all * 0.10);
+      const eligible = names.filter(function (s) { return totals[s] >= floor; });
+      const pool = eligible.length ? eligible : names;
+
+      function weightOf(s) {
+        return UNIVERSE && MEMBERS[s] ? MEMBERS[s] / UNIVERSE : null;
+      }
+      function ratioOf(s) {
+        const w = weightOf(s);
+        return w ? (totals[s] / all) / w : 0;
+      }
+      pool.sort(function (a, b) {
+        const d = ratioOf(b) - ratioOf(a);
+        return d !== 0 ? d : totals[b] - totals[a];
+      });
+      const top = pool[0];
+      const w = weightOf(top);
+      return {
+        sector: top, count: totals[top], total: all,
+        share: Math.round(100 * totals[top] / all),
+        weight: w === null ? null : Math.round(100 * w),
+        ratio: w ? (totals[top] / all) / w : null,
+      };
+    }
+
+    function leadPhrase(c, kind, cls) {
+      if (!c) return "";
+      const ratio = c.ratio === null ? "" :
+        ' <span class="hilo-ratio">' + c.ratio.toFixed(1) + "&times; its " + c.weight + "% of the market</span>";
+      return kind + ' led by <b class="' + cls + '">' + c.sector + "</b> — " +
+        c.count + " of " + c.total + " (" + c.share + "%)" + ratio;
+    }
+
+    card.innerHTML =
+      '<div class="card-title">' + label + "</div>" +
+      '<div class="hilo-pair">' +
+        '<div class="hilo-side"><div class="card-value up" data-hi>' + latest.new_highs + "</div>" +
+          '<div class="hilo-label" data-hi-label>new highs</div></div>' +
+        '<div class="hilo-side"><div class="card-value down" data-lo>' + latest.new_lows + "</div>" +
+          '<div class="hilo-label" data-lo-label>new lows</div></div>' +
+      "</div>" +
+      '<div class="card-sub">&nbsp;</div>' +
+      (sectors.length
+        ? '<div class="hilo-lead"></div>' +
+          '<select class="sector-filter"><option value="">All sectors</option>' +
+          sectors.map(function (s) { return '<option value="' + s + '">' + s + "</option>"; }).join("") +
+          "</select>"
+        : "") +
+      '<div class="tf-toggle"></div>' +
+      '<div class="chart-wrap"><canvas id="' + canvasId + '"></canvas></div>';
+
+    const subEl = card.querySelector(".card-sub");
+    const hiEl = card.querySelector("[data-hi]");
+    const loEl = card.querySelector("[data-lo]");
+    const hiLabelEl = card.querySelector("[data-hi-label]");
+    const loLabelEl = card.querySelector("[data-lo-label]");
+    const leadEl = card.querySelector(".hilo-lead");
+    const selectEl = card.querySelector(".sector-filter");
+    let sector = "";
+    let currentTf = null;
+
+    function draw(tf) {
+      currentTf = tf || currentTf;
+      const filtered = filterByTimeframe(rows, currentTf);
+      const colors = themeColors();
+      const dotR = dotRadius(filtered.length);
+      const n = filtered.length;
+      const hiData = filtered.map(function (r) { return hiOf(r, sector); });
+      const loData = filtered.map(function (r) { return loOf(r, sector); });
+
+      // The headline follows the timeframe. Pinned to the latest session it
+      // made the buttons look broken: filtering to Electronic Technology and
+      // stepping 1W -> 1M -> YTD left "1 high / 2 lows" frozen on screen while
+      // everything below it moved. The daily average is the figure that varies
+      // with the window; the latest session moves to the sub-line, where it is
+      // still there to be logged.
+      const mean = function (a) {
+        return a.length ? a.reduce(function (x, y) { return x + y; }, 0) / a.length : 0;
+      };
+      // A sector averaging 0.4 highs a day is not averaging "0" — under ten,
+      // rounding to a whole number throws away the signal.
+      const show = function (v) { return v >= 10 ? String(Math.round(v)) : v.toFixed(1); };
+      const tfName = currentTf === "ALL" ? "since inception" : currentTf;
+      const hiLatest = hiOf(latest, sector), loLatest = loOf(latest, sector);
+
+      hiEl.textContent = show(mean(hiData));
+      loEl.textContent = show(mean(loData));
+      hiLabelEl.textContent = "new highs/day · " + tfName;
+      loLabelEl.textContent = "new lows/day · " + tfName;
+
+      subEl.textContent =
+        (sector ? sector + " · " : "") +
+        "latest " + latest.date + ": " + hiLatest + " high" + (hiLatest === 1 ? "" : "s") +
+        ", " + loLatest + " low" + (loLatest === 1 ? "" : "s") +
+        " · peaks " + Math.max.apply(null, hiData) + " / " + Math.max.apply(null, loData) +
+        " over " + n + " session" + (n === 1 ? "" : "s");
+
+      if (leadEl) {
+        const h = leadPhrase(concentration(filtered, "hi_by_sector"), "Highs", "up");
+        const l = leadPhrase(concentration(filtered, "lo_by_sector"), "Lows", "down");
+        leadEl.innerHTML = h + (h && l ? "<br>" : "") + l;
+      }
+
+      lineChart(canvasId, filtered.map(function (r) { return r.date; }), [
+        { label: "New highs" + (sector ? " — " + sector : ""), data: hiData,
+          borderColor: colors.up, borderWidth: 1.5, pointRadius: dotR,
+          pointBackgroundColor: colors.up, tension: 0.15 },
+        { label: "New lows" + (sector ? " — " + sector : ""), data: loData,
+          borderColor: colors.down, borderWidth: 1.5, pointRadius: dotR,
+          pointBackgroundColor: colors.down, tension: 0.15 },
+      ]);
+    }
+
+    if (selectEl) {
+      selectEl.addEventListener("change", function () {
+        sector = selectEl.value;
+        draw();
+      });
+    }
+    setupTimeframeToggle(card.querySelector(".tf-toggle"), draw);
+  }
+
   // ---------- Sector / industry rank tables + drill-down ----------
   function renderRankPanel(seriesKey, itemsField, nameField, tableId, drilldownId) {
     const rows = S[seriesKey] || [];
@@ -1375,6 +1574,23 @@
     });
   }
 
+  // "Move 82%" told you nothing about what was measured. Both cells that carry
+  // an episode figure now say from when, on hover — the advance's start date is
+  // the whole point of episode anchoring, so it should be visible.
+  function gainCell(r) {
+    if (r.gain === null || r.gain === undefined) return '<td class="pct">—</td>';
+    const from = r.episode_start ? " (advance began " + r.episode_start + ")" : "";
+    return '<td class="pct up" title="up ' + Math.round(r.gain) +
+      "% from this advance's low" + from + '">+' + fmtNum(r.gain, 0) + "%</td>";
+  }
+
+  function sessionsCell(r) {
+    const d = r.episode_days;
+    if (!d) return "<td>—</td>";
+    return '<td title="' + d + " session" + (d === 1 ? "" : "s") +
+      ' into this advance">' + d + "</td>";
+  }
+
   function sortRows(rows, key, dir) {
     return rows.slice().sort(function (a, b) {
       let x = a[key], y = b[key];
@@ -1424,9 +1640,9 @@
           '<td class="score-cell ' + scoreClass(r.composite) + '">' + fmtNum(r.composite, 1) + "</td>" +
           "<td>" + fmtNum(r.F1, 0) + "</td><td>" + fmtNum(r.F4, 0) + "</td>" +
           "<td>" + fmtNum(r.F4B, 0) + "</td><td>" + fmtNum(r.F5, 0) + "</td>" +
-          '<td class="pct up">' + (r.gain === null ? "—" : "+" + fmtNum(r.gain, 0) + "%") + "</td>" +
+          gainCell(r) +
           '<td class="pct ' + pctClass(r.drawdown) + '">' + (r.drawdown === null ? "—" : fmtNum(r.drawdown, 0) + "%") + "</td>" +
-          "<td>" + (r.episode_days || "—") + "</td>" +
+          sessionsCell(r) +
           "<td>" + stageBadge(r.stage, r.actionable) + "</td>" +
         "</tr>";
       }).join("");
@@ -1458,10 +1674,17 @@
     const rows = DATA.emerging || [];
     const body = table.querySelector("tbody");
 
+    // A missing delta means the name was not in the universe at that
+    // checkpoint — a newly listed stock, or one that only just cleared the
+    // $2B gate. "new" read as a judgement about the stock; it is a gap in the
+    // history, so it says so.
     function delta(v) {
-      if (v === null || v === undefined) return '<span class="rs-new">new</span>';
+      if (v === null || v === undefined) {
+        return '<span class="rs-new" title="not scored back then — no history to compare">not scored yet</span>';
+      }
       const cls = v > 0 ? "up" : (v < 0 ? "down" : "");
-      return '<span class="' + cls + '">' + (v >= 0 ? "+" : "") + v.toFixed(1) + "</span>";
+      return '<span class="' + cls + '" title="' + (v >= 0 ? "+" : "") + v.toFixed(1) +
+        ' points of composite score">' + (v >= 0 ? "+" : "") + v.toFixed(1) + "</span>";
     }
     function draw(sorted) {
       if (!sorted.length) {
@@ -1476,9 +1699,9 @@
             "</span></td>" +
           '<td class="score-cell ' + scoreClass(r.composite) + '">' + fmtNum(r.composite, 1) + "</td>" +
           "<td>" + delta(r.d4) + "</td><td>" + delta(r.d12) + "</td>" +
-          '<td class="pct up">' + (r.gain === null ? "—" : "+" + fmtNum(r.gain, 0) + "%") + "</td>" +
+          gainCell(r) +
           '<td class="pct ' + pctClass(r.drawdown) + '">' + (r.drawdown === null ? "—" : fmtNum(r.drawdown, 0) + "%") + "</td>" +
-          "<td>" + (r.episode_days || "—") + "</td>" +
+          sessionsCell(r) +
         "</tr>";
       }).join("");
     }
@@ -1693,6 +1916,12 @@
   const breadthGrid = document.getElementById("breadth-grid");
   if (breadthGrid) {
     (breadthGrid.dataset.keys || "").split(",").filter(Boolean).forEach(function (key) {
+      // The highs/lows counts card carries two series and two headline
+      // numbers, so it has its own renderer rather than a BREADTH_DEFS entry.
+      if (key === "breadth_hilo_counts") {
+        renderHiLoCountsCard(key, "52-Week Highs & Lows", breadthGrid);
+        return;
+      }
       const def = BREADTH_DEFS[key];
       if (def) renderSimpleMetricCard(key, def.label, def.valueField, breadthGrid, def.opts);
     });

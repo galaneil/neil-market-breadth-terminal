@@ -92,6 +92,21 @@ section h2 { font-size: 15px; text-transform: uppercase; letter-spacing: 0.04em;
 .card-value.up { color: var(--up); }
 .card-value.down { color: var(--down); }
 .card-sub { font-size: 12px; color: var(--text-dim); margin-bottom: 8px; }
+/* Two headline numbers side by side, for the cards where one number would
+   hide half the story (52-week highs against 52-week lows). */
+.hilo-pair { display: flex; gap: 28px; margin-bottom: 2px; }
+.hilo-side .card-value { margin-bottom: 0; }
+.hilo-label { font-size: 11px; color: var(--text-dim); text-transform: uppercase; letter-spacing: .04em; }
+/* The automatic read: which sector the highs and lows are concentrated in. */
+.hilo-lead { font-size: 12px; color: var(--text); margin-bottom: 6px; }
+.hilo-lead .up { color: var(--up); }
+.hilo-lead .down { color: var(--down); }
+.hilo-ratio { color: var(--text-dim); }
+.sector-filter {
+  font: inherit; font-size: 12px; padding: 3px 6px; margin-bottom: 8px;
+  color: var(--text); background: var(--panel-bg); border: 1px solid var(--border);
+  border-radius: 4px; max-width: 100%;
+}
 .badge-row { display: flex; gap: 6px; margin-bottom: 8px; flex-wrap: wrap; }
 .badge {
   font-size: 11px;

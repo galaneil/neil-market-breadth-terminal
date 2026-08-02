@@ -196,7 +196,15 @@ def run_country(code, client=None):
 
     # ---------- Breadth ----------
     log(f"{code}: backfilling breadth internals...")
-    breadth_records = breadth.backfill_breadth_history(price_cache, stock_tickers, n_days)
+    breadth_records = breadth.backfill_breadth_history(
+        price_cache, stock_tickers, n_days, ticker_to_sector)
+    # Sector weights for the breadth universe specifically, so the panel can
+    # ask "more highs than its size implies?" rather than "most highs", which
+    # the largest sector wins by default.
+    store.write_breadth_members(code, {
+        s: sum(1 for t in stock_tickers if ticker_to_sector.get(t) == s)
+        for s in sorted(set(filter(None, (ticker_to_sector.get(t) for t in stock_tickers))))
+    })
     for record in breadth_records:
         store.write_breadth(code, record)
     if breadth_records:
@@ -315,13 +323,31 @@ def run_country(code, client=None):
     log(f"{code}: rendered {dashboard} + {len(panels)} panel pages")
 
 
+def api_key_from_env_file():
+    """Read FMP_API_KEY out of .env for local runs.
+
+    In Actions the key arrives as a real environment variable from repo
+    secrets; locally it lives only in .env, which is gitignored. Reading it
+    here means a local run is plain `python src/main.py US` with no secret on
+    the command line — nothing to leak into shell history or a log.
+    """
+    path = os.path.join(config.ROOT_DIR, ".env")
+    if not os.path.exists(path):
+        return None
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            if line.strip().startswith("FMP_API_KEY"):
+                return line.split("=", 1)[1].strip().strip("'\"")
+    return None
+
+
 def main():
     only = sys.argv[1].upper() if len(sys.argv) > 1 else None
     codes = [only] if only else list(config.COUNTRIES)
 
     client = None
     if any(config.COUNTRIES[c]["price_source"] == "fmp" for c in codes):
-        api_key = os.environ.get("FMP_API_KEY")
+        api_key = os.environ.get("FMP_API_KEY") or api_key_from_env_file()
         if not api_key:
             log("FMP_API_KEY is not set.")
             sys.exit(1)
