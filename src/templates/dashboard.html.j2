@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{ country_label }} — Market Breadth Terminal</title>
-<link rel="stylesheet" href="{{ asset_prefix }}dashboard.css">
+<link rel="stylesheet" href="{{ asset_prefix }}dashboard.css?v={{ asset_version }}">
 </head>
 <body>
 
@@ -89,6 +89,6 @@
 <script src="{{ asset_prefix }}vendor/chart.umd.min.js"></script>
 <script src="{{ asset_prefix }}vendor/lightweight-charts.js"></script>
 <script id="dashboard-data" type="application/json">{{ data_json }}</script>
-<script src="{{ asset_prefix }}dashboard.js"></script>
+<script src="{{ asset_prefix }}dashboard.js?v={{ asset_version }}"></script>
 </body>
 </html>

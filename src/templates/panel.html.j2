@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{ title }} — {{ country_label }} — Market Breadth Terminal</title>
-<link rel="stylesheet" href="{{ asset_prefix }}dashboard.css">
+<link rel="stylesheet" href="{{ asset_prefix }}dashboard.css?v={{ asset_version }}">
 <style>
 /* Single-panel embed pages are meant to sit inside a small Notion embed
    block, not a full browser window — trim the chrome accordingly. */
@@ -42,6 +42,6 @@ footer { display: none; }
 {% if needs_chartjs %}<script src="{{ asset_prefix }}vendor/chart.umd.min.js"></script>{% endif %}
 {% if needs_lightweight %}<script src="{{ asset_prefix }}vendor/lightweight-charts.js"></script>{% endif %}
 <script id="dashboard-data" type="application/json">{{ data_json }}</script>
-<script src="{{ asset_prefix }}dashboard.js"></script>
+<script src="{{ asset_prefix }}dashboard.js?v={{ asset_version }}"></script>
 </body>
 </html>

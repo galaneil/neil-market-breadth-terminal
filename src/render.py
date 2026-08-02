@@ -21,6 +21,7 @@ India's pages therefore need `asset_prefix` of "../" to reach the shared CSS/JS
 at the docs root, while the US pages use "".
 """
 
+import hashlib
 import json
 import os
 from datetime import datetime, timezone
@@ -86,6 +87,28 @@ def load_all_series(country):
     }
 
 
+def asset_version():
+    """Fingerprint of the shared CSS/JS, appended to their URLs as ?v=.
+
+    GitHub Pages serves these with a long cache lifetime, so without it a
+    browser that has visited before keeps running the JS it already has —
+    a deployed fix simply does not arrive. This bit me while verifying the
+    composition chart: the file on Pages was correct and the page was
+    executing a stale copy. Notion embeds are the same browser, so every
+    panel would have had the same problem.
+
+    Content-hashed rather than timestamped, so an unchanged file keeps its
+    URL and stays cached.
+    """
+    h = hashlib.md5()
+    for name in ("dashboard.css", "dashboard.js"):
+        path = os.path.join(config.DOCS_DIR, name)
+        if os.path.exists(path):
+            with open(path, "rb") as f:
+                h.update(f.read())
+    return h.hexdigest()[:10]
+
+
 def asset_prefix(country):
     """Relative path from a country's pages back to the shared docs root, where
     dashboard.css / dashboard.js / vendor/ live."""
@@ -139,6 +162,7 @@ def render_dashboard(country):
         country_flag=flags.flag(country),
         index_keys_csv=",".join(f"index_{k}" for k in cfg["index_tickers"]),
         asset_prefix=asset_prefix(country),
+        asset_version=asset_version(),
         country_links=country_links(country, "index.html"),
     )
 
@@ -478,6 +502,7 @@ def _write_panel(country, filename, title, body_html, payload, generated_at,
         needs_chartjs=needs_chartjs,
         needs_lightweight=needs_lightweight,
         asset_prefix=asset_prefix(country),
+        asset_version=asset_version(),
         country_links=country_links(country, filename),
         country_label=config.COUNTRIES[country]["label"],
         country_flag=flags.flag(country),
