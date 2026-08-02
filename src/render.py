@@ -412,7 +412,7 @@ def _screener_body():
 
 def _groups_body():
     return """
-<div class="empty-note">Distinct companies at new highs and new lows, by group. Lows extend left, highs extend right, ranked by the gap between them — so a group leading both sides sits in the middle, where it belongs, instead of topping both lists for no reason other than its size.</div>
+<div class="empty-note">Which groups are making new highs, and which are making new lows. Click any row to send that group to the screener.</div>
 <div class="screener-controls">
   <div class="tf-toggle" id="hilo-index"></div>
   <div class="tf-toggle" id="hilo-window"></div>
@@ -423,6 +423,7 @@ def _groups_body():
   <div class="tf-toggle" id="hilo-groupby"></div>
   <div class="tf-toggle" id="hilo-groupmode"></div>
 </div>
+<div class="digest" id="hilo-digest"></div>
 <div class="composition-note" id="hilo-heat-caption"></div>
 <div class="heatmap" id="hilo-heatmap"></div>
 <div class="composition">

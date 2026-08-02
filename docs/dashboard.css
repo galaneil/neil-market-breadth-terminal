@@ -120,6 +120,31 @@ section h2 { font-size: 15px; text-transform: uppercase; letter-spacing: 0.04em;
 .composition-head { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 4px; }
 .composition-title { font-size: 13px; font-weight: 600; }
 .composition-note { font-size: 11px; color: var(--text-dim); margin-bottom: 8px; }
+/* The daily read: two short lists and a verdict. Sized to be legible at a
+   glance from across a desk, which is the whole point of it. */
+.digest { margin-bottom: 8px; }
+.digest-head { font-size: 12px; color: var(--text-dim); margin-bottom: 2px; }
+.digest-verdict { font-size: 17px; font-weight: 600; margin-bottom: 14px; }
+.digest-cols { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 24px; }
+.digest-col-title {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .05em;
+  font-weight: 700; margin-bottom: 6px; padding-bottom: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.digest-col-title.up { color: var(--up); }
+.digest-col-title.down { color: var(--down); }
+.digest-row {
+  display: flex; align-items: baseline; gap: 8px; padding: 5px 0; cursor: pointer;
+  border-bottom: 1px solid transparent;
+}
+.digest-row:hover { border-bottom-color: var(--border); }
+.digest-name { flex: 1; font-size: 14px; }
+.digest-count { font-size: 15px; font-weight: 700; font-variant-numeric: tabular-nums; }
+.digest-count.up { color: var(--up); }
+.digest-count.down { color: var(--down); }
+.digest-word { font-size: 11px; color: var(--text-dim); min-width: 82px; }
+.digest-none { font-size: 13px; color: var(--text-dim); padding: 5px 0; }
+.digest-note { font-size: 11px; color: var(--text-dim); margin-top: 14px; }
 /* Heat map: absolutely-positioned tiles inside a fixed-height box, laid out
    by the squarified treemap in dashboard.js. */
 .heatmap { position: relative; width: 100%; height: clamp(320px, 48vh, 520px); margin-bottom: 10px; }

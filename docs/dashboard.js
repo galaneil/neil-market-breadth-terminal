@@ -1017,11 +1017,26 @@
     }
 
     function drawGroups() {
-      const bars = document.querySelector(".composition");
-      const heat = document.getElementById("hilo-heatmap");
-      if (bars) bars.style.display = groupView === "bars" ? "" : "none";
-      if (heat) heat.style.display = groupView === "heat" ? "" : "none";
-      if (groupView === "bars") drawComposition(); else drawHeatmap();
+      const views = {
+        digest: document.getElementById("hilo-digest"),
+        heat: document.getElementById("hilo-heatmap"),
+        bars: document.querySelector(".composition"),
+      };
+      // The caption and legend belong to the heat map alone.
+      const heatOnly = [document.getElementById("hilo-heat-caption"),
+                        document.querySelector(".heat-legend")];
+      Object.keys(views).forEach(function (k) {
+        if (views[k]) views[k].style.display = groupView === k ? "" : "none";
+      });
+      heatOnly.forEach(function (el) {
+        if (el) el.style.display = groupView === "heat" ? "" : "none";
+      });
+      const modeToggle = document.getElementById("hilo-groupmode");
+      if (modeToggle) modeToggle.style.display = groupView === "bars" ? "" : "none";
+
+      if (groupView === "bars") drawComposition();
+      else if (groupView === "heat") drawHeatmap();
+      else drawDigest();
     }
 
     function redrawAll() { redrawTable(); drawGroups(); }
@@ -1048,7 +1063,7 @@
     // nothing. A share of members is bounded at 100%, and 100% means something.
     let groupBy = "sector";
     let groupMode = "count";
-    let groupView = "heat";
+    let groupView = "digest";
     // Group sizes must be counted WITHIN the selected index, not across the
     // whole universe. The precomputed map covers all 3,311 priced names, so
     // scoped to the S&P 500 it reported Finance as 846 members and diluted
@@ -1217,6 +1232,86 @@
       const base = capped >= 0 ? [22, 163, 74] : [220, 38, 38];
       const alpha = 0.12 + 0.78 * strength;
       return "rgba(" + base[0] + "," + base[1] + "," + base[2] + "," + alpha.toFixed(3) + ")";
+    }
+
+    // ---- The daily read ----
+    //
+    // Default view, and the answer to "this is data overload". The heat map
+    // and the bars both hand over a measurement and leave the conclusion to
+    // the reader — 33 tiles, each needing two percentages interpreted. On a
+    // normal morning nobody does that.
+    //
+    // So: rank by the daily-participation rate, which is the statistically
+    // sound measure, but SHOW plain counts, which is what a person actually
+    // reads. "17 of 18 semiconductors have hit a 52-week high" needs no
+    // interpretation at all. Six groups, two lists, one sentence.
+    const LEAD_COUNT = 5;
+
+    function drawDigest() {
+      const host = document.getElementById("hilo-digest");
+      if (!host) return;
+      const all = composition();
+      const scopeName = (SCOPES.filter(function (s) { return s.code === indexFilter; })[0] || {}).label || "the market";
+      const winName = HILO_WINDOWS.filter(function (w) { return w[0] === win; })[0][1];
+      const tfName = tf === "ALL" ? "since inception" : "the last " + tf;
+
+      if (!all.length) {
+        host.innerHTML = '<div class="empty-note">Nothing to report for this selection.</div>';
+        return;
+      }
+
+      // A group only counts as leading or lagging if it is genuinely lopsided.
+      // Without this the lists fill with groups at +0.3 and read as signal.
+      const leaders = all.filter(function (g) { return g.hiRate - g.loRate > 0.5 && g.hi > g.lo; })
+                         .slice(0, LEAD_COUNT);
+      const laggards = all.filter(function (g) { return g.loRate - g.hiRate > 0.5 && g.lo > g.hi; })
+                          .reverse().slice(0, LEAD_COUNT);
+
+      function line(g, side) {
+        const n = side === "hi" ? g.hi : g.lo;
+        const word = side === "hi" ? "at new highs" : "at new lows";
+        return '<div class="digest-row" data-group="' + g.group + '">' +
+          '<span class="digest-name">' + g.group + "</span>" +
+          '<span class="digest-count ' + (side === "hi" ? "up" : "down") + '">' +
+            n + " of " + g.size + "</span>" +
+          '<span class="digest-word">' + word + "</span>" +
+        "</div>";
+      }
+
+      const verdict = leaders.length && !laggards.length
+        ? "Broadly one-sided to the upside."
+        : laggards.length && !leaders.length
+          ? "Broadly one-sided to the downside."
+          : leaders.length && laggards.length
+            ? "Split: money is going into the first list and coming out of the second."
+            : "No group is meaningfully one-sided right now.";
+
+      host.innerHTML =
+        '<div class="digest-head">' + scopeName + " &middot; " + winName +
+          " highs and lows &middot; " + tfName + "</div>" +
+        '<div class="digest-verdict">' + verdict + "</div>" +
+        '<div class="digest-cols">' +
+          '<div class="digest-col"><div class="digest-col-title up">Leading</div>' +
+            (leaders.length ? leaders.map(function (g) { return line(g, "hi"); }).join("")
+                            : '<div class="digest-none">nothing</div>') +
+          "</div>" +
+          '<div class="digest-col"><div class="digest-col-title down">Lagging</div>' +
+            (laggards.length ? laggards.map(function (g) { return line(g, "lo"); }).join("")
+                             : '<div class="digest-none">nothing</div>') +
+          "</div>" +
+        "</div>" +
+        '<div class="digest-note">Counts are companies that printed at least one ' +
+          winName + " high or low in " + tfName +
+          ". Order is by how much of each group was doing it on a typical day, not by the raw count.</div>";
+
+      host.querySelectorAll(".digest-row").forEach(function (row) {
+        row.addEventListener("click", function () {
+          const sel = groupBy === "sector" ? sectorSel : industrySel;
+          if (!sel) return;
+          sel.value = (sel.value === row.dataset.group) ? "" : row.dataset.group;
+          redrawAll();
+        });
+      });
     }
 
     function drawHeatmap() {
@@ -1458,7 +1553,7 @@
       buildToggle("hilo-index", SCOPES.map(function (s) { return [s.code, s.label]; }),
                   function () { return indexFilter; }, function (v) { indexFilter = v; });
     }
-    buildToggle("hilo-view", [["heat", "Heat map"], ["bars", "Bars"]],
+    buildToggle("hilo-view", [["digest", "Summary"], ["heat", "Heat map"], ["bars", "Bars"]],
                 function () { return groupView; }, function (v) { groupView = v; });
     buildToggle("hilo-groupby", [["sector", "By sector"], ["industry", "By industry"]],
                 function () { return groupBy; }, function (v) { groupBy = v; });
