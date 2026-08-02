@@ -115,6 +115,12 @@ section h2 { font-size: 15px; text-transform: uppercase; letter-spacing: 0.04em;
   border: 1px solid var(--border); border-radius: 4px;
 }
 .screener-filters input { min-width: 130px; }
+.composition { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--border); }
+.composition-head { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin-bottom: 4px; }
+.composition-title { font-size: 13px; font-weight: 600; }
+.composition-note { font-size: 11px; color: var(--text-dim); margin-bottom: 8px; }
+/* 14 named rows need vertical room the standard chart box does not give. */
+.chart-tall { height: clamp(300px, 42vh, 440px); }
 #hilo-result-count { font-size: 12px; color: var(--text-dim); }
 .sector-filter {
   font: inherit; font-size: 12px; padding: 3px 6px; margin-bottom: 8px;

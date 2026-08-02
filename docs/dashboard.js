@@ -984,6 +984,124 @@
       draw(sortRows(shown, "hits", -1));
     }
 
+    function redrawAll() { redrawTable(); drawComposition(); }
+
+    // ---- Composition: which groups these names are coming from ----
+    //
+    // Ranked horizontal bars rather than a pie. A pie can carry five slices
+    // legibly; there are 20 sectors and 127 industries, and past about six
+    // wedges you are comparing angles you cannot actually compare. Bars sorted
+    // by size answer "which group has the most" at a glance, which is the
+    // question, and they leave room for the names to be readable.
+    //
+    // Two modes, because they answer different questions:
+    //   Count         — how many companies, i.e. where the volume is
+    //   Participation — what share of the group's own members qualified, i.e.
+    //                   where the intensity is. 30 semiconductors at new highs
+    //                   means one thing if the group holds 40 and another if
+    //                   it holds 200.
+    //
+    // Participation is a percentage of members, not a multiple of market
+    // share. The multiple was tried first and degenerates: it is capped at
+    // universe/hits, so every group with full participation ties at exactly
+    // that ceiling — six industries came back at 2.0956 and the ranking said
+    // nothing. A share of members is bounded at 100%, and 100% means something.
+    let groupBy = "sector";
+    let groupMode = "count";
+    const GROUP_MEMBERS = DATA.groupMembers || {};
+
+    function composition() {
+      const shown = visibleRows();
+      const totals = {};
+      shown.forEach(function (r) {
+        const key = groupBy === "sector" ? r.sector : r.industry;
+        if (key && key !== "—") totals[key] = (totals[key] || 0) + 1;
+      });
+      const members = GROUP_MEMBERS[groupBy] || {};
+      const all = shown.length;
+
+      return Object.keys(totals).map(function (k) {
+        const size = members[k] || 0;
+        // What fraction of this group's own members are on the list.
+        const rate = size ? 100 * totals[k] / size : null;
+        return { group: k, count: totals[k], size: size, rate: rate,
+                 share: all ? Math.round(100 * totals[k] / all) : 0,
+                 // A four-name industry at 100% is arithmetic, not a theme.
+                 eligible: size >= 5 };
+      }).sort(function (a, b) {
+        if (groupMode === "weighted") {
+          if (a.eligible !== b.eligible) return a.eligible ? -1 : 1;
+          const d = (b.rate || 0) - (a.rate || 0);
+          return d !== 0 ? d : b.count - a.count;
+        }
+        return b.count - a.count;
+      }).slice(0, 14);
+    }
+
+    function drawComposition() {
+      const items = composition();
+      const colors = themeColors();
+      const canvas = document.getElementById("hilo-composition-canvas");
+      if (!canvas) return;
+      if (charts["hilo-composition-canvas"]) charts["hilo-composition-canvas"].destroy();
+      if (!items.length) return;
+
+      const weighted = groupMode === "weighted";
+      const color = side === "hi" ? colors.up : colors.down;
+
+      charts["hilo-composition-canvas"] = new Chart(canvas, {
+        type: "bar",
+        data: {
+          labels: items.map(function (i) { return i.group; }),
+          datasets: [{
+            label: weighted ? "% of the group" : "companies",
+            data: items.map(function (i) { return weighted ? (i.rate || 0) : i.count; }),
+            backgroundColor: color,
+            borderWidth: 0,
+          }],
+        },
+        options: {
+          indexAxis: "y",
+          responsive: true,
+          maintainAspectRatio: false,
+          animation: false,
+          plugins: {
+            legend: { display: false },
+            tooltip: {
+              callbacks: {
+                label: function (ctx) {
+                  const i = items[ctx.dataIndex];
+                  return i.count + " of the group's " + i.size + " members" +
+                    (i.rate === null ? "" : " (" + Math.round(i.rate) + "%)") +
+                    " · " + i.share + "% of everything listed";
+                },
+              },
+            },
+          },
+          scales: {
+            x: {
+              ticks: {
+                color: colors.text, font: { size: 10 },
+                callback: function (v) { return weighted ? v + "%" : v; },
+              },
+              grid: { color: colors.grid },
+            },
+            y: { ticks: { color: colors.text, font: { size: 10 }, autoSkip: false }, grid: { display: false } },
+          },
+          onClick: function (evt, els) {
+            if (!els.length) return;
+            const picked = items[els[0].index].group;
+            const sel = groupBy === "sector" ? sectorSel : industrySel;
+            // Clicking the group you are already filtered to clears it, so the
+            // chart is a toggle rather than a one-way trip.
+            sel.value = (sel.value === picked) ? "" : picked;
+            redrawTable();
+            drawComposition();
+          },
+        },
+      });
+    }
+
     function refresh() {
       rows = buildRows();
 
@@ -1033,6 +1151,7 @@
       ]);
 
       redrawTable();
+      drawComposition();
     }
 
     buildToggle("hilo-window", HILO_WINDOWS, function () { return win; },
@@ -1044,9 +1163,9 @@
     }), function () { return tf; }, function (v) { tf = v; });
 
     [sectorSel, industrySel].forEach(function (el) {
-      el.addEventListener("change", redrawTable);
+      el.addEventListener("change", redrawAll);
     });
-    searchEl.addEventListener("input", redrawTable);
+    searchEl.addEventListener("input", redrawAll);
     attachSorting(table, [], function () {}, "hits", -1);
     table.querySelectorAll("th[data-sort]").forEach(function (th) {
       th.addEventListener("click", function () {
@@ -1054,6 +1173,11 @@
                       th.dataset.sort === "ticker" ? 1 : -1));
       });
     });
+    buildToggle("hilo-groupby", [["sector", "By sector"], ["industry", "By industry"]],
+                function () { return groupBy; }, function (v) { groupBy = v; });
+    buildToggle("hilo-groupmode", [["count", "Count"], ["weighted", "vs its size"]],
+                function () { return groupMode; }, function (v) { groupMode = v; });
+
     makeRowsClickable(table);
     refresh();
   }

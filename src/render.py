@@ -362,6 +362,15 @@ def _screener_body():
 <div class="hilo-lead"></div>
 <div class="tf-toggle" id="hilo-timeframe"></div>
 <div class="chart-wrap"><canvas id="hilo-screener-canvas"></canvas></div>
+<div class="composition">
+  <div class="composition-head">
+    <div class="composition-title">Where they are coming from</div>
+    <div class="tf-toggle" id="hilo-groupby"></div>
+    <div class="tf-toggle" id="hilo-groupmode"></div>
+  </div>
+  <div class="composition-note">Click a bar to filter the table to it.</div>
+  <div class="chart-wrap chart-tall"><canvas id="hilo-composition-canvas"></canvas></div>
+</div>
 <div class="screener-filters">
   <select id="hilo-sector"><option value="">All sectors</option></select>
   <select id="hilo-industry"><option value="">All industries</option></select>
@@ -408,12 +417,27 @@ def _screener_payload(country):
             entry[key] = {"hi": w.get("hi", 0), "lo": w.get("lo", 0)}
         compact.append(entry)
 
+    # Member counts over the SCREENER's universe (every priced name), not the
+    # breadth universe — the composition chart divides by these, and dividing a
+    # 3,311-name count by 1,500-name weights would overstate every group.
+    classification = _load_classification(country)
+    quotes = _read_json("hilo_quotes.json", {})
+    group_members = {"sector": {}, "industry": {}}
+    for ticker, tags in classification.items():
+        if ticker not in quotes or not tags:
+            continue
+        for idx, kind in ((0, "sector"), (1, "industry")):
+            name = tags[idx] if len(tags) > idx else None
+            if name:
+                group_members[kind][name] = group_members[kind].get(name, 0) + 1
+
     return {
         "hiloCounts": compact,
         "hiloNames": _read_json("hilo_names.json", []),
-        "quotes": _read_json("hilo_quotes.json", {}),
-        "classification": _load_classification(country),
+        "quotes": quotes,
+        "classification": classification,
         "sectorMembers": sector_member_counts(country),
+        "groupMembers": group_members,
     }
 
 
