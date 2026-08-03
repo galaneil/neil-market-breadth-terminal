@@ -448,3 +448,7 @@ header h1 { display: flex; align-items: center; }
 .rs-mid    { border-left-color: var(--border); }
 .rs-weak   { border-left-color: var(--down); }
 .rs-weak   .rs-rating-num { color: var(--down); }
+
+/* The replay body now fetches its date before drawing; a brief fade avoids the
+   panel looking broken during the request. */
+#replay-body.loading { opacity: .45; transition: opacity .12s; }

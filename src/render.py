@@ -151,6 +151,8 @@ def render_dashboard(country):
         "generated_at": generated_at,
         "country": country,
         "indexLabels": index_labels(country),
+        "build": asset_version(),
+        "assetPrefix": asset_prefix(country),
         "series": series,
     }, separators=(",", ":"))
 
@@ -249,23 +251,79 @@ def _compact_groups(rows, items_field, name_field):
     return {"names": names, "byDate": by_date}
 
 
+def write_replay_files(country, series):
+    """One JSON per session under docs/<country>/replay/.
+
+    The replay page used to carry every series inline. At a year that was a few
+    megabytes; at six it is roughly eleven, all parsed before first paint, in a
+    Notion iframe. Since the page only ever shows ONE date at a time, the data
+    is stored the way it is read — one file per session, fetched on demand,
+    exactly as the stock page fetches one ticker.
+
+    Returns the list of session dates, which is all the page needs up front.
+    """
+    out_dir = os.path.join(config.docs_dir(country), "replay")
+    os.makedirs(out_dir, exist_ok=True)
+
+    labels = index_labels(country)
+    env_by_date = {r["date"]: r for r in series.get("environment", [])}
+
+    def group_by_date(rows, items_field, name_field):
+        out = {}
+        for row in rows:
+            out[row["date"]] = [
+                {"name": item.get(name_field), "rank": item.get("rank"),
+                 "chg_1d": item.get("chg_1d"), "chg_5d": item.get("chg_5d"),
+                 "chg_20d": item.get("chg_20d")}
+                for item in row.get(items_field, []) if item.get(name_field)
+            ]
+        return out
+
+    sectors_by_date = group_by_date(series.get("sector_ranks", []), "sectors", "sector")
+    industries_by_date = group_by_date(series.get("industry_ranks", []), "industries", "industry")
+
+    # Index rows carried forward: a session missing from one index's series
+    # should still show its last known reading rather than a blank.
+    index_rows = {key: sorted(series.get(key, []), key=lambda r: r["date"]) for key in labels}
+    index_cursor = {key: 0 for key in labels}
+    index_last = {key: None for key in labels}
+
+    dates = sorted(env_by_date)
+    for date_str in dates:
+        indices_now = {}
+        for key in labels:
+            rows = index_rows[key]
+            while index_cursor[key] < len(rows) and rows[index_cursor[key]]["date"] <= date_str:
+                row = rows[index_cursor[key]]
+                index_last[key] = {"close": row["close"], "a10": row["above_ema10"],
+                                   "a20": row["above_ema20"], "a50": row["above_ema50"]}
+                index_cursor[key] += 1
+            if index_last[key]:
+                indices_now[key] = index_last[key]
+
+        payload = {
+            "date": date_str,
+            "environment": env_by_date.get(date_str),
+            "indices": indices_now,
+            "sectors": sectors_by_date.get(date_str, []),
+            "industries": industries_by_date.get(date_str, []),
+        }
+        with open(os.path.join(out_dir, f"{date_str}.json"), "w", encoding="utf-8") as f:
+            json.dump(payload, f, separators=(",", ":"))
+
+    return dates
+
+
 def build_replay_payload(country, series, generated_at):
     labels = index_labels(country)
+    dates = write_replay_files(country, series)
     return {
         "generated_at": generated_at,
         "country": country,
         "indexLabels": labels,
-        "environment": series.get("environment", []),
-        "indices": {
-            key: [
-                {"date": r["date"], "close": r["close"],
-                 "a10": r["above_ema10"], "a20": r["above_ema20"], "a50": r["above_ema50"]}
-                for r in series.get(key, [])
-            ]
-            for key in labels
-        },
-        "sectors": _compact_groups(series.get("sector_ranks", []), "sectors", "sector"),
-        "industries": _compact_groups(series.get("industry_ranks", []), "industries", "industry"),
+        # Just the session list; everything else arrives per date.
+        "replayDates": dates,
+        "replayDir": "replay",
         "classification": _load_classification(country),
         "sectorMembers": sector_member_counts(country),
     }
@@ -525,6 +583,11 @@ def _rank_body(name_label, table_id, drilldown_id, sort_key):
 
 def _write_panel(country, filename, title, body_html, payload, generated_at,
                  needs_chartjs=False, needs_lightweight=False):
+    payload = dict(payload or {})
+    payload["build"] = asset_version()
+    # India's pages live in docs/in/, so they need "../" to reach the marker
+    # at the docs root.
+    payload["assetPrefix"] = asset_prefix(country)
     html = _ENV.get_template("panel.html.j2").render(
         title=title,
         generated_at=generated_at,
@@ -593,6 +656,25 @@ def render_panel(country, filename, title, body_html, data_keys, series, generat
         needs_chartjs=(chart_lib == "chartjs"),
         needs_lightweight=(chart_lib == "lightweight"),
     )
+
+
+def write_build_marker():
+    """A 30-byte file naming the current build.
+
+    Notion embeds each panel in a cross-origin iframe, and a hard refresh of
+    the Notion page does not reliably revalidate those. After a structural
+    change the embed can sit on a stale copy indefinitely — which is exactly
+    what happened when the replay history went from one year to six: the page
+    was correct on Pages and the embed still showed the old date range.
+
+    So each page checks this file on load and reloads itself once if the build
+    it was rendered against is no longer current. Deliberately fetched with a
+    timestamp so this one request can never itself be cached.
+    """
+    path = os.path.join(config.DOCS_DIR, "build.json")
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump({"build": asset_version()}, f)
+    return path
 
 
 def render_all_panels(country):
@@ -722,3 +804,4 @@ if __name__ == "__main__":
     for code in config.COUNTRIES:
         dashboard, panels = render_country(code)
         print(f"{code}: {dashboard} + {len(panels)} panel pages")
+    print(f"build marker: {write_build_marker()}")

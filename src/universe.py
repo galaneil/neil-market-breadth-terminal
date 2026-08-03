@@ -11,6 +11,9 @@ but reliably structured and don't require any auth/cookie dance.
 """
 
 import io
+import json
+import os
+
 import requests
 import pandas as pd
 
@@ -44,11 +47,38 @@ def _fetch_constituents(index_name, url):
     return df[["ticker", "name", "sector", "index"]]
 
 
+def _cache_path():
+    import config
+    return os.path.join(config.cache_dir("US"), "sp1500.json")
+
+
 def build_sp1500():
-    """Returns a deduped DataFrame[ticker, name, sector, index] covering the S&P 1500."""
-    frames = [_fetch_constituents(name, url) for name, url in WIKI_URLS.items()]
-    combined = pd.concat(frames, ignore_index=True)
-    combined = combined.drop_duplicates(subset="ticker", keep="first").reset_index(drop=True)
+    """Returns a deduped DataFrame[ticker, name, sector, index] covering the S&P 1500.
+
+    Falls back to the last good copy when Wikipedia is unreachable. Index
+    membership changes a few times a year, so a day-old list is a rounding
+    error — whereas losing the whole run is not. A transient SSL error at
+    Wikipedia killed a backfill mid-flight and would take the nightly job with
+    it just as easily.
+    """
+    try:
+        frames = [_fetch_constituents(name, url) for name, url in WIKI_URLS.items()]
+        combined = pd.concat(frames, ignore_index=True)
+        combined = combined.drop_duplicates(subset="ticker", keep="first").reset_index(drop=True)
+    except Exception as exc:
+        path = _cache_path()
+        if not os.path.exists(path):
+            raise
+        with open(path, encoding="utf-8") as f:
+            combined = pd.DataFrame(json.load(f))
+        print(f"universe: Wikipedia unavailable ({type(exc).__name__}); "
+              f"using the cached list of {len(combined)} tickers", flush=True)
+        return combined
+
+    path = _cache_path()
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(combined.to_dict("records"), f)
     return combined
 
 

@@ -10,3 +10,9 @@ venv/
 docs/tickers/
 docs/in/tickers/
 docs/tmle/
+
+# Scratch caches for the one-off deep-history backfills. 139MB for the US
+# alone — over GitHub's 100MB per-file limit — and pure intermediate: the
+# JSONL series computed from them are the artefact worth keeping.
+data/*/_cache/price_window_deep.json
+data/*/_cache/index_ohlc_deep.json

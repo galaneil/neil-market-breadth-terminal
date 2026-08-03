@@ -1656,15 +1656,24 @@
     const host = document.getElementById("replay-panel");
     if (!host) return;
     const D = DATA;
-    const envRows = D.environment || [];
-    if (!envRows.length) {
+    const dates = D.replayDates || [];
+    if (!dates.length) {
       document.getElementById("replay-body").innerHTML = '<div class="empty-note">No data yet.</div>';
       return;
     }
 
-    const dates = envRows.map(function (r) { return r.date; });
-    const envByDate = {};
-    envRows.forEach(function (r) { envByDate[r.date] = r; });
+    // One fetch per session, cached. The page holds only the date list; six
+    // years of breadth, ranks and environment inline was ~11MB parsed before
+    // first paint. Same arrangement the stock page uses for prices.
+    const replayDir = D.replayDir || "replay";
+    const dayCache = {};
+    function loadDay(dateStr) {
+      if (dayCache[dateStr]) return dayCache[dateStr];
+      dayCache[dateStr] = fetch(replayDir + "/" + dateStr + ".json")
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .catch(function () { return null; });
+      return dayCache[dateStr];
+    }
 
     const dateInput = document.getElementById("replay-date");
     const tickerInput = document.getElementById("replay-ticker");
@@ -1687,11 +1696,10 @@
       return chosen || dates[0];
     }
 
-    function groupRows(pack, dateStr) {
-      const raw = pack.byDate[dateStr] || [];
-      return raw.map(function (v) {
-        return { name: pack.names[v[0]], rank: v[1], chg_1d: v[2], chg_5d: v[3], chg_20d: v[4] };
-      }).sort(function (a, b) { return (a.rank || 999) - (b.rank || 999); });
+    function groupRows(rows) {
+      return (rows || []).slice().sort(function (a, b) {
+        return (a.rank || 999) - (b.rank || 999);
+      });
     }
 
     function groupTable(title, rows, highlightName) {
@@ -1713,12 +1721,8 @@
       return html + "</tbody></table></div>";
     }
 
-    function indexRow(key, label, dateStr) {
-      const rows = (D.indices && D.indices[key]) || [];
-      let match = null;
-      for (let i = 0; i < rows.length; i++) {
-        if (rows[i].date <= dateStr) match = rows[i]; else break;
-      }
+    function indexRow(key, label, day) {
+      const match = day && day.indices ? day.indices[key] : null;
       if (!match) return "";
       function pill(on, text) {
         return '<span class="factor-pill ' + (on ? "up" : "down") + '">' + text + "</span>";
@@ -1730,8 +1734,26 @@
         "</div>";
     }
 
+    // Async now: the date's data is fetched before it can be drawn. The date
+    // it was called for is re-checked on arrival, so quickly stepping through
+    // sessions cannot let a slow response overwrite a newer one.
+    let drawToken = 0;
     function draw(dateStr) {
-      const env = envByDate[dateStr];
+      const token = ++drawToken;
+      body.classList.add("loading");
+      loadDay(dateStr).then(function (day) {
+        if (token !== drawToken) return;
+        body.classList.remove("loading");
+        if (!day) {
+          body.innerHTML = '<div class="empty-note">No data stored for ' + dateStr + ".</div>";
+          return;
+        }
+        paint(dateStr, day);
+      });
+    }
+
+    function paint(dateStr, day) {
+      const env = day.environment;
       const t = env && env.trend, p = env && env.participation, i = env && env.internals;
 
       function tag(label) { return '<span class="env-tag ' + label + '">' + label + "</span>"; }
@@ -1748,9 +1770,9 @@
               '<div class="env-block-value">' + (t ? t.factors_favourable + " / " + t.factors_total : "—") + "</div>" +
               '<div class="env-block-sub">large caps only ' + (t ? t.large_cap_favourable + " / " + t.large_cap_total : "—") + "</div>" +
               '<div class="factor-grid">' +
-                indexRow("index_nasdaq", "NASDAQ", dateStr) +
-                indexRow("index_sp500", "S&P 500", dateStr) +
-                indexRow("index_russell2000", "Russell 2000", dateStr) +
+                Object.keys(D.indexLabels || {}).map(function (key) {
+                  return indexRow(key, (D.indexLabels || {})[key], day);
+                }).join("") +
               "</div>" +
             "</div>" +
             '<div class="env-block">' +
@@ -1774,8 +1796,8 @@
             "</div>" +
           "</div>" +
           '<div class="replay-groups">' +
-            "<div>" + groupTable("Sectors", groupRows(D.sectors, dateStr), highlight.sector) + "</div>" +
-            "<div>" + groupTable("Industries", groupRows(D.industries, dateStr), highlight.industry) + "</div>" +
+            "<div>" + groupTable("Sectors", groupRows(day.sectors), highlight.sector) + "</div>" +
+            "<div>" + groupTable("Industries", groupRows(day.industries), highlight.industry) + "</div>" +
           "</div>" +
         "</div>";
     }
@@ -2626,6 +2648,31 @@
 
   // ---------- Wire everything up ----------
   renderEnvironmentPanel();
+
+  // ---------- Stale-embed guard ----------
+  // A Notion embed lives in a cross-origin iframe, which a hard refresh of the
+  // Notion page does not reliably revalidate. After the replay history went
+  // from one year to six, the published page was correct and the embed kept
+  // showing the old date range with no way to clear it short of re-embedding.
+  //
+  // So the page asks once whether its build is still current, and reloads
+  // itself if not. The check carries a timestamp so it can never be served
+  // from cache, and a session flag means a genuinely stale server can never
+  // put the page into a reload loop.
+  (function () {
+    const built = DATA.build;
+    if (!built || sessionStorage.getItem("mbt-reloaded") === built) return;
+    const prefix = (DATA.assetPrefix !== undefined) ? DATA.assetPrefix : "";
+    fetch(prefix + "build.json?t=" + Date.now(), { cache: "no-store" })
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (info) {
+        if (!info || !info.build || info.build === built) return;
+        sessionStorage.setItem("mbt-reloaded", info.build);
+        location.reload();
+      })
+      .catch(function () { /* offline or blocked: leave the page alone */ });
+  })();
+
   renderReplayPanel();
   renderStockPanel();
   renderTmleLeaders();

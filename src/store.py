@@ -38,6 +38,54 @@ def upsert_jsonl(path, record):
 def series_path(country, filename):
     return os.path.join(config.data_dir(country), filename)
 
+def upsert_many(path, records):
+    """Merge many dated records in ONE read and ONE write.
+
+    upsert_jsonl re-reads and rewrites the whole file per record, which is
+    invisible at 252 rows a night and quadratic at 1,653. Backfilling six years
+    of index history took two minutes a file that way, and industry ranks —
+    where the file grows to 30MB — would have rewritten 30MB some 1,653 times.
+    """
+    records = [r for r in records if r.get("date")]
+    if not records:
+        return 0
+
+    rows = {}
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                if line.strip():
+                    row = json.loads(line)
+                    rows[row["date"]] = row
+    for record in records:
+        rows[record["date"]] = record
+
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        for date_str in sorted(rows):
+            f.write(json.dumps(rows[date_str], separators=(",", ":")) + "\n")
+    return len(rows)
+
+
+def write_breadth_bulk(country, breadth_records):
+    """The six breadth files, written once each rather than once per day."""
+    split = {
+        "breadth_adv_decl.jsonl": lambda r: {
+            "date": r["date"], "advancers": r["advancers"],
+            "decliners": r["decliners"], "net": r["net_adv_decl"]},
+        "breadth_new_hilo.jsonl": lambda r: {
+            "date": r["date"], "new_highs": r["new_highs"],
+            "new_lows": r["new_lows"], "net": r["net_new_hilo"],
+            "hi_by_sector": r.get("hi_by_sector") or {},
+            "lo_by_sector": r.get("lo_by_sector") or {}},
+        "breadth_pct_up20.jsonl": lambda r: {"date": r["date"], "value": r["pct_up20"]},
+        "breadth_pct_up30.jsonl": lambda r: {"date": r["date"], "value": r["pct_up30"]},
+        "breadth_pct_down20.jsonl": lambda r: {"date": r["date"], "value": r["pct_down20"]},
+        "breadth_pct_down30.jsonl": lambda r: {"date": r["date"], "value": r["pct_down30"]},
+    }
+    for filename, shape in split.items():
+        upsert_many(series_path(country, filename), [shape(r) for r in breadth_records])
+
 
 def write_index(country, key, record):
     upsert_jsonl(series_path(country, f"index_{key}.jsonl"), record)
