@@ -81,7 +81,10 @@ WATCHLIST = [
 # committing thousands of daily-rewritten files into main would grow the repo
 # by tens of megabytes a day and never release it.
 TICKER_DIR_NAME = "tickers"
-TICKER_HISTORY_DAYS = 252
+# Six and a half years, so the stock chart reaches back to 2020 and the setups
+# database has real history to search. These files live only on gh-pages (see
+# .gitignore) so depth costs nothing in repo history.
+TICKER_HISTORY_DAYS = 1700
 
 COUNTRIES = {
     "US": {

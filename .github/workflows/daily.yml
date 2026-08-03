@@ -29,6 +29,28 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
+      # The per-ticker chart files hold history back to 2020, fetched once in
+      # bulk. They are gitignored in main and live only on gh-pages, so a fresh
+      # runner starts without them — and the nightly price source returns a
+      # much shallower window. Without this restore, store.write_ticker_ohlc
+      # would merge into nothing and each night would quietly truncate the
+      # charts back to whatever the daily fetch happened to return.
+      - name: Restore deep ticker history from gh-pages
+        continue-on-error: true
+        run: |
+          git clone --depth 1 --branch gh-pages \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" /tmp/site
+          for dir in tickers in/tickers; do
+            if [ -d "/tmp/site/$dir" ]; then
+              mkdir -p "docs/$dir"
+              cp -r "/tmp/site/$dir/." "docs/$dir/"
+              echo "restored $(ls "docs/$dir" | wc -l) files into docs/$dir"
+            fi
+          done
+          rm -rf /tmp/site
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Run pipeline
         env:
           FMP_API_KEY: ${{ secrets.FMP_API_KEY }}

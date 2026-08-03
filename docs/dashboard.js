@@ -1865,7 +1865,10 @@
     // bar stored. This used to be hard-coded to 126, which silently threw away
     // most of the history actually on disk (a name with two years stored still
     // only ever drew its last six months).
-    const RANGES = [["1M", 21], ["3M", 63], ["6M", 126], ["1Y", 252], ["2Y", 504], ["ALL", 0]];
+    // 5Y earns its place now that the files reach 2020 — a 2021 setup is only
+    // findable if the chart will draw back that far.
+    const RANGES = [["1M", 21], ["3M", 63], ["6M", 126], ["1Y", 252],
+                    ["2Y", 504], ["5Y", 1260], ["ALL", 0]];
     let rangeBars = 252;
 
     function ema(values, span) {

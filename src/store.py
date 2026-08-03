@@ -61,7 +61,38 @@ def write_ticker_ohlc(country, ticker, eod_rows, rs_by_date=None):
     os.makedirs(out_dir, exist_ok=True)
 
     rows = [r for r in eod_rows if r.get("close") is not None]
+
+    # MERGE with whatever is already on disk rather than replacing it. The
+    # nightly source returns a shallow window, and overwriting would throw away
+    # the deep history the one-off backfill fetched. Newer rows win on a date
+    # collision, so a restatement still lands.
+    out_path = os.path.join(out_dir, ticker.replace("/", "-") + ".json")
+    existing_rs = {}
+    if os.path.exists(out_path):
+        try:
+            with open(out_path, encoding="utf-8") as f:
+                old = json.load(f)
+            by_date = {d: {"date": d, "open": o, "high": h, "low": l,
+                           "close": c, "volume": v}
+                       for d, o, h, l, c, v in zip(
+                           old.get("dates", []), old.get("open", []),
+                           old.get("high", []), old.get("low", []),
+                           old.get("close", []),
+                           old.get("volume") or [None] * len(old.get("dates", [])))}
+            for r in rows:
+                by_date[r["date"]] = r
+            rows = list(by_date.values())
+            # The RS series belongs to the file, not to the caller. A deep
+            # backfill supplies prices only, and without this the ratings the
+            # last pipeline run computed would be wiped every time.
+            existing_rs = {d: v for d, v in
+                           zip(old.get("dates", []), old.get("rs") or [])
+                           if v is not None}
+        except Exception:
+            pass   # unreadable file: fall back to just writing the new rows
+
     rows.sort(key=lambda r: r["date"])
+    rows = rows[-config.TICKER_HISTORY_DAYS:]
     if not rows:
         return None
 
@@ -78,13 +109,15 @@ def write_ticker_ohlc(country, ticker, eod_rows, rs_by_date=None):
     # RS rating per session, so the stock page can show the number for whatever
     # PAST date is selected rather than only for today — the whole point is
     # logging what the setup looked like on the day it triggered.
-    if rs_by_date:
-        payload["rs"] = [rs_by_date.get(r["date"]) for r in rows]
+    merged_rs = dict(existing_rs)
+    merged_rs.update({d: v for d, v in (rs_by_date or {}).items() if v is not None})
+    if merged_rs:
+        payload["rs"] = [merged_rs.get(r["date"]) for r in rows]
     # "/" would create a subdirectory; "&" is legal on disk and in a URL path
     # but several Indian symbols carry it (M&M, J&KBANK), so it is percent-safe
     # only because the page encodes the ticker before fetching.
     name = ticker.replace("/", "-")
-    with open(os.path.join(out_dir, f"{name}.json"), "w") as f:
+    with open(out_path, "w", encoding="utf-8") as f:
         json.dump(payload, f, separators=(",", ":"))
     return name
 
