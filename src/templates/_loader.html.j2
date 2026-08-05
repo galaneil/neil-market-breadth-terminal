@@ -1,0 +1,41 @@
+<script id="dashboard-data" type="application/json">{{ data_json }}</script>
+<script>
+// Series too big to inline are fetched before the dashboard starts, and the
+// page paints from a one-year tail. Full history follows once the page is
+// usable — "Since Inception" is the default timeframe, so that second fetch
+// is a correction rather than a nicety.
+(function () {
+  var data = JSON.parse(document.getElementById("dashboard-data").textContent);
+  var manifest = data.seriesManifest;
+  var src = "{{ asset_prefix }}dashboard.js?v={{ asset_version }}";
+
+  function start() {
+    var s = document.createElement("script");
+    s.src = src;
+    document.body.appendChild(s);
+  }
+
+  // Nothing was externalized: behave exactly as the page did before.
+  if (!manifest) { start(); return; }
+
+  var store = (window.MBT_SERIES = window.MBT_SERIES || {});
+  var keys = Object.keys(manifest);
+
+  function grab(url) {
+    return fetch(url)
+      .then(function (r) { return r.ok ? r.json() : []; })
+      .catch(function () { return []; });   // offline: show what we have
+  }
+
+  Promise.all(keys.map(function (k) {
+    return grab(manifest[k].tail).then(function (rows) { store[k] = rows; });
+  })).then(function () {
+    start();
+    keys.forEach(function (k) {
+      grab(manifest[k].full).then(function (rows) {
+        if (window.MBT_EXTEND) window.MBT_EXTEND(k, rows);
+      });
+    });
+  });
+})();
+</script>

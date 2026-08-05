@@ -20,7 +20,11 @@ def extract_classification(industry_df):
 
 
 def _rename(records):
-    return [{**r, "industry": r.pop("group")} for r in records]
+    # Not {**r, "industry": r.pop("group")}: the unpacking is evaluated before
+    # the pop, so every record kept BOTH keys with the same value. Over six
+    # years that duplicate was a fifth of the published payload.
+    return [{("industry" if k == "group" else k): v for k, v in r.items()}
+            for r in records]
 
 
 def compute_industry_ranks(price_cache, ticker_to_industry, market_caps, as_of_date):

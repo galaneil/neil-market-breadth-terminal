@@ -41,7 +41,6 @@ footer { display: none; }
 
 {% if needs_chartjs %}<script src="{{ asset_prefix }}vendor/chart.umd.min.js"></script>{% endif %}
 {% if needs_lightweight %}<script src="{{ asset_prefix }}vendor/lightweight-charts.js"></script>{% endif %}
-<script id="dashboard-data" type="application/json">{{ data_json }}</script>
-<script src="{{ asset_prefix }}dashboard.js?v={{ asset_version }}"></script>
+{% include "_loader.html.j2" %}
 </body>
 </html>

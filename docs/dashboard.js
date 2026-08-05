@@ -3,7 +3,13 @@
   const DATA = JSON.parse(document.getElementById("dashboard-data").textContent);
   // The replay page carries a differently-shaped payload with no `series`
   // key, and shares this script, so this must not be assumed present.
-  const S = DATA.series || {};
+  //
+  // MBT_SERIES is where the loader in the page shell puts history it fetched
+  // rather than had inlined. Inlining six years of industry ranks made the
+  // HTML 41MB, and nothing could paint until all of it had parsed. Small
+  // series are still inlined — a round trip costs more than a few KB — so
+  // both sources have to be merged, not chosen between.
+  const S = Object.assign({}, DATA.series || {}, window.MBT_SERIES || {});
   const root = document.documentElement;
 
   // ---------- Theme ----------
@@ -2646,6 +2652,23 @@
     if (initial) { input.value = initial; load(initial); }
   }
 
+  // ---------- Late-arriving history ----------
+  // The page paints from a one-year tail so it is usable in about a second.
+  // The rest of the history is still on its way, and "Since Inception" is the
+  // DEFAULT timeframe — so until the full file lands, that view is showing a
+  // year and calling it everything. The loader hands the older rows here and
+  // the affected charts redraw.
+  window.MBT_EXTEND = function (key, rows) {
+    if (!S[key] || !S[key].length || !rows || !rows.length) return;
+    const earliest = S[key][0].date;
+    const older = rows.filter(function (r) { return r.date < earliest; });
+    if (!older.length) return;
+    // Mutate in place: S is bound by const and the render functions closed
+    // over this exact array, so replacing it would leave them on the old one.
+    Array.prototype.unshift.apply(S[key], older);
+    redrawAllCharts();
+  };
+
   // ---------- Wire everything up ----------
   renderEnvironmentPanel();
 
@@ -2667,7 +2690,11 @@
       .then(function (r) { return r.ok ? r.json() : null; })
       .then(function (info) {
         if (!info || !info.build || info.build === built) return;
-        sessionStorage.setItem("mbt-reloaded", info.build);
+        // Flag the build the page WAS RENDERED WITH, not the one just found.
+        // Flagging the found build looped forever: the reloaded page still
+        // carries the old id from its cached HTML, so the flag never matched
+        // and it reloaded again on every pass.
+        sessionStorage.setItem("mbt-reloaded", built);
         location.reload();
       })
       .catch(function () { /* offline or blocked: leave the page alone */ });

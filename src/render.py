@@ -87,6 +87,64 @@ def load_all_series(country):
     }
 
 
+# A series smaller than this is cheaper to inline than to fetch — a second
+# HTTP round trip costs more than the bytes saved.
+INLINE_BYTE_LIMIT = 32 * 1024
+
+# Sessions kept in the tail file the page paints from. One trading year: long
+# enough that 1W/1M/3M/6M/YTD are all answered from it with no second request.
+TAIL_SESSIONS = 252
+
+
+def externalize_series(country, payload):
+    """Move bulky series out of the HTML into fetched JSON files.
+
+    Inlining put every byte in front of first paint: the browser could not
+    show a single number until six years of industry ranks had downloaded and
+    parsed, which is what made the Notion embeds feel broken.
+
+    Small series stay inline — a round trip is not worth saving 4KB. Big ones
+    are written twice: a tail the page paints from immediately, and the full
+    history fetched afterwards, because "Since Inception" is the default
+    timeframe and a tail alone would quietly mislabel one year as everything.
+
+    Mutates and returns `payload`.
+    """
+    series = payload.get("series")
+    if not series:
+        return payload
+
+    out_dir = os.path.join(config.docs_dir(country), "series")
+    os.makedirs(out_dir, exist_ok=True)
+
+    manifest, inline = {}, {}
+    for key, rows in series.items():
+        blob = json.dumps(rows, separators=(",", ":"))
+        if len(blob) <= INLINE_BYTE_LIMIT or len(rows) <= TAIL_SESSIONS:
+            inline[key] = rows
+            continue
+
+        with open(os.path.join(out_dir, f"{key}.json"), "w",
+                  encoding="utf-8") as f:
+            f.write(blob)
+        tail = rows[-TAIL_SESSIONS:]
+        with open(os.path.join(out_dir, f"{key}.tail.json"), "w",
+                  encoding="utf-8") as f:
+            json.dump(tail, f, separators=(",", ":"))
+
+        manifest[key] = {
+            "tail": f"series/{key}.tail.json",
+            "full": f"series/{key}.json",
+            "rows": len(rows),
+            "tailRows": len(tail),
+        }
+
+    payload["series"] = inline
+    if manifest:
+        payload["seriesManifest"] = manifest
+    return payload
+
+
 def asset_version():
     """Fingerprint of the shared CSS/JS, appended to their URLs as ?v=.
 
@@ -147,14 +205,14 @@ def render_dashboard(country):
     series = load_all_series(country)
     generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
 
-    data_json = json.dumps({
+    data_json = json.dumps(externalize_series(country, {
         "generated_at": generated_at,
         "country": country,
         "indexLabels": index_labels(country),
         "build": asset_version(),
         "assetPrefix": asset_prefix(country),
         "series": series,
-    }, separators=(",", ":"))
+    }), separators=(",", ":"))
 
     template = _ENV.get_template("dashboard.html.j2")
     html = template.render(
@@ -583,7 +641,7 @@ def _rank_body(name_label, table_id, drilldown_id, sort_key):
 
 def _write_panel(country, filename, title, body_html, payload, generated_at,
                  needs_chartjs=False, needs_lightweight=False):
-    payload = dict(payload or {})
+    payload = externalize_series(country, dict(payload or {}))
     payload["build"] = asset_version()
     # India's pages live in docs/in/, so they need "../" to reach the marker
     # at the docs root.

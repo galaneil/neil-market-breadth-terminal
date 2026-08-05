@@ -89,6 +89,13 @@ def compute_group_performance(price_cache, ticker_groups, market_caps, as_of_dat
     # strength over weeks) while still updating daily.
     result = result.sort_values("chg_20d", ascending=False).reset_index(drop=True)
     result["rank"] = result.index + 1
+
+    # Round only AFTER ranking. These are percentages displayed to one or two
+    # decimals, so full float precision is 15 wasted digits per number in the
+    # published payload — but rounding first would manufacture ties and change
+    # the rank order itself.
+    for key in GROUP_CHG_WINDOWS:
+        result[key] = result[key].round(2)
     return result
 
 

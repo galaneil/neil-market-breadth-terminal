@@ -27,7 +27,9 @@ def extract_classification(industry_df):
 
 
 def _rename(records):
-    return [{**r, "sector": r.pop("group")} for r in records]
+    # See the note in industries._rename — {**r, ...} kept the old key too.
+    return [{("sector" if k == "group" else k): v for k, v in r.items()}
+            for r in records]
 
 
 def compute_sector_ranks(price_cache, ticker_to_sector, market_caps, as_of_date):

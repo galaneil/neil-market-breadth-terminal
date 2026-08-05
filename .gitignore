@@ -16,3 +16,11 @@ docs/tmle/
 # JSONL series computed from them are the artefact worth keeping.
 data/*/_cache/price_window_deep.json
 data/*/_cache/index_ohlc_deep.json
+
+# Belt and braces. Portfolio output is written OUTSIDE this repo (see
+# src/portfolio_local.py), but if a future change ever writes it inside,
+# these keep account data out of a public repository.
+Portfolio Local/
+portfolio*.html
+stops.json
+statements/
