@@ -28,6 +28,7 @@ import time
 import traceback
 from datetime import datetime, timezone
 
+import budget
 import config
 import cache as cache_mod
 import fundamentals as fundamentals_mod
@@ -352,6 +353,12 @@ def run_country(code, client=None):
     # ---------- Render ----------
     dashboard, panels = render.render_country(code)
     log(f"{code}: rendered {dashboard} + {len(panels)} panel pages")
+
+    # Both times the embeds became unusable, the number that would have shown
+    # it was on disk and nobody was looking. index.html reached 41MB by
+    # growing ~18KB a weekday for six months. Report it every run so the next
+    # regression is caught in week one rather than by Neil noticing.
+    budget.check(code, log=lambda m: log(m.strip()))
 
 
 def api_key_from_env_file():
