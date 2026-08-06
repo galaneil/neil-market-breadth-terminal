@@ -47,8 +47,13 @@ MIN_GROUP_MEMBERS = 5  # drop sectors/industries too small to be a meaningful bu
 # a FRACTION of the total rather than a raw count, because the number of
 # factors depends on how many indices a country tracks (3 US indices x 3 EMAs =
 # 9 factors; 4 Indian indices x 3 = 12).
-TREND_BULL_FRACTION = 7 / 9
-TREND_BEAR_FRACTION = 2 / 9
+#
+# Neil's bands, set on the 12-factor Indian market: 8 or more of 12 is
+# bullish, 4 to 7 is choppy, 3 or fewer is bearish. As fractions those are
+# 2/3 and 1/4, which scale to 6 / 2 on the 9-factor US market — the same read
+# of the same tape, not a different standard per country.
+TREND_BULL_FRACTION = 2 / 3
+TREND_BEAR_FRACTION = 1 / 4
 # Participation: % of sectors/industries with a positive 20-day return.
 PARTICIPATION_BULL_MIN = 65
 PARTICIPATION_BEAR_MAX = 35

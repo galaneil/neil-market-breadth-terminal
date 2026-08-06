@@ -203,18 +203,22 @@ def compute_internals(adv_decl_rows, new_hilo_rows, date_str):
     }
 
 
-def _overall(labels):
-    """Overall read across the three components. Unanimity is required for a
-    directional call — if the components disagree, the honest description of
-    the tape is that it is choppy."""
-    present = [l for l in labels if l]
-    if not present:
-        return "unknown"
-    if all(l == "bullish" for l in present):
-        return "bullish"
-    if all(l == "bearish" for l in present):
-        return "bearish"
-    return "choppy"
+def _overall(trend):
+    """The verdict follows the INDEX ACTION, and nothing else.
+
+    It used to require unanimity across trend, participation and internals,
+    which meant any one of them could veto the other two. That went wrong in
+    practice: internals is judged on the SIGN of two 10-day averages, so an
+    advance-decline spread of -25 on a 981-name market — about 9% of a typical
+    day's spread, statistically flat — outvoted a 12/12 trend and 69%
+    participation. The result was "choppy" on two days in three in both
+    markets, which is not a description of anything.
+
+    Participation and internals are still computed and still shown. They are
+    context for HOW the move is happening — broad or narrow, confirmed or
+    diverging — which is a different question from what the tape is doing.
+    """
+    return trend["label"] if trend else "unknown"
 
 
 def compute_environment(index_series, sector_rows, industry_rows,
@@ -224,15 +228,9 @@ def compute_environment(index_series, sector_rows, industry_rows,
     internals = compute_internals(adv_decl_rows, new_hilo_rows, date_str)
     leaders = compute_leaders(sector_rows, industry_rows, date_str)
 
-    labels = [
-        trend["label"] if trend else None,
-        participation["label"] if participation else None,
-        internals["label"] if internals else None,
-    ]
-
     return {
         "date": date_str,
-        "overall": _overall(labels),
+        "overall": _overall(trend),
         "trend": trend,
         "participation": participation,
         "internals": internals,
