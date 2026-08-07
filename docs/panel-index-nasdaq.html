@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>NASDAQ Composite — United States — Market Breadth Terminal</title>
-<link rel="stylesheet" href="dashboard.css?v=e61e8b28ad">
+<link rel="stylesheet" href="dashboard.css?v=461530fd77">
 <style>
 /* Single-panel embed pages are meant to sit inside a small Notion embed
    block, not a full browser window — trim the chrome accordingly. */
@@ -27,7 +27,7 @@ footer { display: none; }
       <a href="panel-index-nasdaq.html" title="United States" class="active"><svg class="flag" width="18" height="12" viewBox="0 0 24 16" role="img" aria-label="United States"><rect width="24" height="16" fill="#fff"/><g fill="#B22234"><rect y="0.000" width="24" height="1.231"/><rect y="2.462" width="24" height="1.231"/><rect y="4.923" width="24" height="1.231"/><rect y="7.385" width="24" height="1.231"/><rect y="9.846" width="24" height="1.231"/><rect y="12.308" width="24" height="1.231"/><rect y="14.769" width="24" height="1.231"/></g><rect width="10" height="8.615" fill="#3C3B6E"/></svg>US</a>
       <a href="in/panel-index-nasdaq.html" title="India"><svg class="flag" width="18" height="12" viewBox="0 0 24 16" role="img" aria-label="India"><rect width="24" height="5.333" fill="#FF9933"/><rect y="5.333" width="24" height="5.334" fill="#fff"/><rect y="10.667" width="24" height="5.333" fill="#138808"/><circle cx="12" cy="8" r="2.1" fill="none" stroke="#000080" stroke-width="0.45"/><circle cx="12" cy="8" r="0.45" fill="#000080"/></svg>IN</a>
     </span>
-    <span class="generated-at">Updated 2026-08-06 05:45 UTC</span>
+    <span class="generated-at">Updated 2026-08-07 02:08 UTC</span>
     <button class="icon-btn" id="theme-toggle" title="Toggle dark/light">&#9788;</button>
   </div>
 </header>
@@ -38,7 +38,7 @@ footer { display: none; }
 
 
 <script src="vendor/lightweight-charts.js"></script>
-<script id="dashboard-data" type="application/json">{"generated_at":"2026-08-06 05:45","country":"US","indexLabels":{"index_nasdaq":"NASDAQ Composite","index_sp500":"S&P 500","index_russell2000":"Russell 2000"},"series":{},"seriesManifest":{"index_nasdaq":{"tail":"series/index_nasdaq.tail.json","full":"series/index_nasdaq.json","rows":1656,"tailRows":252}},"build":"e61e8b28ad","assetPrefix":""}</script>
+<script id="dashboard-data" type="application/json">{"generated_at":"2026-08-07 02:08","country":"US","indexLabels":{"index_nasdaq":"NASDAQ Composite","index_sp500":"S&P 500","index_russell2000":"Russell 2000"},"series":{},"seriesManifest":{"index_nasdaq":{"tail":"series/index_nasdaq.tail.json","full":"series/index_nasdaq.json","rows":1657,"tailRows":252}},"build":"461530fd77","assetPrefix":""}</script>
 <script>
 // Series too big to inline are fetched before the dashboard starts, and the
 // page paints from a one-year tail. Full history follows once the page is
@@ -47,7 +47,7 @@ footer { display: none; }
 (function () {
   var data = JSON.parse(document.getElementById("dashboard-data").textContent);
   var manifest = data.seriesManifest;
-  var src = "dashboard.js?v=e61e8b28ad";
+  var src = "dashboard.js?v=461530fd77";
 
   function start() {
     var s = document.createElement("script");
