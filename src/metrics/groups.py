@@ -111,9 +111,72 @@ def backfill_group_history(price_cache, ticker_groups, market_caps, dates):
     return out
 
 
+# A date has to appear for at least this share of the universe to count as a
+# session. Well above any plausible cluster of individually-missing symbols,
+# well below the ~100% a real trading day gets.
+SESSION_QUORUM = 0.30
+
+# A session that clears the quorum but falls short of this was still built on
+# a partial universe. It stays — it is a real trading day — but the counts it
+# produces (advancers, decliners, new highs) are understated in proportion to
+# what is missing, and that is worth saying out loud rather than discovering
+# later as an unexplained dip in breadth.
+SESSION_HEALTHY = 0.90
+
+
+def session_coverage(price_cache, n_days=8):
+    """[(date, tickers_with_data, universe)] for the most recent dates.
+
+    Exists because a fetch can fail almost completely and leave no trace. On
+    2026-08-03 the US pull returned 41 of 3,388 names — 1.2% against 99% on
+    the days either side — and the only visible symptom was some panels being
+    a day behind others, a week later. A failed session and a real holiday are
+    indistinguishable downstream, so the difference has to be caught here,
+    while the numbers are still in front of us.
+    """
+    counts, universe = {}, 0
+    for entry in price_cache.values():
+        if not isinstance(entry, dict) or not entry:
+            continue
+        universe += 1
+        for date in entry:
+            counts[date] = counts.get(date, 0) + 1
+    recent = sorted(counts)[-n_days:]
+    return [(d, counts[d], universe) for d in recent]
+
+
 def trading_calendar(price_cache, reference_ticker, n_days):
-    """Last n_days trading-day date strings (ascending) from one ticker's cached
-    series, used as the canonical set of dates to backfill every panel against."""
+    """Last n_days trading-day date strings, ascending.
+
+    Taken by CONSENSUS across the universe, not from one reference ticker.
+
+    It used to read the reference ticker's series alone, and that silently cost
+    real sessions: ^GSPC was missing 2026-08-03 and 2026-08-06 in the US cache
+    while every constituent had them, so breadth, environment, sector and
+    industry ranks all skipped those two days. The index OHLC file had them —
+    it is fetched separately — which is why the gap showed up as some panels
+    being a day behind others rather than as an error.
+
+    One symbol's data gap should not be able to delete a trading day from every
+    metric. A date that a third of the universe traded on is a session,
+    whatever any single ticker's series happens to contain.
+    """
+    counts = {}
+    universe = 0
+    for symbol, entry in price_cache.items():
+        if not isinstance(entry, dict) or not entry:
+            continue
+        universe += 1
+        for date in entry:
+            counts[date] = counts.get(date, 0) + 1
+
+    if universe:
+        floor = max(2, int(universe * SESSION_QUORUM))
+        dates = sorted(d for d, n in counts.items() if n >= floor)
+        if dates:
+            return dates[-n_days:]
+
+    # Nothing cached (a first run, or a cache that failed to load): fall back
+    # to the old behaviour rather than returning no dates at all.
     series = cache_mod.to_series(price_cache, reference_ticker)
-    dates = series.index[-n_days:]
-    return [d.strftime("%Y-%m-%d") for d in dates]
+    return [d.strftime("%Y-%m-%d") for d in series.index[-n_days:]]

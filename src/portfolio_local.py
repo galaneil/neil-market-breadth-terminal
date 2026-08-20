@@ -123,6 +123,14 @@ def terminal_context(ticker):
     return out
 
 
+def _iso(stamp):
+    """20260806 -> 2026-08-06. Passes through anything already dashed."""
+    text = str(stamp)
+    if len(text) == 8 and text.isdigit():
+        return f"{text[:4]}-{text[4:6]}-{text[6:]}"
+    return text
+
+
 def build(data, stops):
     """Positions with everything derived, plus account-level totals."""
     nav_rows = data["nav"]
@@ -169,6 +177,10 @@ def build(data, stops):
 
     return {
         "as_of": data["as_of"],
+        # ISO dates: IBKR reports them as 20260806, which neither JavaScript's
+        # Date nor a string comparison against a cutoff handles correctly.
+        "nav_series": [(_iso(r["date"]), r["total"]) for r in nav_rows
+                       if r.get("date") and r.get("total") is not None],
         "nav": nav,
         "prior_nav": prior,
         "invested": invested,
@@ -188,6 +200,89 @@ def money(value):
 
 def pct(value, places=1):
     return "—" if value is None else f"{value * 100:.{places}f}%"
+
+
+def equity_curve(series, width=1100, height=190):
+    """The NAV series as an inline SVG.
+
+    Drawn by hand rather than with a charting library because this page is
+    opened from disk with no network — a CDN script tag would simply fail, and
+    vendoring 200KB of Chart.js to draw one polyline is not a trade worth
+    making.
+
+    The y-axis deliberately does NOT start at zero. An equity curve read for
+    drawdown needs the actual range magnified; anchoring at zero would flatten
+    every move that matters into a straight line near the top.
+    """
+    if len(series) < 2:
+        need = 2 - len(series)
+        return (f'<div class="empty-curve">Not enough history to plot — '
+                f'{len(series)} report date{"" if len(series) == 1 else "s"} '
+                f'available, need at least {need} more.<br>'
+                f'<span class="dim">Set the Flex query Period to '
+                f'"Year to Date" and one run backfills the whole curve.</span>'
+                f'</div>')
+
+    values = [v for _, v in series]
+    low, high = min(values), max(values)
+    span = (high - low) or (high * 0.01) or 1
+    pad = span * 0.12
+    low, high = low - pad, high + pad
+    span = high - low
+
+    left, right, top, bottom = 8, 8, 12, 22
+    plot_w = width - left - right
+    plot_h = height - top - bottom
+
+    def x(i):
+        return left + (plot_w * i / (len(series) - 1))
+
+    def y(v):
+        return top + plot_h - (plot_h * (v - low) / span)
+
+    points = " ".join(f"{x(i):.1f},{y(v):.1f}" for i, v in enumerate(values))
+    area = (f"{left},{top + plot_h} {points} "
+            f"{left + plot_w},{top + plot_h}")
+
+    first, last = values[0], values[-1]
+    up = last >= first
+    stroke = "var(--up)" if up else "var(--down)"
+
+    # Peak-to-trough on the visible window, since that is the number an equity
+    # curve is actually read for.
+    peak, drawdown = values[0], 0.0
+    for v in values:
+        peak = max(peak, v)
+        if peak:
+            drawdown = min(drawdown, v / peak - 1)
+
+    ticks = ""
+    for i in (0, len(series) - 1):
+        anchor = "start" if i == 0 else "end"
+        ticks += (f'<text x="{x(i):.0f}" y="{height - 6}" class="ax" '
+                  f'text-anchor="{anchor}">{series[i][0]}</text>')
+
+    return f"""
+<div class="curve-head">
+  <div><span class="curve-label">Equity curve</span>
+    <span class="dim">{len(series)} report dates ·
+    {money(low + pad)}–{money(high - pad)}</span></div>
+  <div class="curve-stats">
+    <span class="{'up' if up else 'down'}">{pct((last / first - 1) if first else None, 2)}</span>
+    <span class="dim">over the window</span>
+    <span class="down">{pct(drawdown, 2)}</span>
+    <span class="dim">max drawdown</span>
+  </div>
+</div>
+<svg class="curve" viewBox="0 0 {width} {height}" preserveAspectRatio="none"
+     role="img" aria-label="Account NAV over time">
+  <polygon points="{area}" fill="{stroke}" opacity="0.10"/>
+  <polyline points="{points}" fill="none" stroke="{stroke}"
+            stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>
+  <circle cx="{x(len(series) - 1):.1f}" cy="{y(last):.1f}" r="3.5"
+          fill="{stroke}"/>
+  {ticks}
+</svg>"""
 
 
 def render(view):
@@ -281,6 +376,18 @@ def render(view):
     border-left:3px solid var(--warn); padding:8px 12px; margin-bottom:8px;
     font-size:13px; border-radius:0 6px 6px 0; }}
   footer {{ margin-top:22px; color:var(--dim); font-size:11px; }}
+  .panel {{ background:var(--panel); border:1px solid var(--line);
+    border-radius:10px; padding:14px 16px; margin-bottom:20px; }}
+  .curve {{ width:100%; height:190px; display:block; }}
+  .curve-head {{ display:flex; justify-content:space-between; align-items:baseline;
+    flex-wrap:wrap; gap:8px; margin-bottom:6px; }}
+  .curve-label {{ font-size:11px; text-transform:uppercase; letter-spacing:.04em;
+    color:var(--dim); font-weight:600; margin-right:6px; }}
+  .curve-stats {{ font-size:12px; font-variant-numeric:tabular-nums; }}
+  .curve-stats span {{ margin-left:6px; }}
+  .ax {{ fill:var(--dim); font-size:11px; }}
+  .empty-curve {{ padding:22px 4px; color:var(--dim); font-size:13px;
+    text-align:center; line-height:1.6; }}
 </style></head><body><main>
 
 <h1>Portfolio<span class="private">local only</span></h1>
@@ -306,6 +413,8 @@ def render(view):
 </div>
 
 {warning_html}
+
+<div class="panel">{equity_curve(view['nav_series'])}</div>
 
 <table>
   <thead><tr>
