@@ -65,6 +65,11 @@ DOCS_ROOT = config.DOCS_DIR
 # than expanding the sidebar itself.
 HUB_PANELS = [
     {"label": "Market Environment", "path": "panel-summary.html"},
+    # Each country tracks a different set of indices (US: 3, India: 4), so
+    # this entry's children are NOT listed here — they are built per-country
+    # in _hub_nav_json() from config.COUNTRIES, which is the one place that
+    # already knows what each market's indices are.
+    {"label": "Indices", "dynamic": "indices"},
     {"label": "Sector & Industry", "children": [
         {"label": "Sectors", "path": "panel-sectors.html",
          "note": "Broad GICS-style sector groups."},
@@ -1136,7 +1141,19 @@ def _hub_nav_json():
     """The sidebar's contents, generated from HUB_PANELS and config.COUNTRIES
     rather than hand-duplicated in the JS below — a panel added to one list
     should not require editing two places to appear in the hub."""
-    def resolve(entry, prefix):
+    def indices_group(cfg, prefix):
+        labels = cfg.get("index_labels", {})
+        children = [
+            {"label": labels.get(key, key.title()),
+             "url": prefix + f"panel-index-{key}.html",
+             "note": ""}
+            for key in cfg.get("index_tickers", {})
+        ]
+        return {"label": "Indices", "children": children}
+
+    def resolve(entry, cfg, prefix):
+        if entry.get("dynamic") == "indices":
+            return indices_group(cfg, prefix)
         if "children" in entry:
             return {"label": entry["label"], "children": [
                 {"label": c["label"], "url": prefix + c["path"],
@@ -1150,7 +1167,7 @@ def _hub_nav_json():
         countries.append({
             "code": code, "label": cfg.get("short", code),
             "flag": flags.flag(code) if flags else "",
-            "panels": [resolve(entry, prefix) for entry in HUB_PANELS],
+            "panels": [resolve(entry, cfg, prefix) for entry in HUB_PANELS],
         })
     return json.dumps(countries)
 
@@ -1299,6 +1316,8 @@ function icon(d) {
 }
 const ICONS = {
   "Market Environment": icon('<polyline points="3 12 8 12 10 18 14 6 16 12 21 12"/>'),
+  "Indices": icon('<rect x="3" y="12" width="4" height="8"/>'
+    + '<rect x="10" y="7" width="4" height="13"/><rect x="17" y="3" width="4" height="17"/>'),
   "Sector & Industry": icon('<polygon points="12 2 2 7 12 12 22 7 12 2"/>'
     + '<polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>'),
   "Money Flows": icon('<polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/>'
