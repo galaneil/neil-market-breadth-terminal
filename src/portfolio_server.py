@@ -33,9 +33,13 @@ Usage:
 
 import json
 import os
+import re
+import subprocess
 import sys
+import tarfile
 import threading
 import time
+import urllib.request
 import webbrowser
 from datetime import datetime, timezone
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -94,6 +98,148 @@ HUB_PANELS = [
 
 OUTPUT_DIR = os.path.join(os.path.dirname(config.ROOT_DIR), "Portfolio Local")
 STOPS_FILE = os.path.join(OUTPUT_DIR, "stops.json")
+
+# ── Keeping the local checkout current, automatically ───────────────────────
+#
+# Everything the hub reads from disk falls into two kinds, and each one goes
+# stale for a different reason:
+#
+#   data/*.jsonl, docs/*.html   git-tracked. The nightly Action always
+#                               refreshes these on origin/main; they only sit
+#                               stale HERE because nobody ran `git pull` on
+#                               this particular checkout. A plain fast-forward
+#                               pull fixes it, safely: it does nothing at all
+#                               if history has diverged or local edits are in
+#                               the way, rather than risking either.
+#
+#   docs/tickers/, docs/in/tickers/   deliberately gitignored — the nightly
+#                               Action rewrites thousands of per-ticker files
+#                               every run, which is not worth permanent git
+#                               history. A git pull can never refresh these;
+#                               only re-running the whole pipeline locally, or
+#                               pulling the copy the Action already produced
+#                               on gh-pages, does. That branch cannot be git-
+#                               cloned on Windows at all — one ticker is named
+#                               CON.json, a reserved device name at the
+#                               filesystem level, not a git limitation — so
+#                               this fetches the tarball and extracts it
+#                               itself, skipping only that one file.
+#
+# Both run once at server startup and then on a repeating timer, so the hub
+# stays current on its own instead of depending on someone noticing a stale
+# date and asking for it to be fixed again.
+GITHUB_REPO = "galaneil/neil-market-breadth-terminal"
+SYNC_STATE_FILE = os.path.join(OUTPUT_DIR, "sync_state.json")
+SYNC_LOOP_MINUTES = 30          # how often the loop wakes up to check
+TICKER_SYNC_HOURS = 20          # how old ticker history must be to redo the
+                                # ~1-minute, ~100MB download — a bit under a
+                                # day, so it can never fall a full day behind
+_RESERVED_WINDOWS_NAME = re.compile(
+    r"^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\.[^.]*)?$", re.IGNORECASE)
+_TICKER_PREFIXES = {"tickers/": "tickers", "in/tickers/": os.path.join("in", "tickers")}
+
+
+def sync_from_origin(log=print):
+    try:
+        result = subprocess.run(
+            ["git", "pull", "--ff-only", "origin", "main"],
+            cwd=config.ROOT_DIR, capture_output=True, text=True, timeout=120)
+        if result.returncode == 0:
+            msg = result.stdout.strip() or "already up to date"
+            log(f"  git sync: {msg}")
+        else:
+            # Diverged history or local edits in the way. Never forced past
+            # this — staying stale is the safe failure, overwriting isn't.
+            log(f"  git sync skipped: {result.stderr.strip()[:200] or 'not a fast-forward'}")
+    except Exception as error:
+        log(f"  git sync failed: {error}")
+
+
+def _load_sync_state():
+    if os.path.exists(SYNC_STATE_FILE):
+        try:
+            with open(SYNC_STATE_FILE, encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+
+def _save_sync_state(state):
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    with open(SYNC_STATE_FILE, "w", encoding="utf-8") as f:
+        json.dump(state, f)
+
+
+def sync_tickers_from_ghpages(log=print):
+    url = (f"https://codeload.github.com/{GITHUB_REPO}"
+          "/tar.gz/refs/heads/gh-pages")
+    archive_path = os.path.join(OUTPUT_DIR, "_ghpages_sync.tar.gz")
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    log("  downloading current ticker history from gh-pages (~1 min)...")
+    urllib.request.urlretrieve(url, archive_path)
+
+    written = skipped = 0
+    try:
+        with tarfile.open(archive_path, "r:gz") as tar:
+            for member in tar:
+                if not member.isfile():
+                    continue
+                # First path segment is the tarball's synthetic
+                # "<repo>-gh-pages/" root, which every entry carries.
+                parts = member.name.split("/", 1)
+                if len(parts) < 2:
+                    continue
+                rel = parts[1]
+                local_prefix = sub_rel = None
+                for prefix, local in _TICKER_PREFIXES.items():
+                    if rel.startswith(prefix):
+                        local_prefix, sub_rel = local, rel[len(prefix):]
+                        break
+                if local_prefix is None:
+                    continue          # everything else on gh-pages is html/
+                                       # css/js already current via git
+                basename = os.path.basename(sub_rel)
+                stem = os.path.splitext(basename)[0]
+                if _RESERVED_WINDOWS_NAME.match(stem) or _RESERVED_WINDOWS_NAME.match(basename):
+                    skipped += 1
+                    continue
+                dest = os.path.join(DOCS_ROOT, local_prefix, sub_rel)
+                os.makedirs(os.path.dirname(dest), exist_ok=True)
+                with open(dest, "wb") as out:
+                    out.write(tar.extractfile(member).read())
+                written += 1
+    finally:
+        os.remove(archive_path)
+    log(f"  tickers synced: {written} files ({skipped} skipped — Windows-reserved name)")
+
+
+def run_auto_sync(force_tickers=False, log=print):
+    sync_from_origin(log=log)
+
+    state = _load_sync_state()
+    age_hours = None
+    if state.get("tickers"):
+        age_hours = (time.time() - state["tickers"]) / 3600
+
+    if force_tickers or age_hours is None or age_hours >= TICKER_SYNC_HOURS:
+        try:
+            sync_tickers_from_ghpages(log=log)
+            state["tickers"] = time.time()
+            _save_sync_state(state)
+        except Exception as error:
+            log(f"  ticker sync failed: {error}")
+    else:
+        log(f"  tickers synced {age_hours:.1f}h ago, skipping")
+
+
+def _sync_loop(log):
+    while True:
+        try:
+            run_auto_sync(log=log)
+        except Exception as error:
+            log(f"  auto-sync error: {error}")
+        time.sleep(SYNC_LOOP_MINUTES * 60)
 
 # How long a fetched view is reused. The page polls every 30s, which is right
 # for a live feed and wildly wrong for a reports API — IBKR's Flex service
@@ -504,6 +650,18 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         route = urlparse(self.path)
+        if route.path == "/api/sync":
+            # The background loop already does this automatically — this is
+            # the self-service version, for "I don't want to wait 30 minutes
+            # or ask someone to fix it" rather than a routine path.
+            try:
+                run_auto_sync(force_tickers=True, log=log)
+                self._send(200, json.dumps({"ok": True}), "application/json")
+            except Exception as error:
+                self._send(200, json.dumps({"ok": False, "error": str(error)}),
+                          "application/json")
+            return
+
         if route.path == "/api/gateway/start":
             try:
                 ok = start_gateway()
@@ -1118,6 +1276,12 @@ def main():
         del pin
         log("  Angel One connected\n")
 
+    # Runs once now and then every SYNC_LOOP_MINUTES for as long as the
+    # server is up, so the hub stops depending on someone noticing a stale
+    # date and asking for it to be fixed — see the block above main() for
+    # what each half of this actually does and why it is safe to automate.
+    threading.Thread(target=_sync_loop, args=(log,), daemon=True).start()
+
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     url = f"http://{HOST}:{PORT}/"
     log(f"  serving {url}")
@@ -1290,6 +1454,10 @@ HUB_PAGE = r"""<!doctype html>
     Breadth data also published at
     <a href="https://galaneil.github.io/neil-market-breadth-terminal/" target="_blank" rel="noopener">GitHub Pages</a>
     for Notion embeds — this hub reads the same files locally.
+    <div style="margin-top:8px">
+      <a id="sync-now" href="#">Sync data now</a>
+      <span id="sync-status" class="dim"></span>
+    </div>
   </div>
 </div>
 
@@ -1377,9 +1545,34 @@ function showLeaf() {
   document.getElementById("stack-wrap").hidden = true;
 }
 
+// Every published panel carries its own US/IN quick-links (plain <a href>,
+// so they work in Notion with no hub around them) — clicking one navigates
+// the iframe internally, which the hub never learns about. If the sidebar is
+// then clicked back to a panel whose URL string happens to be exactly what
+// the iframe's src ATTRIBUTE already says (unchanged since the hub last set
+// it), assigning that same string again is a no-op in every browser: the
+// frame silently keeps showing whatever it navigated to on its own, while the
+// hub's own chrome — crumb, sidebar highlight — confidently shows the
+// panel it THINKS is loaded. That mismatch is exactly what showed up as "US"
+// in the sidebar with India's data on screen.
+//
+// contentWindow.location.replace() has no such fast path: it always performs
+// a real navigation to the given URL regardless of the frame's current
+// location, so the hub's click is authoritative every time. It only fails
+// (cross-origin, or before the first document has loaded), in which case
+// setting .src is correct anyway since there is nothing stale to override.
+function loadFrame(url) {
+  const frame = document.getElementById("frame");
+  try {
+    frame.contentWindow.location.replace(url);
+  } catch (e) {
+    frame.src = url;
+  }
+}
+
 function go(url, label, scoped, topLabel) {
   showLeaf();
-  document.getElementById("frame").src = url;
+  loadFrame(url);
   setChrome(url, label, scoped, topLabel);
 }
 
@@ -1502,7 +1695,25 @@ document.getElementById("reload-btn").onclick = () => {
       try { f.contentWindow.location.reload(); } catch (e) { f.src = f.src; }
     });
   } else if (currentUrl) {
-    document.getElementById("frame").src = currentUrl;
+    // Same no-op trap as go(): the frame's src attribute already equals
+    // currentUrl, so setting it again does nothing in any browser.
+    const frame = document.getElementById("frame");
+    try { frame.contentWindow.location.reload(); }
+    catch (e) { frame.src = currentUrl; }
+  }
+};
+
+document.getElementById("sync-now").onclick = async (e) => {
+  e.preventDefault();
+  const status = document.getElementById("sync-status");
+  status.textContent = " — syncing (up to ~1 min)…";
+  try {
+    const r = await (await fetch("/api/sync", {method: "POST"})).json();
+    status.textContent = r.ok
+      ? " — done, reloading…" : " — failed: " + (r.error || "unknown error");
+    if (r.ok) setTimeout(() => location.reload(), 600);
+  } catch (err) {
+    status.textContent = " — server not reachable";
   }
 };
 
