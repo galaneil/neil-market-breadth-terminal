@@ -227,14 +227,14 @@ def run_country(code, client=None):
     # A near-total fetch failure is invisible downstream — it just looks like a
     # holiday. Report coverage every run so the next one is caught the same
     # night rather than a week later as a panel being mysteriously behind.
-    for day, have, universe in groups_mod.session_coverage(price_cache):
-        share = have / universe if universe else 0
+    for day, have, pool_size in groups_mod.session_coverage(price_cache):
+        share = have / pool_size if pool_size else 0
         if share < groups_mod.SESSION_QUORUM:
-            log(f"{code}: !! {day} has data for only {have} of {universe} "
+            log(f"{code}: !! {day} has data for only {have} of {pool_size} "
                 f"tickers ({share:.1%}) — treated as a non-session. If the "
                 f"market was open, this fetch failed.")
         elif share < groups_mod.SESSION_HEALTHY:
-            log(f"{code}: !  {day} built on {have} of {universe} tickers "
+            log(f"{code}: !  {day} built on {have} of {pool_size} tickers "
                 f"({share:.1%}) — breadth counts for this day understate "
                 f"the tape by roughly the missing share.")
     log(f"{code}: calendar covers {len(dates)} sessions, "
