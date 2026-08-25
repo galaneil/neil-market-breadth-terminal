@@ -388,6 +388,13 @@ def build_replay_payload(country, series, generated_at):
 
 
 def _tmle_leaders_body():
+    # The stock/score panel is the SAME markup as the standalone "Leader
+    # Score" page (_tmle_stock_body()) — clicking a row here publishes a
+    # ticker over the page's existing Sync bus, and renderTmleStock() is
+    # already called unconditionally on every page (guarded by its own
+    # "if (!host) return"), so embedding this markup is the entire change:
+    # no new JS, no new data plumbing beyond what render_tmle_panels()
+    # already computes for the standalone page.
     return """
 <div id="tmle-digest"></div>
 <div class="tf-toggle" id="tmle-filter">
@@ -395,6 +402,7 @@ def _tmle_leaders_body():
   <button class="tf-btn" data-filter="broken">Broken ex-leaders</button>
   <button class="tf-btn" data-filter="all">Everything scored</button>
 </div>
+<div id="tmle-legend" class="tmle-legend"></div>
 <div class="table-wrap"><table id="tmle-leaders-table">
   <thead><tr>
     <th data-sort="rank">#</th><th data-sort="ticker">Ticker</th>
@@ -407,7 +415,8 @@ def _tmle_leaders_body():
     <th data-sort="stage">Stage</th>
   </tr></thead><tbody></tbody>
 </table></div>
-""".strip()
+<div class="empty-note" style="margin-top:18px">Click a row for that name's score history and full factor breakdown.</div>
+""".strip() + "\n" + _tmle_stock_body()
 
 
 def _tmle_emerging_body():
@@ -830,13 +839,21 @@ def render_tmle_panels(country, generated_at):
         "asOf": tmle_data["date"],
         "factorMeta": factor_meta,
         "maxDrawdown": tmle_config.MAX_ACTIONABLE_DRAWDOWN,
+        "tickerDir": config.TICKER_DIR_NAME,
     }
 
+    # The leaders page now embeds the same score/chart panel the standalone
+    # "Leader Score" page shows, so it needs that panel's data too:
+    # classification (industry/sector for the header), tmleDir (where its
+    # per-ticker score history is fetched from), and scored (the autocomplete
+    # list plus what a click is validated against).
     paths = []
     paths.append(_write_panel(
         country, "panel-tmle-leaders.html", "Market Leaders", _tmle_leaders_body(),
         dict(common, leaders=tmle_data["leaders"], broken=tmle_data["broken"],
-             counts=tmle_data["counts"]), generated_at,
+             counts=tmle_data["counts"], classification=_load_classification(country),
+             tmleDir="tmle", scored=[item["ticker"] for item in tmle_data["leaders"]]),
+        generated_at, needs_chartjs=True, needs_lightweight=True,
     ))
     paths.append(_write_panel(
         country, "panel-tmle-emerging.html", "Emerging Leaders", _tmle_emerging_body(),
@@ -847,7 +864,7 @@ def render_tmle_panels(country, generated_at):
         dict(common, classification=_load_classification(country),
              tmleDir="tmle",
              scored=[item["ticker"] for item in tmle_data["leaders"]]),
-        generated_at, needs_chartjs=True,
+        generated_at, needs_chartjs=True, needs_lightweight=True,
     ))
     return paths
 

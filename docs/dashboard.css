@@ -126,6 +126,18 @@ section h2 { font-size: 15px; text-transform: uppercase; letter-spacing: 0.04em;
 .tmle-stat-num { font-size: 24px; font-weight: 600; font-variant-numeric: tabular-nums; }
 .tmle-stat-num.up { color: var(--up); }
 .tmle-stat-num.down { color: var(--down); }
+/* What F1/F4/F4B/F5 actually are, sitting right above the columns they
+   label — also set as each header's hover title, so both a glance and a
+   hover answer the same question. */
+.tmle-legend { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 2px 0 12px;
+  padding: 8px 12px; background: var(--panel-bg); border: 1px solid var(--border);
+  border-radius: 8px; font-size: 12px; }
+.tmle-legend-item { display: inline-flex; align-items: baseline; gap: 5px; }
+.tmle-legend-item b { color: var(--accent); font-variant-numeric: tabular-nums; }
+.tmle-legend-blurb { color: var(--text-dim); }
+.tmle-legend-blurb::before { content: " — "; }
+#tmle-leaders-table th, #tmle-leaders-table td { padding: 9px 12px; }
+#tmle-leaders-table th[data-sort="ticker"], #tmle-leaders-table td.name-cell { text-align: left; }
 /* The daily read: two short lists and a verdict. Sized to be legible at a
    glance from across a desk, which is the whole point of it. */
 .digest { margin-bottom: 8px; }
@@ -329,7 +341,8 @@ tbody tr.selected { background: var(--grid-line); outline: 1px solid var(--accen
 .pct.up { color: var(--up); }
 .pct.down { color: var(--down); }
 .rank-cell { color: var(--text-dim); }
-.table-wrap { background: var(--panel-bg); border: 1px solid var(--border); border-radius: 10px; padding: 4px 12px; max-height: 420px; overflow-y: auto; }
+.table-wrap { background: var(--panel-bg); border: 1px solid var(--border); border-radius: 10px; padding: 4px 12px; max-height: 420px; overflow-y: auto; overflow-x: auto; }
+.table-wrap table { min-width: 100%; }
 .drilldown {
   margin-top: 14px;
   background: var(--panel-bg);

@@ -55,17 +55,31 @@
   // own market's panels only.
   const SYNC_KEY = "mbt-context-" + (DATA.country || "US");
   const Sync = {
+    _local: [],   // subscribers living in THIS document — see publish() below
     read: function () {
       try { return JSON.parse(localStorage.getItem(SYNC_KEY) || "null") || {}; }
       catch (e) { return {}; }
     },
     publish: function (patch) {
+      let merged;
       try {
-        const merged = Object.assign(this.read(), patch, { ts: Date.now() });
+        merged = Object.assign(this.read(), patch, { ts: Date.now() });
         localStorage.setItem(SYNC_KEY, JSON.stringify(merged));
-      } catch (e) { /* storage unavailable — sync is best-effort */ }
+      } catch (e) {
+        merged = Object.assign({}, patch, { ts: Date.now() });   // storage unavailable — still notify same-page listeners
+      }
+      // The browser's `storage` event is cross-document ONLY: it fires in
+      // every OTHER tab/frame watching this key, and never in the document
+      // that called setItem. That is exactly right when a leaderboard and
+      // its detail view are separate pages (their usual arrangement here),
+      // and exactly wrong the one time both live in the same page — a click
+      // had no way to reach a subscriber sitting right next to it. Calling
+      // local subscribers directly covers that case without weakening the
+      // cross-document one.
+      this._local.forEach(function (fn) { fn(merged); });
     },
     subscribe: function (fn) {
+      this._local.push(fn);
       window.addEventListener("storage", function (e) {
         if (e.key !== SYNC_KEY || !e.newValue) return;
         let payload;
@@ -2450,9 +2464,34 @@
       }).join("");
     }
 
+    // F1/F4/F4B/F5 meant nothing without opening a row and reading the
+    // factor breakdown below — this says what each column is right where
+    // the columns are, scoped to only the four actually shown in this
+    // table (factorMeta itself carries all seven scoring factors, three of
+    // which never get a column here).
+    function drawLegend() {
+      const host = document.getElementById("tmle-legend");
+      if (!host) return;
+      const shown = ["F1", "F4", "F4B", "F5"];
+      host.innerHTML = shown.map(function (key) {
+        const meta = (DATA.factorMeta || {})[key] || {};
+        return '<span class="tmle-legend-item"><b>' + key + "</b> " +
+          (meta.label || key) + '<span class="tmle-legend-blurb">' +
+          (meta.blurb || "") + "</span></span>";
+      }).join("");
+      // Same wording, as a hover tooltip on the header itself, for anyone
+      // scanning the table without looking up at the legend line.
+      shown.forEach(function (key) {
+        const th = table.querySelector('th[data-sort="' + key + '"]');
+        const meta = (DATA.factorMeta || {})[key];
+        if (th && meta) th.title = meta.label + " — " + meta.blurb;
+      });
+    }
+
     // Ascending on rank, so #1 is at the top; unranked (non-actionable) names
     // sort last because sortRows pushes nulls to the end either way.
     drawDigest();
+    drawLegend();
     let rows = visible();
     attachSorting(table, rows, draw, "rank", 1);
     makeRowsClickable(table);
@@ -2520,7 +2559,17 @@
     const statusEl = document.getElementById("tmle-status");
     const body = document.getElementById("tmle-stock-body");
     const dir = DATA.tmleDir || "tmle";
+    const tickerDir = DATA.tickerDir || "tickers";
     let chart = null;
+    let priceChart = null;
+    const priceCache = {};
+
+    function ema(values, span) {
+      const k = 2 / (span + 1);
+      const out = [];
+      values.forEach(function (v, i) { out.push(i === 0 ? v : v * k + out[i - 1] * (1 - k)); });
+      return out;
+    }
 
     const scored = (DATA.scored || []).slice().sort();
     const list = document.getElementById("tmle-tickers");
@@ -2584,6 +2633,9 @@
           '<div class="env-chart-title">Score over time</div>' +
           '<div class="env-block-sub">the level matters less than the slope &middot; a score climbing week after week is leadership forming</div>' +
           '<div class="chart-wrap"><canvas id="tmle-canvas"></canvas></div>' +
+          '<div class="env-chart-title">Price</div>' +
+          '<div class="env-block-sub">daily bars with EMA10/20/50 &middot; the same chart the Stock Context panel draws</div>' +
+          '<div class="lw-chart" id="tmle-price-chart"></div>' +
         "</div>";
 
       const th = themeColors();
@@ -2613,6 +2665,60 @@
             y: { grid: { color: th.grid }, ticks: { color: th.text }, suggestedMin: 0, suggestedMax: 100 },
           },
         },
+      });
+
+      if (priceChart) { priceChart.remove(); priceChart = null; }
+      const priceEl = document.getElementById("tmle-price-chart");
+      const cachedPrice = priceCache[data.ticker];
+      if (cachedPrice) {
+        drawPriceChart(priceEl, cachedPrice);
+      } else {
+        fetch(tickerDir + "/" + encodeURIComponent(data.ticker) + ".json")
+          .then(function (r) { if (!r.ok) throw new Error("404"); return r.json(); })
+          .then(function (p) {
+            priceCache[data.ticker] = p;
+            // The ticker input may have moved on to a different symbol while
+            // this fetch was in flight — only draw if it's still current.
+            if (document.getElementById("tmle-price-chart") === priceEl && input.value.trim().toUpperCase() === data.ticker) {
+              drawPriceChart(priceEl, p);
+            }
+          })
+          .catch(function () {
+            priceEl.innerHTML = '<div class="empty-note">No price history for ' + data.ticker + ".</div>";
+          });
+      }
+    }
+
+    function drawPriceChart(el, p) {
+      const lwth = lwTheme();
+      priceChart = LightweightCharts.createChart(el, {
+        height: el.clientHeight || 340,
+        layout: { background: { type: "solid", color: lwth.bg }, textColor: lwth.text, fontSize: 11 },
+        grid: { vertLines: { color: lwth.grid }, horzLines: { color: lwth.grid } },
+        rightPriceScale: { borderColor: lwth.border },
+        timeScale: { borderColor: lwth.border, rightOffset: 2 },
+        crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+      });
+      const bars = priceChart.addBarSeries({ upColor: lwth.up, downColor: lwth.down, openVisible: false, thinBars: false });
+      bars.setData(p.dates.map(function (dt, i) {
+        return { time: dt, open: p.open[i], high: p.high[i], low: p.low[i], close: p.close[i] };
+      }));
+      enableMeasure(priceChart, bars, el);
+      [["#2962FF", 10], ["#F23645", 20], ["#FF9800", 50]].forEach(function (cfg) {
+        const s = priceChart.addLineSeries({ color: cfg[0], lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+        const e = ema(p.close, cfg[1]);
+        s.setData(p.dates.map(function (dt, i) { return { time: dt, value: e[i] }; }));
+      });
+      priceChart.timeScale().fitContent();
+      if (window.ResizeObserver) {
+        new ResizeObserver(function () {
+          priceChart.applyOptions({ width: el.clientWidth, height: el.clientHeight });
+          priceChart.timeScale().fitContent();
+        }).observe(el);
+      }
+      requestAnimationFrame(function () {
+        priceChart.applyOptions({ width: el.clientWidth, height: el.clientHeight || 340 });
+        priceChart.timeScale().fitContent();
       });
     }
 
