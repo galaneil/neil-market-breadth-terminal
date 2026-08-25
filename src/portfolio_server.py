@@ -140,6 +140,12 @@ _TICKER_PREFIXES = {"tickers/": "tickers", "in/tickers/": os.path.join("in", "ti
 
 
 def sync_from_origin(log=print):
+    """Returns {"ok": bool, "message": str} — the caller persists this so a
+    blocked sync (e.g. dirty working tree) is visible in the hub UI instead of
+    failing silently forever. This exact silent failure is what let the hub
+    sit stale for days once: a local test run left uncommitted files in the
+    way, the pull skipped every 30 minutes with nothing surfaced, and nobody
+    noticed until the dates were badly behind."""
     try:
         result = subprocess.run(
             ["git", "pull", "--ff-only", "origin", "main"],
@@ -147,12 +153,15 @@ def sync_from_origin(log=print):
         if result.returncode == 0:
             msg = result.stdout.strip() or "already up to date"
             log(f"  git sync: {msg}")
-        else:
-            # Diverged history or local edits in the way. Never forced past
-            # this — staying stale is the safe failure, overwriting isn't.
-            log(f"  git sync skipped: {result.stderr.strip()[:200] or 'not a fast-forward'}")
+            return {"ok": True, "message": msg}
+        # Diverged history or local edits in the way. Never forced past
+        # this — staying stale is the safe failure, overwriting isn't.
+        reason = result.stderr.strip()[:200] or "not a fast-forward"
+        log(f"  git sync skipped: {reason}")
+        return {"ok": False, "message": reason}
     except Exception as error:
         log(f"  git sync failed: {error}")
+        return {"ok": False, "message": str(error)}
 
 
 def _load_sync_state():
@@ -215,9 +224,11 @@ def sync_tickers_from_ghpages(log=print):
 
 
 def run_auto_sync(force_tickers=False, log=print):
-    sync_from_origin(log=log)
+    origin_result = sync_from_origin(log=log)
 
     state = _load_sync_state()
+    state["origin"] = {**origin_result, "ts": time.time()}
+    _save_sync_state(state)
     age_hours = None
     if state.get("tickers"):
         age_hours = (time.time() - state["tickers"]) / 3600
@@ -231,6 +242,8 @@ def run_auto_sync(force_tickers=False, log=print):
             log(f"  ticker sync failed: {error}")
     else:
         log(f"  tickers synced {age_hours:.1f}h ago, skipping")
+
+    return origin_result
 
 
 def _sync_loop(log):
@@ -611,6 +624,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             self._send(404, "not found", "text/plain")
             return
+        if route.path == "/api/sync/status":
+            self._send(200, json.dumps(_load_sync_state()), "application/json")
+            return
         if route.path == "/api/brokers":
             self._send(200, json.dumps(available()), "application/json")
             return
@@ -655,8 +671,11 @@ class Handler(BaseHTTPRequestHandler):
             # the self-service version, for "I don't want to wait 30 minutes
             # or ask someone to fix it" rather than a routine path.
             try:
-                run_auto_sync(force_tickers=True, log=log)
-                self._send(200, json.dumps({"ok": True}), "application/json")
+                origin_result = run_auto_sync(force_tickers=True, log=log)
+                self._send(200, json.dumps({
+                    "ok": origin_result["ok"],
+                    "error": None if origin_result["ok"] else origin_result["message"],
+                }), "application/json")
             except Exception as error:
                 self._send(200, json.dumps({"ok": False, "error": str(error)}),
                           "application/json")
@@ -1458,6 +1477,9 @@ HUB_PAGE = r"""<!doctype html>
       <a id="sync-now" href="#">Sync data now</a>
       <span id="sync-status" class="dim"></span>
     </div>
+    <div id="sync-warning" hidden style="margin-top:8px; padding:8px; border-radius:6px;
+         background:color-mix(in srgb, var(--warn) 15%, transparent);
+         border:1px solid var(--warn); color:var(--warn); font-size:11px; line-height:1.4;"></div>
   </div>
 </div>
 
@@ -1703,6 +1725,25 @@ document.getElementById("reload-btn").onclick = () => {
   }
 };
 
+// The auto-sync loop deliberately refuses to overwrite local changes rather
+// than risk clobbering something — but that safe failure used to be
+// invisible: it would skip silently every 30 minutes with nothing shown
+// anywhere, so the hub sat on stale data for days before anyone noticed.
+// This surfaces that exact state on load, so a blocked sync is a banner,
+// not a support ticket.
+(async () => {
+  try {
+    const state = await (await fetch("/api/sync/status")).json();
+    const origin = state.origin;
+    if (origin && origin.ok === false) {
+      const el = document.getElementById("sync-warning");
+      el.hidden = false;
+      el.textContent = "Auto-sync is blocked, so data may be stale: " + origin.message +
+        '. Click "Sync data now" once the conflict is resolved.';
+    }
+  } catch (err) { /* status endpoint unreachable — say nothing, not worth alarming over */ }
+})();
+
 document.getElementById("sync-now").onclick = async (e) => {
   e.preventDefault();
   const status = document.getElementById("sync-status");
@@ -1711,6 +1752,8 @@ document.getElementById("sync-now").onclick = async (e) => {
     const r = await (await fetch("/api/sync", {method: "POST"})).json();
     status.textContent = r.ok
       ? " — done, reloading…" : " — failed: " + (r.error || "unknown error");
+    // A reload re-fetches /api/sync/status too, so the warning banner clears
+    // itself the moment a sync actually goes through.
     if (r.ok) setTimeout(() => location.reload(), 600);
   } catch (err) {
     status.textContent = " — server not reachable";
