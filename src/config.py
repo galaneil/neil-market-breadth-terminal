@@ -34,6 +34,16 @@ CHART_BACKFILL_DAYS = 252    # ~1 trading year of real chart history (1W..6M/YTD
 NEW_HIGH_LOW_WINDOW = 252    # ~52 trading weeks
 PRICE_WINDOW_DAYS = CHART_BACKFILL_DAYS + NEW_HIGH_LOW_WINDOW + 20  # + small margin
 
+# If today's price fetch comes back priced for less than this share of the
+# universe, that is not a thin session — it is the fetch itself failing (an
+# upstream outage or rate limit). A normal day clears 97%+; the one observed
+# failure mode landed under 1%. Below this, run_country aborts the WHOLE
+# country rather than let breadth/sector/industry silently skip the day for
+# falling under their own per-metric quorum while index history (a separate
+# fetch) sails through — which is what let different panels end up showing
+# different "as of" dates with nothing anywhere explaining why.
+MIN_DAILY_PRICE_COVERAGE = 0.50
+
 # Breadth internals thresholds
 PCT_MOVE_LOOKBACK_DAYS = 5
 PCT_MOVE_THRESHOLDS = [20, 30]  # "% up/down 20%+ / 30%+ in the last 5 days"

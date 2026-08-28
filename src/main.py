@@ -152,14 +152,44 @@ def run_country(code, client=None):
         fetch_prices_fmp(client, all_price_tickers + index_tickers, index_tickers,
                          drop_partial, price_cache, code)
         if skip_today:
-            log(f"{code}: skipping the quote snapshot — a live quote mid-session is not a close.")
+            log(f"{code}: skipping today's close — a live quote mid-session is not a close.")
         else:
-            log(f"{code}: fetching today's quotes for {len(all_price_tickers) + len(index_tickers)} tickers...")
-            quotes = client.quote_many(all_price_tickers + index_tickers,
-                                       on_progress=lambda d, t: log(f"    quoted {d}/{t}"))
-            for q in quotes:
-                if q.get("symbol") and q.get("price") is not None:
-                    cache_mod.set_value(price_cache, q["symbol"], today, q["price"])
+            targets = all_price_tickers + index_tickers
+            log(f"{code}: fetching today's close for {len(targets)} tickers...")
+            # This used to be client.quote_many() — FMP's real-time /quote
+            # endpoint, one call per symbol. On three separate days it went
+            # dark for the whole run (each symbol "failed" individually, each
+            # failure swallowed individually, exactly like every other
+            # per-symbol loop against this API has to), and the run kept
+            # reporting success while pricing 10-25 of 3,489 tickers instead
+            # of the usual ~3,400. Every downstream metric that requires a
+            # quorum of same-day prices correctly refused to count that as a
+            # session and skipped it — while index history, fetched via THIS
+            # endpoint rather than /quote, sailed through regardless. That
+            # mismatch is what actually produced the "different panels show
+            # different dates" symptom. Using the same endpoint here that
+            # already backfills every other day reliably removes the failure
+            # mode; the coverage check below is the backstop in case it
+            # doesn't.
+            got = 0
+            for i, sym in enumerate(targets):
+                try:
+                    rows = client.historical_eod(sym, start=today, end=today)
+                except Exception:
+                    rows = []
+                if rows and rows[0].get("close") is not None:
+                    cache_mod.set_value(price_cache, sym, today, rows[0]["close"])
+                    got += 1
+                if (i + 1) % 250 == 0:
+                    log(f"    {i + 1}/{len(targets)}")
+            coverage = got / len(targets) if targets else 1.0
+            log(f"{code}: priced {got}/{len(targets)} tickers for {today} ({coverage:.1%})")
+            if coverage < config.MIN_DAILY_PRICE_COVERAGE:
+                raise RuntimeError(
+                    f"{code}: only {got}/{len(targets)} tickers priced for {today} "
+                    f"({coverage:.1%}, below the {config.MIN_DAILY_PRICE_COVERAGE:.0%} "
+                    "floor) — treating this as a fetch failure, not a thin session, "
+                    "and aborting before anything for today is committed.")
     else:
         bulk = yf_client.download_many(
             all_price_tickers, period="2y",
