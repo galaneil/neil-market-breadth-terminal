@@ -874,6 +874,18 @@ PORTFOLIO_PAGE = r"""<!doctype html>
   td.num, th.num { text-align:right; font-variant-numeric:tabular-nums; }
   tr:last-child td { border-bottom:none; }
   .dim { color:var(--dim); font-size:11px; }
+  .pos-cell { display:flex; align-items:center; gap:8px; }
+  .pos-logo { width:22px; height:22px; border-radius:5px; flex:none; object-fit:cover; }
+  .pos-logo-fallback { width:22px; height:22px; border-radius:5px; flex:none;
+    display:flex; align-items:center; justify-content:center; color:#fff;
+    font-size:9.5px; font-weight:700; }
+  .pos-name { display:flex; flex-direction:column; line-height:1.25; }
+  .pos-name .ind { font-weight:400; color:var(--dim); font-size:10.5px; }
+  .exp-row { display:grid; grid-template-columns:150px 1fr 46px; align-items:center;
+    gap:10px; padding:4px 0; font-size:12.5px; }
+  .exp-track { position:relative; height:12px; background:var(--line); border-radius:4px; }
+  .exp-fill { position:absolute; inset:0 auto 0 0; background:var(--accent,#3b82f6); border-radius:4px; }
+  .exp-val { text-align:right; font-variant-numeric:tabular-nums; color:var(--dim); }
   .up { color:var(--up); } .down { color:var(--down); }
   .warn { color:var(--warn); }
   .warn-line { background:color-mix(in srgb,var(--warn) 12%,transparent);
@@ -923,6 +935,13 @@ PORTFOLIO_PAGE = r"""<!doctype html>
     <div class="tf" id="tf"></div>
   </div>
   <div id="curve-wrap"></div>
+</div>
+
+<div class="panel" id="exposure-panel" hidden>
+  <b style="font-size:12px">Sector exposure</b>
+  <div class="dim" style="font-size:11px;margin:2px 0 10px">Share of invested value — not
+    weighed against an index yet, just what's actually concentrated in the book.</div>
+  <div id="exposure-rows"></div>
 </div>
 
 <div class="table-tools">
@@ -1077,9 +1096,51 @@ function renderTF() {
 // and how to draw the cell. Sorting has to use the NUMBER, not the formatted
 // string, or "1,00,000" sorts before "9" — which is exactly the bug that
 // hand-written table sorters ship with.
+// A deterministic colour per symbol (not random per render), so a name's
+// fallback avatar doesn't change colour every refresh.
+function logoColor(sym) {
+  let h = 0;
+  for (let i = 0; i < sym.length; i++) h = (h * 31 + sym.charCodeAt(i)) | 0;
+  return "hsl(" + (Math.abs(h) % 360) + ",55%,42%)";
+}
+// HTML only — no inline onerror="" attribute, which has to escape its own
+// quotes past the surrounding HTML attribute and past the outer template
+// string. That broke exactly this way the first time: the fallback markup's
+// own style="..." quotes closed the onerror attribute early and spilled the
+// rest onto the page as visible text. wireLogos() below attaches the actual
+// fallback behaviour after the table is in the DOM, via the DOM API, where
+// there is no string to escape into in the first place.
+function logoCell(p) {
+  const initials = (p.symbol || "??").replace(/[^A-Z]/gi, "").slice(0, 2).toUpperCase();
+  if (data.broker === "ibkr") {
+    return '<img class="pos-logo" data-symbol="' + p.symbol + '" data-initials="' + initials
+      + '" alt="" src="https://images.financialmodelingprep.com/symbol/'
+      + encodeURIComponent(p.symbol) + '.png">';
+  }
+  return '<div class="pos-logo-fallback" style="background:' + logoColor(p.symbol || "") + '">'
+    + initials + '</div>';
+}
+
+function wireLogos() {
+  document.querySelectorAll("img.pos-logo").forEach(img => {
+    img.onerror = () => {
+      const fallback = document.createElement("div");
+      fallback.className = "pos-logo-fallback";
+      fallback.style.background = logoColor(img.dataset.symbol || "");
+      fallback.textContent = img.dataset.initials || "";
+      img.replaceWith(fallback);
+    };
+  });
+}
+
 const COLUMNS = [
   {key:"symbol", label:"Position", num:false,
-   cell:p => '<b>'+p.symbol+'</b>'},
+   cell:p => '<div class="pos-cell">' + logoCell(p) +
+     '<div class="pos-name"><b>' + p.symbol + '</b>' +
+     (p.industry ? '<span class="ind">' + p.industry + '</span>' : '') +
+     '</div></div>'},
+  {key:"sector", label:"Sector", num:false,
+   cell:p => p.sector || '<span class="dim">&mdash;</span>'},
   {key:"quantity", label:"Qty",
    cell:p => (p.quantity||0).toLocaleString(LOCALE(data.currency))},
   {key:"mark", label:"Mark",
@@ -1102,6 +1163,37 @@ const COLUMNS = [
        + ' <span class="dim">('+pct(p.risk_pct_nav)+')</span>'
      : '<span class="warn">—</span>'},
 ];
+
+// Share of INVESTED value per sector — not NAV, so idle cash doesn't dilute
+// the read of what the book is actually concentrated in. Positions with no
+// sector tag (not in that day's classified universe) are grouped under
+// "Unclassified" rather than silently dropped, so the shares still sum to
+// the full invested total.
+function renderExposure() {
+  const panel = document.getElementById("exposure-panel");
+  const positions = (data.positions || []).filter(p => p.value);
+  if (!positions.length) { panel.hidden = true; return; }
+  panel.hidden = false;
+
+  const bySector = {};
+  let total = 0;
+  positions.forEach(p => {
+    const key = p.sector || "Unclassified";
+    bySector[key] = (bySector[key] || 0) + p.value;
+    total += p.value;
+  });
+  const rows = Object.keys(bySector).map(name => ({ name, value: bySector[name] }))
+    .sort((a, b) => b.value - a.value);
+  const max = Math.max(...rows.map(r => r.value), 1);
+
+  document.getElementById("exposure-rows").innerHTML = rows.map(r => {
+    const sharePct = total ? (r.value / total * 100) : 0;
+    const barPct = Math.round((r.value / max) * 100);
+    return '<div class="exp-row"><span>' + r.name + '</span>'
+      + '<div class="exp-track"><div class="exp-fill" style="width:' + barPct + '%"></div></div>'
+      + '<span class="exp-val">' + sharePct.toFixed(1) + '%</span></div>';
+  }).join("");
+}
 
 let sortKey = "value", sortDesc = true;
 
@@ -1138,6 +1230,7 @@ function renderTable() {
     + '</tr>').join("")
     || '<tr><td colspan="'+COLUMNS.length+'">'
        + (q ? 'No positions match "'+q+'".' : 'No open positions.')+'</td></tr>';
+  wireLogos();
 }
 
 function render() {
@@ -1199,6 +1292,7 @@ function render() {
   document.getElementById("warnings").innerHTML =
     w.map(t => '<div class="warn-line">'+t+'</div>').join("");
 
+  renderExposure();
   renderTable();
 
   document.getElementById("foot").innerHTML =

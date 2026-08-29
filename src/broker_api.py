@@ -33,13 +33,47 @@ IBKR's gateway session can trade, so the absence has to be a property of the
 code rather than of the connection.
 """
 
+import json
 import os
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import config
+
 # A position bigger than this is worth being told about.
 CONCENTRATION_WARN = 0.25
+
+_CLASSIFICATION_CACHE = {}
+
+
+def _classification(country):
+    """{ticker: [sector, industry]}, cached per country for the process
+    lifetime — this is read once per portfolio refresh, not once per
+    position, and the file only changes once a day with the pipeline run."""
+    if country not in _CLASSIFICATION_CACHE:
+        path = os.path.join(config.data_dir(country), "classification.json")
+        try:
+            with open(path, encoding="utf-8") as f:
+                _CLASSIFICATION_CACHE[country] = json.load(f)
+        except (OSError, ValueError):
+            _CLASSIFICATION_CACHE[country] = {}
+    return _CLASSIFICATION_CACHE[country]
+
+
+def _tag_sector(positions, country):
+    """Mutates each position in place, adding sector/industry from the same
+    classification the breadth terminal itself runs on — one shared source
+    of truth, not a second copy that can drift from it. A position whose
+    symbol isn't in that day's classified universe (delisted, too new, or
+    just not one of the names the pipeline tracks) gets nulls rather than a
+    guess."""
+    tags = _classification(country)
+    for p in positions:
+        hit = tags.get(p["symbol"])
+        p["sector"] = hit[0] if hit else None
+        p["industry"] = hit[1] if hit and len(hit) > 1 else None
+    return positions
 
 
 def _iso(stamp):
@@ -255,6 +289,7 @@ def ibkr_live(account_id=None, stops=None, log=print):
     rows.sort(key=lambda r: -(r["value"] or 0))
     if stale:
         log(f"  no live quote for {', '.join(stale)} — using the position mark")
+    _tag_sector(rows, "US")
 
     from datetime import datetime
     return {
@@ -313,6 +348,7 @@ def ibkr(stops=None, log=print):
             nav=nav,
         ))
     positions.sort(key=lambda r: -(r["value"] or 0))
+    _tag_sector(positions, "US")
 
     history = [[_iso(r["date"]), r["total"]] for r in nav_rows
                if r.get("date") and r.get("total") is not None]
@@ -380,6 +416,7 @@ def angelone(session, stops=None, log=print):
             nav=nav,
         ))
     positions.sort(key=lambda r: -(r["value"] or 0))
+    _tag_sector(positions, "IN")
 
     from datetime import date
     return {
