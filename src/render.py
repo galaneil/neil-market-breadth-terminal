@@ -550,31 +550,27 @@ def _screener_body():
 """.strip() + "\n" + _stock_body()
 
 
-def _groups_body():
+def _moneyflows_body():
+    # One index, one Longs/Shorts side, all three windows (13/26/52W) stacked
+    # and pre-drilled to sector -> industry -> stocks, with a running log of
+    # whatever's currently drilled in each window so a full pass never needs
+    # writing down. Replaces the old heatmap/composition view; the ticker-
+    # level lookup that used to live only in the Screener is folded in here
+    # too (Screener itself stays, for direct ticker/ADR searches).
     return """
-<div class="empty-note">Which groups are making new highs, and which are making new lows. Click any row to send that group to the screener.</div>
-<div class="screener-controls">
-  <div class="tf-toggle" id="hilo-index"></div>
-  <div class="tf-toggle" id="hilo-window"></div>
-  <div class="tf-toggle" id="hilo-timeframe"></div>
+<div class="empty-note">Where new highs and new lows are concentrated, drilled from sector to
+industry to the actual stocks — for one index and one side (Longs/Shorts) at a time, across all
+three windows at once. Click any sector or industry bar to re-drill that window; the log above
+remembers what you found in each.</div>
+<div class="mf-controls">
+  <div class="tf-toggle" id="mf-index"></div>
+  <div class="mf-side" id="mf-side"></div>
 </div>
-<div class="composition-head">
-  <div class="tf-toggle" id="hilo-view"></div>
-  <div class="tf-toggle" id="hilo-groupby"></div>
-  <div class="tf-toggle" id="hilo-groupmode"></div>
+<div class="pass-log" id="mf-log">
+  <div class="pass-log-label"><span>This pass, kept automatically</span><span id="mf-log-ctx"></span></div>
+  <div id="mf-log-rows"></div>
 </div>
-<div class="digest" id="hilo-digest"></div>
-<div class="composition-note" id="hilo-heat-caption"></div>
-<div class="heatmap" id="hilo-heatmap"></div>
-<div class="composition">
-  <div class="chart-wrap chart-tall"><canvas id="hilo-composition-canvas"></canvas></div>
-</div>
-<div class="heat-legend">
-  <span class="heat-swatch heat-neg"></span> more lows
-  <span class="heat-swatch heat-mid"></span> balanced
-  <span class="heat-swatch heat-pos"></span> more highs
-  <span class="heat-legend-note">Colour is scaled to the strongest group on screen, so the map stays readable at any window. Click a tile to filter.</span>
-</div>
+<div id="mf-blocks"></div>
 """.strip()
 
 
@@ -905,9 +901,9 @@ def render_all_panels(country):
     ))
 
     paths.append(render_panel(
-        country, "panel-groups.html", "Highs & Lows by Group",
-        _groups_body(), [], series, generated_at,
-        extra=_screener_payload(country),
+        country, "panel-groups.html", "Money Flows",
+        _moneyflows_body(), [], series, generated_at,
+        extra=_screener_payload(country), chart_lib="none",
     ))
 
     paths.append(render_panel(

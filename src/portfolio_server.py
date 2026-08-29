@@ -94,6 +94,12 @@ HUB_PANELS = [
     {"label": "Stock Lookup", "path": "panel-stock.html"},
     {"label": "TMLE Leaders", "path": "panel-tmle-leaders.html"},
     {"label": "TMLE Emerging", "path": "panel-tmle-emerging.html"},
+]
+
+# A separate group from HUB_PANELS, rendered in its own sidebar section below
+# Portfolio rather than mixed into Market Breadth — it's reference material
+# about the system itself, not a data panel someone browses day to day.
+SYSTEM_PANELS = [
     {"label": "System Architecture", "path": "panel-architecture.html"},
 ]
 
@@ -1394,6 +1400,7 @@ def _hub_nav_json():
             "code": code, "label": cfg.get("short", code),
             "flag": flags.flag(code) if flags else "",
             "panels": [resolve(entry, cfg, prefix) for entry in HUB_PANELS],
+            "systemPanels": [resolve(entry, cfg, prefix) for entry in SYSTEM_PANELS],
         })
     return json.dumps(countries)
 
@@ -1523,6 +1530,8 @@ HUB_PAGE = r"""<!doctype html>
   <nav id="panel-nav"></nav>
   <div class="group-label">Portfolio</div>
   <nav id="portfolio-nav"></nav>
+  <div class="group-label">System</div>
+  <nav id="system-nav"></nav>
   <div id="data-freshness">
     <div class="group-label">Data freshness</div>
     <div id="freshness-rows">Loading&hellip;</div>
@@ -1597,7 +1606,7 @@ let pins = JSON.parse(localStorage.getItem("hub-pins") || "[]");
 // the synthetic Portfolio entry, so pinning and restoring do not care which
 // section something came from.
 function topLevelItems() {
-  return country.panels.concat([portfolioItem]);
+  return country.panels.concat([portfolioItem]).concat(country.systemPanels || []);
 }
 
 // Nav rows are rebuilt with innerHTML on pretty much every interaction (a pin
@@ -1688,7 +1697,7 @@ function pinButton(item) {
 }
 
 function refreshNav() {
-  renderPanelNav(); renderPortfolioNav(); renderPinned();
+  renderPanelNav(); renderPortfolioNav(); renderSystemNav(); renderPinned();
 }
 
 function wireItem(a, item) {
@@ -1749,6 +1758,10 @@ function renderPinned() {
 
 function renderPortfolioNav() {
   renderGroup(document.getElementById("portfolio-nav"), [portfolioItem]);
+}
+
+function renderSystemNav() {
+  renderGroup(document.getElementById("system-nav"), country.systemPanels || []);
 }
 
 function renderPanelNav() {

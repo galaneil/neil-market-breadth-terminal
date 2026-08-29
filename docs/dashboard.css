@@ -370,6 +370,58 @@ tbody tr.selected { background: var(--grid-line); outline: 1px solid var(--accen
 .arch-table { width: 100%; border-collapse: collapse; font-size: 13px; }
 .arch-table td { padding: 7px 10px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
 .arch-table td:first-child { color: var(--text-dim); width: 32%; white-space: nowrap; }
+
+/* ---------- Money Flows: sector -> industry -> stock drill, 3 windows at once --- */
+.mf-controls { display: flex; gap: 10px; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
+.mf-side { display: inline-flex; border: 1px solid var(--border); border-radius: 6px; overflow: hidden; }
+.mf-side button { font: inherit; font-size: 13px; padding: 6px 12px; border: 0; cursor: pointer;
+  background: var(--panel-bg); color: var(--text-dim); }
+.mf-side button + button { border-left: 1px solid var(--border); }
+.mf-side button.active.longs { background: color-mix(in srgb, var(--up) 15%, transparent); color: var(--up); font-weight: 600; }
+.mf-side button.active.shorts { background: color-mix(in srgb, var(--down) 15%, transparent); color: var(--down); font-weight: 600; }
+
+.pass-log { background: var(--panel-bg); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; margin-bottom: 16px; }
+.pass-log-label { font-size: 11px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-dim);
+  display: flex; justify-content: space-between; margin-bottom: 8px; }
+.pass-log-row { display: grid; grid-template-columns: 40px 1fr; gap: 10px; align-items: baseline;
+  padding: 5px 0; font-size: 13px; border-bottom: 1px solid var(--grid-line); transition: background .2s; }
+.pass-log-row:last-child { border-bottom: none; }
+.pass-log-tf { font-weight: 600; color: var(--accent); font-size: 12px; }
+.pass-log-chain .arrow { color: var(--text-dim); margin: 0 4px; }
+.pass-log-chain b { font-weight: 600; }
+.pass-log-row.flash { background: color-mix(in srgb, var(--accent) 12%, transparent); }
+
+.mf-block { background: var(--panel-bg); border: 1px solid var(--border); border-radius: 10px; margin-bottom: 12px; overflow: hidden; }
+.mf-block-head { display: flex; align-items: baseline; gap: 10px; padding: 10px 14px;
+  background: var(--grid-line); border-bottom: 1px solid var(--border); }
+.mf-block-head b { font-size: 13.5px; }
+.mf-block-head span { font-size: 12px; color: var(--text-dim); }
+.mf-verdict { padding: 10px 14px 0; font-size: 13px; color: var(--text-dim); }
+.mf-verdict b { color: var(--text); font-weight: 600; }
+.mf-block-body { padding: 12px 14px 14px; }
+
+.mf-level + .mf-level { margin-top: 10px; padding-left: 18px; border-left: 2px solid var(--grid-line); }
+.mf-level-label { font-size: 10.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-dim); margin-bottom: 6px; }
+.mf-level-label b { color: var(--text); text-transform: none; letter-spacing: 0; font-size: 12px; }
+
+.mf-hbar-list { display: flex; flex-direction: column; gap: 5px; }
+.mf-hbar-row { display: grid; grid-template-columns: 150px 1fr 36px; align-items: center; gap: 8px;
+  cursor: pointer; padding: 3px 4px; border-radius: 5px; }
+.mf-hbar-row:hover { background: var(--grid-line); }
+.mf-hbar-row.sel { background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.mf-hbar-row.sel .mf-hbar-name { color: var(--accent); font-weight: 600; }
+.mf-hbar-name { font-size: 12.5px; }
+.mf-hbar-track { position: relative; height: 13px; background: var(--grid-line); border-radius: 4px; overflow: hidden; }
+.mf-hbar-fill { position: absolute; inset: 0 auto 0 0; border-radius: 4px; }
+.mf-hbar-fill.up { background: var(--up); }
+.mf-hbar-fill.down { background: var(--down); }
+.mf-hbar-val { font-size: 11.5px; text-align: right; }
+
+.mf-stock-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.mf-stock-chip { font-size: 11.5px; padding: 3px 8px; border-radius: 5px; font-weight: 600; cursor: pointer; }
+.mf-stock-chip.up { background: color-mix(in srgb, var(--up) 15%, transparent); color: var(--up); }
+.mf-stock-chip.down { background: color-mix(in srgb, var(--down) 15%, transparent); color: var(--down); }
+.mf-stock-chip:hover { filter: brightness(0.95); }
 .drilldown {
   margin-top: 14px;
   background: var(--panel-bg);

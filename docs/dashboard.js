@@ -940,6 +940,214 @@
   // nowhere near a one-year high, but it will print 13-week highs immediately.
   const HILO_WINDOWS = [["w13", "13-week"], ["w26", "26-week"], ["w52", "52-week"]];
 
+  // ---------- Money Flows: sector -> industry -> stock drill, 3 windows at once ----------
+  // The pass Neil actually runs by hand: pick an index and a side (Longs =
+  // new highs, Shorts = new lows), then for 13W/26W/52W in turn, find the
+  // leading sector, then the leading industry inside it, then the actual
+  // names. Doing all three windows at once, each independently drillable,
+  // plus a log of whatever's currently drilled in each, removes the need to
+  // hold the chain in your head (or a notepad) between windows.
+  function renderMoneyFlows() {
+    const host = document.getElementById("mf-blocks");
+    if (!host) return;
+
+    const namesData = DATA.hiloNames || [];
+    const cls = DATA.classification || {};
+    const membership = DATA.indexMembership || {};
+    const indexes = DATA.screenerIndexes || [];
+    if (!namesData.length || !indexes.length) {
+      host.innerHTML = '<div class="empty-note">No data yet.</div>';
+      return;
+    }
+
+    // Distinct companies over a recent stretch, not just today's single-day
+    // print — a name that hit a window high three sessions ago and hasn't
+    // rolled over yet is still part of the current picture. Ten sessions
+    // (two weeks) is short enough to stay "current" while not thinning out
+    // to a handful of names on a quiet day.
+    const LOOKBACK_SESSIONS = 10;
+
+    let state = { index: indexes[0].code, side: "hi" };
+    const sel = {}; // sel["w13"] = {sector, industry}
+
+    function unionHits(win, side) {
+      const recent = namesData.slice(-LOOKBACK_SESSIONS);
+      const set = new Set();
+      recent.forEach(function (r) {
+        (((r[win] || {})[side]) || []).forEach(function (t) { set.add(t); });
+      });
+      return Array.from(set);
+    }
+
+    function inIndex(ticker) {
+      const codes = membership[ticker];
+      return !!codes && codes.indexOf(state.index) !== -1;
+    }
+
+    // Sector -> industry -> tickers, for one window/side, scoped to the
+    // selected index. Built fresh per render rather than cached: the inputs
+    // are a handful of ticker lists, cheap to regroup every time.
+    function buildTree(win) {
+      const tickers = unionHits(win, state.side).filter(inIndex);
+      const bySector = {};
+      tickers.forEach(function (t) {
+        const tags = cls[t];
+        if (!tags || !tags[0]) return;
+        const sector = tags[0], industry = tags[1] || "Other";
+        if (!bySector[sector]) bySector[sector] = { name: sector, count: 0, industries: {} };
+        bySector[sector].count++;
+        if (!bySector[sector].industries[industry]) {
+          bySector[sector].industries[industry] = { name: industry, tickers: [] };
+        }
+        bySector[sector].industries[industry].tickers.push(t);
+      });
+      const sectors = Object.values(bySector).map(function (s) {
+        const industries = Object.values(s.industries)
+          .map(function (i) { return { name: i.name, count: i.tickers.length, tickers: i.tickers.sort() }; })
+          .sort(function (a, b) { return b.count - a.count; });
+        return { name: s.name, count: s.count, industries: industries };
+      }).sort(function (a, b) { return b.count - a.count; });
+      return { total: tickers.length, sectors: sectors };
+    }
+
+    function ensureSel(win) {
+      const tree = buildTree(win);
+      const key = state.index + state.side + win;
+      if (!sel[key] || !tree.sectors.find(function (s) { return s.name === sel[key].sector; })) {
+        sel[key] = tree.sectors.length
+          ? { sector: tree.sectors[0].name, industry: tree.sectors[0].industries[0].name }
+          : { sector: null, industry: null };
+      }
+      return tree;
+    }
+
+    function flashLogRow(win) {
+      const row = document.querySelector('.pass-log-row[data-win="' + win + '"]');
+      if (!row) return;
+      row.classList.add("flash");
+      setTimeout(function () { row.classList.remove("flash"); }, 500);
+    }
+
+    function draw() {
+      const idxToggle = document.getElementById("mf-index");
+      idxToggle.innerHTML = "";
+      indexes.forEach(function (idx) {
+        const btn = document.createElement("button");
+        btn.className = "tf-btn" + (idx.code === state.index ? " active" : "");
+        btn.textContent = idx.label;
+        btn.addEventListener("click", function () { state.index = idx.code; draw(); });
+        idxToggle.appendChild(btn);
+      });
+
+      const sideBox = document.getElementById("mf-side");
+      sideBox.innerHTML =
+        '<button class="' + (state.side === "hi" ? "active longs" : "") + '" data-side="hi">Longs (highs)</button>' +
+        '<button class="' + (state.side === "lo" ? "active shorts" : "") + '" data-side="lo">Shorts (lows)</button>';
+      sideBox.querySelectorAll("button").forEach(function (b) {
+        b.addEventListener("click", function () { state.side = b.dataset.side; draw(); });
+      });
+
+      const idxLabel = (indexes.find(function (i) { return i.code === state.index; }) || {}).label || state.index;
+      document.getElementById("mf-log-ctx").textContent = idxLabel + " · " + (state.side === "hi" ? "New highs" : "New lows");
+
+      const cssClass = state.side === "hi" ? "up" : "down";
+      const rowsHtml = [];
+      const blocksHtml = [];
+
+      HILO_WINDOWS.forEach(function (pair) {
+        const win = pair[0], label = pair[1];
+        const tree = ensureSel(win);
+        const key = state.index + state.side + win;
+        const picked = sel[key];
+
+        if (!tree.sectors.length) {
+          rowsHtml.push('<div class="pass-log-row" data-win="' + win + '"><span class="pass-log-tf">' + label + '</span>' +
+            '<span class="pass-log-chain">nothing qualifies right now</span></div>');
+          blocksHtml.push('<div class="mf-block"><div class="mf-block-head"><b>' + label + '</b>' +
+            '<span>0 in ' + idxLabel + '</span></div><div class="mf-block-body">' +
+            '<div class="empty-note">No ' + (state.side === "hi" ? "new highs" : "new lows") +
+            ' in the last ' + LOOKBACK_SESSIONS + ' sessions for this index.</div></div></div>');
+          return;
+        }
+
+        const sector = tree.sectors.find(function (s) { return s.name === picked.sector; }) || tree.sectors[0];
+        const industry = sector.industries.find(function (i) { return i.name === picked.industry; }) || sector.industries[0];
+
+        rowsHtml.push(
+          '<div class="pass-log-row" data-win="' + win + '"><span class="pass-log-tf">' + label + '</span>' +
+          '<span class="pass-log-chain">' + sector.name + '<span class="arrow">&rarr;</span>' +
+          industry.name + '<span class="arrow">&rarr;</span><b>' + industry.tickers.join(", ") + '</b></span></div>'
+        );
+
+        const maxS = Math.max.apply(null, tree.sectors.map(function (s) { return s.count; }));
+        const sectorRows = tree.sectors.map(function (s) {
+          const pct = Math.round((s.count / maxS) * 100);
+          return '<div class="mf-hbar-row' + (s.name === sector.name ? " sel" : "") + '" data-win="' + win + '" data-sector="' + s.name.replace(/"/g, "&quot;") + '">' +
+            '<span class="mf-hbar-name">' + s.name + '</span>' +
+            '<div class="mf-hbar-track"><div class="mf-hbar-fill ' + cssClass + '" style="width:' + pct + '%"></div></div>' +
+            '<span class="mf-hbar-val ' + cssClass + '">' + s.count + '</span></div>';
+        }).join("");
+
+        const maxI = Math.max.apply(null, sector.industries.map(function (i) { return i.count; }));
+        const industryRows = sector.industries.map(function (i) {
+          const pct = Math.round((i.count / maxI) * 100);
+          return '<div class="mf-hbar-row' + (i.name === industry.name ? " sel" : "") + '" data-win="' + win + '" data-industry="' + i.name.replace(/"/g, "&quot;") + '">' +
+            '<span class="mf-hbar-name">' + i.name + '</span>' +
+            '<div class="mf-hbar-track"><div class="mf-hbar-fill ' + cssClass + '" style="width:' + pct + '%"></div></div>' +
+            '<span class="mf-hbar-val ' + cssClass + '">' + i.count + '</span></div>';
+        }).join("");
+
+        const chips = industry.tickers.map(function (t) {
+          return '<span class="mf-stock-chip ' + cssClass + '" data-ticker="' + t + '">' + t + '</span>';
+        }).join("");
+
+        blocksHtml.push(
+          '<div class="mf-block">' +
+            '<div class="mf-block-head"><b>' + label + '</b><span>' + tree.total + ' ' +
+              (state.side === "hi" ? "new highs" : "new lows") + ' · ' + tree.sectors.length + ' sectors · ' + idxLabel + '</span></div>' +
+            '<div class="mf-verdict">Led by <b>' + sector.name + '</b> (' + sector.count + '), concentrated in <b>' + industry.name + '</b>.</div>' +
+            '<div class="mf-block-body">' +
+              '<div class="mf-level"><div class="mf-level-label">Sector</div><div class="mf-hbar-list">' + sectorRows + '</div></div>' +
+              '<div class="mf-level"><div class="mf-level-label">Industry, within <b>' + sector.name + '</b></div><div class="mf-hbar-list">' + industryRows + '</div></div>' +
+              '<div class="mf-level"><div class="mf-level-label">Stocks, within <b>' + industry.name + '</b></div><div class="mf-stock-chips">' + chips + '</div></div>' +
+            '</div>' +
+          '</div>'
+        );
+      });
+
+      document.getElementById("mf-log-rows").innerHTML = rowsHtml.join("");
+      host.innerHTML = blocksHtml.join("");
+
+      host.querySelectorAll(".mf-hbar-row[data-sector]").forEach(function (row) {
+        row.addEventListener("click", function () {
+          const win = row.dataset.win, sectorName = row.dataset.sector;
+          const tree = buildTree(win);
+          const sector = tree.sectors.find(function (s) { return s.name === sectorName; });
+          if (!sector) return;
+          sel[state.index + state.side + win] = { sector: sectorName, industry: sector.industries[0].name };
+          draw();
+          flashLogRow(win);
+        });
+      });
+      host.querySelectorAll(".mf-hbar-row[data-industry]").forEach(function (row) {
+        row.addEventListener("click", function () {
+          const win = row.dataset.win, indName = row.dataset.industry;
+          const key = state.index + state.side + win;
+          sel[key] = { sector: sel[key].sector, industry: indName };
+          draw();
+          flashLogRow(win);
+        });
+      });
+      // A stock chip sends that ticker to every other panel on the page, the
+      // same Sync bus every other clickable row already publishes to.
+      host.querySelectorAll(".mf-stock-chip").forEach(function (chip) {
+        chip.addEventListener("click", function () { Sync.publish({ ticker: chip.dataset.ticker }); });
+      });
+    }
+
+    draw();
+  }
+
   function renderHiloScreener() {
     // Two pages share this: the screener (table) and the group chart, split
     // apart so each can be embedded on its own. Every section below is
@@ -2938,6 +3146,7 @@
   renderTmleEmerging();
   renderTmleStock();
   renderHiloScreener();
+  renderMoneyFlows();
 
   // Each grid container's data-keys attribute lists which series to render
   // there (comma-separated). This lets the same script serve both the full
