@@ -80,6 +80,16 @@ def index_labels(country):
     }
 
 
+def index_tickers(country):
+    """{series_key: raw ticker} — e.g. {"index_sp500": "^GSPC"} — so the card
+    can say which underlying symbol it's actually tracking, not just the
+    friendly name."""
+    return {
+        f"index_{key}": symbol
+        for key, symbol in config.COUNTRIES[country]["index_tickers"].items()
+    }
+
+
 def load_all_series(country):
     return {
         key: store.read_jsonl(os.path.join(config.data_dir(country), filename))
@@ -209,6 +219,7 @@ def render_dashboard(country):
         "generated_at": generated_at,
         "country": country,
         "indexLabels": index_labels(country),
+        "indexTickers": index_tickers(country),
         "build": asset_version(),
         "assetPrefix": asset_prefix(country),
         "series": series,
@@ -384,6 +395,7 @@ def build_replay_payload(country, series, generated_at):
         "replayDir": "replay",
         "classification": _load_classification(country),
         "sectorMembers": sector_member_counts(country),
+        "tickerDir": config.TICKER_DIR_NAME,
     }
 
 
@@ -535,7 +547,7 @@ def _screener_body():
     <th data-sort="last" title="Most recent session on which it printed one">Latest</th>
   </tr></thead><tbody></tbody>
 </table></div>
-""".strip()
+""".strip() + "\n" + _stock_body()
 
 
 def _groups_body():
@@ -618,7 +630,101 @@ def _screener_payload(country):
             {"code": code, "label": label}
             for code, label, _tv in config.SCREENER_INDEXES.get(country, [])
         ],
+        # Needed by the embedded Stock Context panel below the table (see
+        # _screener_body) — clicking a row now shows that name's chart right
+        # there instead of only sending the ticker to a different page.
+        "tickerDir": config.TICKER_DIR_NAME,
+        "benchmarkKeys": config.COUNTRIES[country]["largecap_keys"],
     }
+
+
+def _architecture_body(country):
+    """A plain-language map of where every number on this site actually comes
+    from, so a stale or surprising figure can be traced back to its source
+    instead of taken on faith. Built from the same config values the pipeline
+    itself runs on, not hand-typed — this can't drift out of sync with what
+    the code actually does the way a separate wiki page would."""
+    cfg = config.COUNTRIES[country]
+    other = next(c for c in config.COUNTRIES if c != country)
+    other_cfg = config.COUNTRIES[other]
+    cutoff_h, cutoff_m = cfg["session_final_after_utc"]
+    price_src = "Financial Modeling Prep (FMP)" if cfg["price_source"] == "fmp" else "Yahoo Finance (yfinance)"
+    workflow = f"daily-{country.lower()}.yml"
+    vol_map = cfg.get("index_volume", {})
+    vol_lines = "".join(
+        f"<li><code>{key}</code> ({cfg['index_labels'].get(key, key)}) "
+        f"&mdash; {'own volume from ' + price_src if sym == cfg['index_tickers'][key] else 'proxy: ' + sym}</li>"
+        for key, sym in vol_map.items()
+    )
+    no_vol = [k for k in cfg["index_tickers"] if k not in vol_map]
+    no_vol_line = (
+        f"<li>{', '.join(cfg['index_labels'][k] for k in no_vol)} &mdash; "
+        "no volume panel; the underlying source has no usable figure for these "
+        "(near-zero or always-zero), so it's omitted rather than shown misleadingly.</li>"
+        if no_vol else ""
+    )
+
+    return f"""
+<div class="empty-note">How this page's own data actually gets here, end to end &mdash; for tracing a number back to its source rather than taking it on faith.</div>
+
+<div class="arch-section">
+  <h3>1. Where the numbers come from</h3>
+  <table class="arch-table">
+    <tr><td>Prices ({cfg['label']})</td><td>{price_src}</td></tr>
+    <tr><td>Prices ({other_cfg['label']})</td><td>{"Financial Modeling Prep (FMP)" if other_cfg["price_source"] == "fmp" else "Yahoo Finance (yfinance)"}</td></tr>
+    <tr><td>Sector / industry classification</td><td>TradingView's public screener &mdash; both markets</td></tr>
+    <tr><td>Breadth universe</td><td>{"S&amp;P 1500 constituents (iShares IVV/IJH/IJR holdings CSVs)" if country == "US" else "Top 1,000 NSE names by market cap (from the TradingView classification pull itself &mdash; India has no free constituent list)"}</td></tr>
+  </table>
+</div>
+
+<div class="arch-section">
+  <h3>2. Pipeline order (src/main.py, one country at a time)</h3>
+  <ol>
+    <li>Pull TradingView classification (sector/industry tags, and India's universe)</li>
+    <li>Build the breadth universe (S&amp;P 1500 for US; top-1000 by cap for India)</li>
+    <li>Update the rolling price cache &mdash; new tickers get full history; existing ones get the last {config.RECENT_WINDOW_DAYS} days re-checked (not just today &mdash; see the reliability note below)</li>
+    <li>Backfill index history (OHLC + EMA10/20/50 + volume where available) &mdash; fetched directly per index, independent of the breadth universe</li>
+    <li>Backfill breadth internals (advance/decline, new highs/lows, % up/down) from the price cache</li>
+    <li>Backfill sector and industry performance/rank</li>
+    <li>Compute the Market Environment read (trend/participation/internals)</li>
+    <li>Compute relative-strength ratings</li>
+    <li>{"Run TMLE (leader-scoring engine) &mdash; US only, since it needs FMP fundamentals with no India coverage on this plan" if country == "US" else "(TMLE does not run for India &mdash; see note in step above)"}</li>
+    <li>Render every page in docs/ from what was just written</li>
+  </ol>
+</div>
+
+<div class="arch-section">
+  <h3>3. Update schedule</h3>
+  <table class="arch-table">
+    <tr><td>{cfg['label']}</td><td>GitHub Action <code>{workflow}</code> &mdash; runs after {cfg['label']}'s own market close, independently of the other country</td></tr>
+    <tr><td>Session cutoff</td><td>{cutoff_h:02d}:{cutoff_m:02d} UTC &mdash; today's bar is excluded entirely until the wall clock clears this, so a live/forming session is never mistaken for a finished one</td></tr>
+    <tr><td>Self-healing</td><td>Every run recomputes the full trailing {config.CHART_BACKFILL_DAYS}-day window and upserts by date &mdash; a day that failed to price on one run fills itself in on the next successful one, automatically</td></tr>
+  </table>
+</div>
+
+<div class="arch-section">
+  <h3>4. Storage model</h3>
+  <table class="arch-table">
+    <tr><td><code>data/{cfg['data_subdir']}/*.jsonl</code></td><td>Permanent accumulating history, one row per session, git-tracked in <code>main</code>. This IS the chart history.</td></tr>
+    <tr><td><code>docs/{cfg['docs_subdir'] + '/' if cfg['docs_subdir'] else ''}panel-*.html</code></td><td>Generated pages, one per panel, rebuilt fresh every run and git-tracked (so the last good render always survives a bad run).</td></tr>
+    <tr><td><code>docs/{cfg['docs_subdir'] + '/' if cfg['docs_subdir'] else ''}tickers/</code></td><td>Per-ticker price files (chart depth back to 2020) &mdash; deliberately <b>not</b> git-tracked in main (thousands of files rewritten daily would bloat history for nothing); lives only on the <code>gh-pages</code> branch and this hub's local sync.</td></tr>
+  </table>
+</div>
+
+<div class="arch-section">
+  <h3>5. Known data caveats</h3>
+  <ul>
+    {vol_lines}
+    {no_vol_line}
+    <li>Russell 2000's own volume from FMP is byte-identical to the S&amp;P 500's every day &mdash; not real Russell volume, just a mirrored composite figure &mdash; which is why it uses IWM (the Russell 2000 ETF) as a proxy instead.</li>
+  </ul>
+</div>
+
+<div class="arch-section">
+  <h3>6. Reliability</h3>
+  <p class="env-block-sub">FMP's real-time quote endpoint previously went dark for entire runs on several separate days, pricing under 1% of tickers while reporting success &mdash; breadth/sector/industry correctly refused to count those as sessions and fell behind, while index history (fetched differently) kept advancing, which is what caused different panels to show different "as of" dates with nothing explaining why. Today's close is now fetched via the same historical-EOD endpoint used everywhere else, and a run aborts loudly (committing nothing) if fewer than {config.MIN_DAILY_PRICE_COVERAGE:.0%} of tickers come back priced, rather than silently accepting a near-empty session.</p>
+</div>
+""".strip()
 
 
 def _breadth_body(key):
@@ -720,8 +826,8 @@ def render_panel(country, filename, title, body_html, data_keys, series, generat
     payload.update(extra or {})
     return _write_panel(
         country, filename, title, body_html, payload, generated_at,
-        needs_chartjs=(chart_lib == "chartjs"),
-        needs_lightweight=(chart_lib == "lightweight"),
+        needs_chartjs=(chart_lib in ("chartjs", "both")),
+        needs_lightweight=(chart_lib in ("lightweight", "both")),
     )
 
 
@@ -784,7 +890,8 @@ def render_all_panels(country):
     for key, label in index_labels(country).items():
         filename = f"panel-{key.replace('_', '-')}.html"
         paths.append(render_panel(country, filename, label, _index_body(key),
-                                  [key], series, generated_at, chart_lib="lightweight"))
+                                  [key], series, generated_at, chart_lib="lightweight",
+                                  extra={"indexTickers": index_tickers(country)}))
 
     paths.append(render_panel(
         country, "panel-sectors.html", "Sector Performance",
@@ -806,7 +913,7 @@ def render_all_panels(country):
     paths.append(render_panel(
         country, "panel-screener.html", "New Highs & Lows Screener",
         _screener_body(), [], series, generated_at,
-        extra=_screener_payload(country),
+        extra=_screener_payload(country), chart_lib="both",
     ))
 
     members = sector_member_counts(country)
@@ -820,6 +927,11 @@ def render_all_panels(country):
 
     if cfg.get("run_tmle"):
         paths.extend(render_tmle_panels(country, generated_at))
+
+    paths.append(render_panel(
+        country, "panel-architecture.html", "System Architecture",
+        _architecture_body(country), [], series, generated_at,
+    ))
 
     return paths
 

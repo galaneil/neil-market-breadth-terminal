@@ -1,4 +1,4 @@
-name: Daily market breadth refresh
+name: Daily US market breadth refresh
 
 on:
   schedule:
@@ -6,10 +6,16 @@ on:
     # so this has to clear the close in BOTH halves of the year: the cash
     # session ends at 20:00 UTC under EDT and 21:00 UTC under EST. 23:00 UTC
     # is 7pm ET in summer and 6pm ET in winter, comfortably clear of both.
-    # (The previous 21:00 UTC schedule landed exactly on the closing bell
-    # every winter, which risked ingesting an unfinished session.)
+    # (An earlier 21:00 UTC schedule landed exactly on the closing bell every
+    # winter, which risked ingesting an unfinished session.)
     - cron: "0 23 * * 1-5"
   workflow_dispatch: {}  # manual "Run workflow" button, for on-demand runs/testing
+
+concurrency:
+  # Only one US refresh at a time — a manual dispatch landing on top of the
+  # scheduled run would otherwise race to commit/push against itself.
+  group: daily-refresh-us
+  cancel-in-progress: false
 
 permissions:
   contents: write
@@ -34,7 +40,11 @@ jobs:
       # runner starts without them — and the nightly price source returns a
       # much shallower window. Without this restore, store.write_ticker_ohlc
       # would merge into nothing and each night would quietly truncate the
-      # charts back to whatever the daily fetch happened to return.
+      # charts back to whatever the daily fetch happened to return. Restoring
+      # BOTH countries' ticker dirs here (not just US) is deliberate: the
+      # gh-pages publish step below replaces the whole site wholesale, so
+      # India's tickers need to already be in docs/in/tickers before that
+      # happens or this run would silently wipe them off the published site.
       - name: Restore deep ticker history from gh-pages
         continue-on-error: true
         run: |
@@ -51,20 +61,21 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Run pipeline
+      - name: Run pipeline (US only)
         env:
           FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
-        run: python src/main.py
+        run: python src/main.py US
 
       - name: Commit source data back to main
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add data/ docs/
+          git pull --rebase origin main
+          git add data/us/ docs/
           if git diff --staged --quiet; then
             echo "No changes to commit"
           else
-            git commit -m "Daily refresh: $(date -u +'%Y-%m-%d %H:%M UTC')"
+            git commit -m "US daily refresh: $(date -u +'%Y-%m-%d %H:%M UTC')"
             git push
           fi
 

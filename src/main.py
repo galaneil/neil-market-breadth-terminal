@@ -26,7 +26,7 @@ import os
 import sys
 import time
 import traceback
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import budget
 import config
@@ -151,42 +151,56 @@ def run_country(code, client=None):
     if cfg["price_source"] == "fmp":
         fetch_prices_fmp(client, all_price_tickers + index_tickers, index_tickers,
                          drop_partial, price_cache, code)
+        targets = all_price_tickers + index_tickers
+        # A short trailing window, not just today, and fetched regardless of
+        # whether TODAY's own session has closed (drop_partial still strips
+        # today's row when it hasn't). An already-cached ticker used to get
+        # only TODAY written here, so a day that failed to price (see below)
+        # stayed a permanent hole even after a later run succeeded — nothing
+        # ever went back to re-check it. Re-fetching the last week and
+        # merging every row heals any such gap on the next run automatically,
+        # the same way a brand new ticker's full history already self-heals
+        # via fetch_prices_fmp above.
+        window_start = (datetime.now(timezone.utc).date()
+                        - timedelta(days=config.RECENT_WINDOW_DAYS)).isoformat()
+        log(f"{code}: fetching the last {config.RECENT_WINDOW_DAYS} days for {len(targets)} tickers...")
+        # This used to be client.quote_many() for just today — FMP's
+        # real-time /quote endpoint, one call per symbol. On three separate
+        # days it went dark for the whole run (each symbol "failed"
+        # individually, each failure swallowed individually, exactly like
+        # every other per-symbol loop against this API has to), and the run
+        # kept reporting success while pricing 10-25 of 3,489 tickers instead
+        # of the usual ~3,400. Every downstream metric that requires a
+        # quorum of same-day prices correctly refused to count that as a
+        # session and skipped it — while index history, fetched via THIS
+        # endpoint rather than /quote, sailed through regardless. That
+        # mismatch is what actually produced the "different panels show
+        # different dates" symptom. Using the same endpoint here that
+        # already backfills every other day reliably removes the failure
+        # mode; the coverage check below is the backstop in case it doesn't.
+        got_today = 0
+        for i, sym in enumerate(targets):
+            try:
+                rows = drop_partial(client.historical_eod(sym, start=window_start, end=today))
+            except Exception:
+                rows = []
+            for row in rows:
+                if row.get("close") is not None:
+                    cache_mod.set_value(price_cache, sym, row["date"], row["close"])
+            if any(r.get("date") == today for r in rows):
+                got_today += 1
+            if (i + 1) % 250 == 0:
+                log(f"    {i + 1}/{len(targets)}")
+
         if skip_today:
-            log(f"{code}: skipping today's close — a live quote mid-session is not a close.")
+            log(f"{code}: today's session hasn't closed yet — backfilled the trailing "
+                f"week only, nothing to check for {today} yet.")
         else:
-            targets = all_price_tickers + index_tickers
-            log(f"{code}: fetching today's close for {len(targets)} tickers...")
-            # This used to be client.quote_many() — FMP's real-time /quote
-            # endpoint, one call per symbol. On three separate days it went
-            # dark for the whole run (each symbol "failed" individually, each
-            # failure swallowed individually, exactly like every other
-            # per-symbol loop against this API has to), and the run kept
-            # reporting success while pricing 10-25 of 3,489 tickers instead
-            # of the usual ~3,400. Every downstream metric that requires a
-            # quorum of same-day prices correctly refused to count that as a
-            # session and skipped it — while index history, fetched via THIS
-            # endpoint rather than /quote, sailed through regardless. That
-            # mismatch is what actually produced the "different panels show
-            # different dates" symptom. Using the same endpoint here that
-            # already backfills every other day reliably removes the failure
-            # mode; the coverage check below is the backstop in case it
-            # doesn't.
-            got = 0
-            for i, sym in enumerate(targets):
-                try:
-                    rows = client.historical_eod(sym, start=today, end=today)
-                except Exception:
-                    rows = []
-                if rows and rows[0].get("close") is not None:
-                    cache_mod.set_value(price_cache, sym, today, rows[0]["close"])
-                    got += 1
-                if (i + 1) % 250 == 0:
-                    log(f"    {i + 1}/{len(targets)}")
-            coverage = got / len(targets) if targets else 1.0
-            log(f"{code}: priced {got}/{len(targets)} tickers for {today} ({coverage:.1%})")
+            coverage = got_today / len(targets) if targets else 1.0
+            log(f"{code}: priced {got_today}/{len(targets)} tickers for {today} ({coverage:.1%})")
             if coverage < config.MIN_DAILY_PRICE_COVERAGE:
                 raise RuntimeError(
-                    f"{code}: only {got}/{len(targets)} tickers priced for {today} "
+                    f"{code}: only {got_today}/{len(targets)} tickers priced for {today} "
                     f"({coverage:.1%}, below the {config.MIN_DAILY_PRICE_COVERAGE:.0%} "
                     "floor) — treating this as a fetch failure, not a thin session, "
                     "and aborting before anything for today is committed.")
@@ -214,13 +228,25 @@ def run_country(code, client=None):
     # only (all the breadth maths needs), but the index panels draw HLC bars,
     # which needs high/low too.
     log(f"{code}: backfilling index history (OHLC + EMA10/20/50)...")
+    volume_sources = cfg.get("index_volume", {})
     for key, symbol in cfg["index_tickers"].items():
         try:
             eod_rows = index_ohlc_rows(cfg, client, symbol, drop_partial)
         except Exception:
             log(f"  {key}: fetch failed, leaving the stored history untouched")
             continue
-        records = indices.backfill_index_history(eod_rows, n_days)
+
+        volume_rows = None
+        vol_symbol = volume_sources.get(key)
+        if vol_symbol == symbol:
+            volume_rows = eod_rows
+        elif vol_symbol:
+            try:
+                volume_rows = index_ohlc_rows(cfg, client, vol_symbol, drop_partial)
+            except Exception:
+                log(f"  {key}: volume source {vol_symbol} fetch failed, no volume this run")
+
+        records = indices.backfill_index_history(eod_rows, n_days, volume_rows=volume_rows)
         for record in records:
             store.write_index(code, key, record)
         log(f"  {key}: {len(records)} days")

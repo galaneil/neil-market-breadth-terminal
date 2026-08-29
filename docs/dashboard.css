@@ -60,6 +60,13 @@ header {
 header h1 { font-size: 18px; margin: 0; }
 .header-controls { display: flex; align-items: center; gap: 12px; }
 .generated-at { color: var(--text-dim); font-size: 12px; }
+/* "Updated" says when the PAGE was built; "Data as of" says what session the
+   numbers on it actually cover — a US page built minutes ago legitimately
+   covers yesterday's close until tonight's session finishes. Showing both,
+   distinctly, is what stops "Updated 18:26 UTC" from reading as "current
+   through today" when it isn't. */
+.data-as-of { color: var(--text-dim); font-size: 12px; font-weight: 600; }
+.data-as-of.stale { color: var(--warn); }
 select, button.icon-btn {
   background: var(--panel-bg);
   color: var(--text);
@@ -214,6 +221,15 @@ section h2 { font-size: 15px; text-transform: uppercase; letter-spacing: 0.04em;
 /* Chart heights scale with the frame they're in, so a short Notion embed and
    a full-screen monitor both get a sensibly proportioned chart. */
 .lw-chart { height: clamp(280px, 46vh, 460px); width: 100%; }
+/* A little more room for indices that carry a volume histogram in the same
+   pane, so the extra bottom section doesn't crowd out the price bars. */
+.lw-chart-vol { height: clamp(320px, 52vh, 520px); }
+.card-title-ticker { color: var(--text-dim); font-weight: 400; }
+.vol-sub { margin-top: 4px; }
+.vol-avg-swatch {
+  display: inline-block; width: 14px; height: 2px; margin-left: 2px;
+  vertical-align: middle; background: var(--text-dim);
+}
 
 .env-headline { display: flex; align-items: baseline; gap: 10px; margin-bottom: 14px; flex-wrap: wrap; }
 .env-verdict { font-size: 26px; font-weight: 600; text-transform: capitalize; }
@@ -343,6 +359,17 @@ tbody tr.selected { background: var(--grid-line); outline: 1px solid var(--accen
 .rank-cell { color: var(--text-dim); }
 .table-wrap { background: var(--panel-bg); border: 1px solid var(--border); border-radius: 10px; padding: 4px 12px; max-height: 420px; overflow-y: auto; overflow-x: auto; }
 .table-wrap table { min-width: 100%; }
+/* System Architecture panel: plain reference material, not a data widget —
+   styled like documentation rather than another stat card. */
+.arch-section { margin-bottom: 22px; }
+.arch-section h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em;
+  color: var(--text-dim); margin: 0 0 10px; padding-bottom: 6px; border-bottom: 1px solid var(--border); }
+.arch-section ol, .arch-section ul { margin: 0; padding-left: 20px; }
+.arch-section li { padding: 3px 0; font-size: 13px; line-height: 1.5; }
+.arch-section code { background: var(--grid-line); padding: 1px 5px; border-radius: 4px; font-size: 12px; }
+.arch-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+.arch-table td { padding: 7px 10px; border-bottom: 1px solid var(--border); text-align: left; vertical-align: top; }
+.arch-table td:first-child { color: var(--text-dim); width: 32%; white-space: nowrap; }
 .drilldown {
   margin-top: 14px;
   background: var(--panel-bg);

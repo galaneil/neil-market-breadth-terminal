@@ -512,7 +512,7 @@
     };
   }
 
-  function renderIndexCard(seriesKey, label, grid) {
+  function renderIndexCard(seriesKey, label, grid, ticker) {
     const rows = S[seriesKey] || [];
     const card = document.createElement("div");
     card.className = "card";
@@ -526,13 +526,19 @@
     const last = rows[rows.length - 1];
     const prev = rows.length > 1 ? rows[rows.length - 2] : null;
     const chg = prev && prev.close ? ((last.close - prev.close) / prev.close * 100) : null;
+    // Not every index has real volume to show (an index has none of its own —
+    // see index_volume in config.py for which ones use a proxy and which are
+    // skipped entirely), so the histogram pane only gets built when the data
+    // is actually there.
+    const hasVolume = last.volume !== undefined && last.volume !== null;
 
     function badge(txt, dir) {
       return '<span class="badge on ' + dir + '">' + txt + "</span>";
     }
 
     card.innerHTML =
-      '<div class="card-title">' + label + "</div>" +
+      '<div class="card-title">' + label +
+        (ticker ? ' <span class="card-title-ticker">' + ticker + "</span>" : "") + "</div>" +
       '<div class="card-value ' + pctClass(chg) + '">' + fmtNum(last.close, 2) + "</div>" +
       '<div class="card-sub">' + (chg === null ? "&nbsp;" : fmtSignedPct(chg) + " vs prior close") + "</div>" +
       '<div class="badge-row">' +
@@ -541,7 +547,10 @@
         badge("EMA50 " + (last.above_ema50 ? "above" : "below"), last.above_ema50 ? "up" : "down") +
       "</div>" +
       '<div class="tf-toggle"></div>' +
-      '<div class="lw-chart" id="' + chartId + '"></div>';
+      '<div class="lw-chart' + (hasVolume ? " lw-chart-vol" : "") + '" id="' + chartId + '"></div>' +
+      (hasVolume
+        ? '<div class="card-sub vol-sub">Volume &middot; 30-day average <span class="vol-avg-swatch"></span></div>'
+        : "");
 
     const container = document.getElementById(chartId);
     const th = lwTheme();
@@ -561,6 +570,11 @@
       openVisible: false,   // HLC bars, not OHLC
       thinBars: false,
     });
+    // Volume gets the bottom of the same pane, so price only uses the top
+    // portion — otherwise the histogram would overlap the price bars.
+    chart.priceScale("right").applyOptions({
+      scaleMargins: hasVolume ? { top: 0.06, bottom: 0.28 } : { top: 0.06, bottom: 0.06 },
+    });
     enableMeasure(chart, barSeries, container);
     const emaSeries = {};
     ["ema10", "ema20", "ema50"].forEach(function (key) {
@@ -573,14 +587,60 @@
       });
     });
 
+    let volSeries = null, avgVolSeries = null;
+    if (hasVolume) {
+      volSeries = chart.addHistogramSeries({
+        priceFormat: { type: "volume" },
+        priceScaleId: "volume",
+        priceLineVisible: false, lastValueVisible: false,
+      });
+      chart.priceScale("volume").applyOptions({ scaleMargins: { top: 0.76, bottom: 0 } });
+      avgVolSeries = chart.addLineSeries({
+        priceScaleId: "volume", color: th.text, lineWidth: 1,
+        priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+      });
+    }
+
+    // Bar colour: green when today's close is at or above the PRIOR close,
+    // red when it's below — the read Neil actually wants, not lightweight-
+    // charts' built-in "close vs this bar's own open". The library only
+    // colours a bar from its own open/close, with no per-bar override, so
+    // this feeds it the prior close AS "open" instead of the real session
+    // open. That's safe only because openVisible is already false on every
+    // bar series in this file (see below) — the real open is never drawn,
+    // so overwriting it here changes nothing visible except the colour.
+    function withPrevCloseAsOpen(r, idx) {
+      const prevClose = idx > 0 ? rows[idx - 1].close : r.close;
+      return { time: r.date, open: prevClose, high: r.high, low: r.low, close: r.close };
+    }
+
     function draw(tf) {
+      // Rebuilt every draw, not once outside — MBT_EXTEND unshifts older
+      // history into this exact `rows` array after first paint (see below),
+      // which shifts every later row's index. A map built once before that
+      // happens goes stale and points at the wrong rows, which is what made
+      // every single bar render green regardless of actual direction: a bad
+      // lookup fell back to "no prior close", and open==close always reads
+      // as up.
+      const indexOfDate = {};
+      rows.forEach(function (r, i) { indexOfDate[r.date] = i; });
       const filtered = filterByTimeframe(rows, tf);
       barSeries.setData(filtered.map(function (r) {
-        return { time: r.date, open: r.open, high: r.high, low: r.low, close: r.close };
+        return withPrevCloseAsOpen(r, indexOfDate[r.date]);
       }));
       ["ema10", "ema20", "ema50"].forEach(function (key) {
         emaSeries[key].setData(filtered.map(function (r) { return { time: r.date, value: r[key] }; }));
       });
+      if (hasVolume) {
+        volSeries.setData(filtered.map(function (r) {
+          const idx = indexOfDate[r.date];
+          const prevClose = idx > 0 ? rows[idx - 1].close : r.close;
+          return { time: r.date, value: r.volume || 0, color: r.close >= prevClose ? th.up : th.down };
+        }));
+        avgVolSeries.setData(filtered
+          .filter(function (r) { return r.avg_vol30 !== undefined && r.avg_vol30 !== null; })
+          .map(function (r) { return { time: r.date, value: r.avg_vol30 }; }));
+      }
       chart.timeScale().fitContent();
     }
 
@@ -595,6 +655,7 @@
         timeScale: { borderColor: t.border },
       });
       barSeries.applyOptions({ upColor: t.up, downColor: t.down });
+      if (avgVolSeries) avgVolSeries.applyOptions({ color: t.text });
     });
 
     if (window.ResizeObserver) {
@@ -1826,12 +1887,40 @@
       const resolved = resolveDate(wanted);
       dateInput.value = resolved;
       draw(resolved);
+      // Stepping the date keeps whatever ticker is already applied on
+      // screen, so its % change has to move with it too.
+      const sym = tickerInput.value.trim().toUpperCase();
+      if (sym && tickerResult.className === "replay-hit") dayChangeSpan(sym, resolved);
     }
 
     function step(delta) {
       const idx = dates.indexOf(dateInput.value);
       const next = Math.min(dates.length - 1, Math.max(0, (idx === -1 ? dates.length - 1 : idx) + delta));
       go(dates[next]);
+    }
+
+    // The day's move for whatever ticker is typed in, colored the same way
+    // every other % figure on this page is — fetched from the same
+    // per-ticker files the Stock Context and TMLE panels already use, not
+    // stored per replay day (that would mean one more file per session per
+    // ticker, for a number this can derive on demand from what already
+    // exists).
+    const tickerDir = D.tickerDir || "tickers";
+    const priceCache = {};
+    let priceToken = 0;
+    function dayChangeSpan(sym, dateStr) {
+      const token = ++priceToken;
+      const req = priceCache[sym] || (priceCache[sym] = fetch(tickerDir + "/" + encodeURIComponent(sym) + ".json")
+        .then(function (r) { return r.ok ? r.json() : null; })
+        .catch(function () { return null; }));
+      req.then(function (p) {
+        if (token !== priceToken || !p || !p.dates) return;
+        const i = p.dates.indexOf(dateStr);
+        if (i < 1) return;  // not found, or no prior day to compare against
+        const chg = (p.close[i] / p.close[i - 1] - 1) * 100;
+        const el = document.getElementById("replay-ticker-chg");
+        if (el) el.innerHTML = ' <span class="pct ' + pctClass(chg) + '">' + fmtSignedPct(chg) + "</span>";
+      });
     }
 
     // Applies a ticker without publishing it, so this is safe to call both
@@ -1843,11 +1932,14 @@
       if (sym && hit) {
         highlight = { sector: hit[0], industry: hit[1] };
         tickerResult.className = "replay-hit";
-        tickerResult.textContent = sym + " → " + hit[1] + " (" + hit[0] + ")";
+        tickerResult.innerHTML = sym + " → " + hit[1] + " (" + hit[0] + ")" +
+          '<span id="replay-ticker-chg"></span>';
+        dayChangeSpan(sym, dateInput.value);
       } else {
         highlight = { sector: null, industry: null };
         tickerResult.className = "replay-miss";
         tickerResult.textContent = sym ? "not found" : "";
+        priceToken++;  // invalidate any in-flight lookup — nothing to show now
       }
       draw(dateInput.value);
     }
@@ -2116,8 +2208,13 @@
       const bars = priceChart.addBarSeries({
         upColor: th.up, downColor: th.down, openVisible: false, thinBars: false,
       });
+      // Coloured by close vs the PRIOR day's close, not this bar's own open —
+      // see the identical note in renderIndexCard. openVisible is false here
+      // too, so feeding prior close in as "open" only changes the colour.
       bars.setData(dates.map(function (dt, i) {
-        return { time: dt, open: slice(d.open)[i], high: slice(d.high)[i], low: slice(d.low)[i], close: close[i] };
+        const abs = startIdx + i;
+        const prevClose = abs > 0 ? d.close[abs - 1] : close[i];
+        return { time: dt, open: prevClose, high: slice(d.high)[i], low: slice(d.low)[i], close: close[i] };
       }));
       enableMeasure(priceChart, bars, document.getElementById("stock-chart"));
       [["ema10", e10, "#2962FF"], ["ema20", e20, "#F23645"], ["ema50", e50, "#FF9800"]].forEach(function (cfg) {
@@ -2700,8 +2797,11 @@
         crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
       });
       const bars = priceChart.addBarSeries({ upColor: lwth.up, downColor: lwth.down, openVisible: false, thinBars: false });
+      // Coloured by close vs the PRIOR day's close — see the identical note
+      // in renderIndexCard. openVisible is false here too.
       bars.setData(p.dates.map(function (dt, i) {
-        return { time: dt, open: p.open[i], high: p.high[i], low: p.low[i], close: p.close[i] };
+        const prevClose = i > 0 ? p.close[i - 1] : p.close[i];
+        return { time: dt, open: prevClose, high: p.high[i], low: p.low[i], close: p.close[i] };
       }));
       enableMeasure(priceChart, bars, el);
       [["#2962FF", 10], ["#F23645", 20], ["#FF9800", 50]].forEach(function (cfg) {
@@ -2778,6 +2878,32 @@
   // ---------- Wire everything up ----------
   renderEnvironmentPanel();
 
+  // "Updated" only ever said when the PAGE was built, never what session the
+  // numbers on it cover — the single most confusing thing about this whole
+  // site. A US page built at 18:26 UTC today legitimately still shows
+  // yesterday's close until tonight's session is done, but nothing said so,
+  // which is exactly what made a completely correct page read as broken.
+  (function () {
+    const el = document.querySelector(".generated-at");
+    if (!el) return;
+    let asOf = DATA.asOf || null;
+    if (!asOf) {
+      Object.keys(S).forEach(function (key) {
+        const rows = S[key];
+        const last = rows && rows.length ? rows[rows.length - 1] : null;
+        if (last && last.date && (!asOf || last.date > asOf)) asOf = last.date;
+      });
+    }
+    if (!asOf) return;
+    const staleDays = Math.round((Date.now() - Date.parse(asOf + "T00:00:00Z")) / 86400000);
+    const span = document.createElement("span");
+    span.className = "data-as-of" + (staleDays > 4 ? " stale" : "");
+    span.textContent = "Data as of " + asOf;
+    span.title = "The page itself was built at the “Updated” time above; " +
+      "this is the most recent trading session its numbers actually cover.";
+    el.parentNode.insertBefore(span, el);
+  })();
+
   // ---------- Stale-embed guard ----------
   // A Notion embed lives in a cross-origin iframe, which a hard refresh of the
   // Notion page does not reliably revalidate. After the replay history went
@@ -2829,10 +2955,12 @@
     index_russell2000: "Russell 2000",
   };
 
+  const INDEX_TICKERS = DATA.indexTickers || {};
+
   const indicesGrid = document.getElementById("indices-grid");
   if (indicesGrid) {
     (indicesGrid.dataset.keys || "").split(",").filter(Boolean).forEach(function (key) {
-      renderIndexCard(key, INDEX_LABELS[key] || key, indicesGrid);
+      renderIndexCard(key, INDEX_LABELS[key] || key, indicesGrid, INDEX_TICKERS[key]);
     });
   }
 

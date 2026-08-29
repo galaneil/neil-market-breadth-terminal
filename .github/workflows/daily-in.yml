@@ -1,0 +1,91 @@
+name: Daily India market breadth refresh
+
+on:
+  schedule:
+    # 11:30 UTC on weekdays = 17:00 IST. NSE/BSE close at 15:30 IST (10:00
+    # UTC) year-round — India observes no daylight saving — so this clears
+    # the close with a full 1.5-hour margin for Yahoo's EOD data to actually
+    # be final, without holding India's refresh back to wait on the US job's
+    # own schedule the way the combined workflow used to.
+    - cron: "30 11 * * 1-5"
+  workflow_dispatch: {}  # manual "Run workflow" button, for on-demand runs/testing
+
+concurrency:
+  # Only one India refresh at a time — a manual dispatch landing on top of
+  # the scheduled run would otherwise race to commit/push against itself.
+  group: daily-refresh-in
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      # See daily-us.yml for why both countries' ticker dirs are restored
+      # here regardless of which country this run refreshes: the gh-pages
+      # publish step below replaces the whole site wholesale, so the OTHER
+      # country's tickers need to already be on disk or this run would
+      # silently wipe them off the published site.
+      - name: Restore deep ticker history from gh-pages
+        continue-on-error: true
+        run: |
+          git clone --depth 1 --branch gh-pages \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" /tmp/site
+          for dir in tickers in/tickers; do
+            if [ -d "/tmp/site/$dir" ]; then
+              mkdir -p "docs/$dir"
+              cp -r "/tmp/site/$dir/." "docs/$dir/"
+              echo "restored $(ls "docs/$dir" | wc -l) files into docs/$dir"
+            fi
+          done
+          rm -rf /tmp/site
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run pipeline (India only)
+        run: python src/main.py IN
+
+      - name: Commit source data back to main
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git pull --rebase origin main
+          git add data/in/ docs/
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "India daily refresh: $(date -u +'%Y-%m-%d %H:%M UTC')"
+            git push
+          fi
+
+      # The site is published to a branch that is replaced wholesale each run
+      # rather than committed into main. docs/tickers/ alone is a few thousand
+      # files rewritten daily; keeping every version of those in main's history
+      # would add tens of megabytes a day permanently, for data regenerated
+      # from scratch anyway. Only main keeps history, and only for the source
+      # and the accumulating JSONL metrics.
+      - name: Publish site to gh-pages
+        run: |
+          cd docs
+          git init -q
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -qb gh-pages
+          git add -A
+          git commit -qm "Site build: $(date -u +'%Y-%m-%d %H:%M UTC')"
+          git push -qf "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" gh-pages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

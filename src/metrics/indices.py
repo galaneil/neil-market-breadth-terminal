@@ -22,10 +22,20 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 import pandas as pd
 
 
-def build_ohlc_frame(eod_rows):
+def build_ohlc_frame(eod_rows, volume_rows=None):
     """eod_rows: list of dicts from FMPClient.historical_eod (newest first).
     Returns a DataFrame indexed by date (ascending) with open/high/low/close
-    plus ema10/ema20/ema50, or None if there's nothing usable."""
+    plus ema10/ema20/ema50, or None if there's nothing usable.
+
+    volume_rows, if given, is a second list of {date, volume} dicts merged in
+    by date to add volume + a trailing 30-session average. It is a SEPARATE
+    argument rather than a column read off eod_rows because the volume worth
+    showing does not always come from the index ticker itself: an index has
+    no real traded volume of its own, so some of these are actually a proxy
+    ETF's volume (e.g. IWM standing in for Russell 2000) rather than the
+    index's own (frequently zero or meaningless) figure. Omitted entirely —
+    not just left null — for an index where no source gives a real number,
+    so the frontend can tell "not tracked" apart from "zero volume today"."""
     rows = [r for r in eod_rows if r.get("close") is not None]
     if not rows:
         return None
@@ -39,16 +49,27 @@ def build_ohlc_frame(eod_rows):
     df["ema10"] = close.ewm(span=10, adjust=False).mean()
     df["ema20"] = close.ewm(span=20, adjust=False).mean()
     df["ema50"] = close.ewm(span=50, adjust=False).mean()
+
+    if volume_rows is not None:
+        vol_rows = [r for r in volume_rows
+                    if r.get("date") is not None and r.get("volume") is not None]
+        if vol_rows:
+            vol_df = pd.DataFrame(vol_rows)[["date", "volume"]]
+            vol_df["date"] = pd.to_datetime(vol_df["date"])
+            vol_df = vol_df.set_index("date").sort_index()
+            vol_df = vol_df[~vol_df.index.duplicated(keep="last")]
+            df["volume"] = vol_df["volume"].astype(float).reindex(df.index)
+            df["avg_vol30"] = df["volume"].rolling(30, min_periods=1).mean()
     return df
 
 
-def _record_from_row(df, i):
+def _record_from_row(df, i, has_volume):
     row = df.iloc[i]
 
     def rising(col):
         return bool(i >= 1 and row[col] > df.iloc[i - 1][col])
 
-    return {
+    record = {
         "date": df.index[i].strftime("%Y-%m-%d"),
         "open": float(row["open"]),
         "high": float(row["high"]),
@@ -64,16 +85,22 @@ def _record_from_row(df, i):
         "ema20_rising": rising("ema20"),
         "ema50_rising": rising("ema50"),
     }
+    if has_volume:
+        vol, avg_vol = row["volume"], row["avg_vol30"]
+        record["volume"] = None if pd.isna(vol) else float(vol)
+        record["avg_vol30"] = None if pd.isna(avg_vol) else float(avg_vol)
+    return record
 
 
-def backfill_index_history(eod_rows, n_days):
+def backfill_index_history(eod_rows, n_days, volume_rows=None):
     """Records for the trailing n_days of available history (fewer if FMP
     returned less than that)."""
-    df = build_ohlc_frame(eod_rows)
+    df = build_ohlc_frame(eod_rows, volume_rows=volume_rows)
     if df is None or df.empty:
         return []
+    has_volume = "volume" in df.columns
     start = max(0, len(df) - n_days)
-    return [_record_from_row(df, i) for i in range(start, len(df))]
+    return [_record_from_row(df, i, has_volume) for i in range(start, len(df))]
 
 
 if __name__ == "__main__":

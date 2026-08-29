@@ -66,6 +66,7 @@ def _frame_to_rows(df):
             "high": val("High"),
             "low": val("Low"),
             "close": round(float(close), 4),
+            "volume": val("Volume"),
         })
     out.sort(key=lambda r: r["date"], reverse=True)
     return out

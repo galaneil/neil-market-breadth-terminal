@@ -44,6 +44,17 @@ PRICE_WINDOW_DAYS = CHART_BACKFILL_DAYS + NEW_HIGH_LOW_WINDOW + 20  # + small ma
 # different "as of" dates with nothing anywhere explaining why.
 MIN_DAILY_PRICE_COVERAGE = 0.50
 
+# How many trailing calendar days the "price today" step re-fetches for an
+# already-cached ticker, not just today alone. A ticker that already has
+# history only ever gets one new date appended per run; if a run's fetch for
+# that date failed (see MIN_DAILY_PRICE_COVERAGE above), nothing ever went
+# back to re-check it, so a single bad day became a permanent hole even after
+# the very next run succeeded. Re-checking a short trailing window every time
+# means a gap from a failed run closes itself on the next good one — covers a
+# holiday weekend plus a couple of extra days of margin, not so wide it
+# meaningfully changes the per-ticker request cost.
+RECENT_WINDOW_DAYS = 7
+
 # Breadth internals thresholds
 PCT_MOVE_LOOKBACK_DAYS = 5
 PCT_MOVE_THRESHOLDS = [20, 30]  # "% up/down 20%+ / 30%+ in the last 5 days"
@@ -122,6 +133,19 @@ COUNTRIES = {
             "sp500": "S&P 500",
             "russell2000": "Russell 2000",
         },
+        # Which indices show volume, and where that volume actually comes
+        # from. An index has no volume of its own to trade — FMP mirrors one
+        # composite figure onto both ^GSPC and ^RUT (identical, day for day),
+        # so "Russell 2000 volume" from FMP is really S&P 500 volume wearing
+        # a different label. IWM (the Russell 2000 ETF) has its own real,
+        # distinct volume, so it stands in here instead. NASDAQ and S&P 500
+        # use their own ticker's volume, which FMP does report distinctly for
+        # each.
+        "index_volume": {
+            "nasdaq": "^IXIC",
+            "sp500": "^GSPC",
+            "russell2000": "IWM",
+        },
         # The index whose trading days define the calendar every other series
         # is aligned to.
         "calendar_index": "sp500",
@@ -167,6 +191,15 @@ COUNTRIES = {
             "nifty500": "Nifty 500",
             "niftymidcap150": "Nifty Midcap 150",
             "niftysmallcap250": "Nifty Smallcap 250",
+        },
+        # Only Nifty 500 gets a volume panel. Yahoo's volume for Sensex is a
+        # few thousand shares a day — not real traded volume, useless at this
+        # scale — and Nifty Midcap150/Smallcap250 report exactly 0 every
+        # session, meaning Yahoo simply has no volume data for those two
+        # tickers at all. Nifty 500's own figure (tens of millions) is the
+        # only one of the four that looks like real data.
+        "index_volume": {
+            "nifty500": "^CRSLDX",
         },
         "calendar_index": "nifty500",
         "rs_benchmark": "^CRSLDX",

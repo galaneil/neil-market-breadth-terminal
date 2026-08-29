@@ -94,6 +94,7 @@ HUB_PANELS = [
     {"label": "Stock Lookup", "path": "panel-stock.html"},
     {"label": "TMLE Leaders", "path": "panel-tmle-leaders.html"},
     {"label": "TMLE Emerging", "path": "panel-tmle-emerging.html"},
+    {"label": "System Architecture", "path": "panel-architecture.html"},
 ]
 
 OUTPUT_DIR = os.path.join(os.path.dirname(config.ROOT_DIR), "Portfolio Local")
@@ -137,6 +138,43 @@ TICKER_SYNC_HOURS = 20          # how old ticker history must be to redo the
 _RESERVED_WINDOWS_NAME = re.compile(
     r"^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\.[^.]*)?$", re.IGNORECASE)
 _TICKER_PREFIXES = {"tickers/": "tickers", "in/tickers/": os.path.join("in", "tickers")}
+
+
+def _country_data_status(code):
+    """{asOf, updatedAt, stale} for one country, read straight off the same
+    file the pages themselves render from — no separate tracking to fall out
+    of sync with reality. asOf is the latest date actually IN the data (what
+    session it covers); updatedAt is when that file last changed on disk
+    (when the refresh that produced it actually ran). staleDays counts
+    calendar days between asOf and today, so the sidebar can flag "this is
+    old" without needing to know either market's holiday calendar — a
+    generous cutoff (see DATA_STALE_DAYS) absorbs ordinary weekends."""
+    path = os.path.join(config.data_dir(code), "environment.jsonl")
+    if not os.path.exists(path):
+        return {"asOf": None, "updatedAt": None, "staleDays": None}
+    as_of = None
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            if line.strip():
+                as_of = json.loads(line).get("date")
+    updated_at = datetime.fromtimestamp(os.path.getmtime(path), tz=timezone.utc)
+    stale_days = None
+    if as_of:
+        as_of_date = datetime.strptime(as_of, "%Y-%m-%d").date()
+        stale_days = (datetime.now(timezone.utc).date() - as_of_date).days
+    return {
+        "asOf": as_of,
+        "updatedAt": updated_at.strftime("%Y-%m-%d %H:%M UTC"),
+        "staleDays": stale_days,
+    }
+
+
+# A weekend alone puts asOf 2-3 calendar days behind "today" with nothing
+# wrong at all (Friday's close, checked Monday morning before that night's
+# refresh, is 3 days old and completely correct). Beyond this, something
+# really is behind — the nightly Action failed, or this checkout hasn't
+# synced — rather than just "it's the weekend."
+DATA_STALE_DAYS = 4
 
 
 def sync_from_origin(log=print):
@@ -626,6 +664,11 @@ class Handler(BaseHTTPRequestHandler):
             return
         if route.path == "/api/sync/status":
             self._send(200, json.dumps(_load_sync_state()), "application/json")
+            return
+        if route.path == "/api/data-status":
+            self._send(200, json.dumps({
+                code: _country_data_status(code) for code in config.COUNTRIES
+            }), "application/json")
             return
         if route.path == "/api/brokers":
             self._send(200, json.dumps(available()), "application/json")
@@ -1422,7 +1465,18 @@ HUB_PAGE = r"""<!doctype html>
   .sub-dot { width:4px; height:4px; border-radius:50%; background:currentColor;
     opacity:.6; flex:none; }
 
-  #sidebar-foot { margin-top:auto; padding:12px 16px; font-size:11px; color:var(--dim);
+  #data-freshness { margin-top:auto; padding:12px 16px 0; }
+  #data-freshness .group-label { padding:0 0 6px; }
+  .freshness-row { display:flex; align-items:baseline; gap:7px; font-size:12px;
+    padding:3px 0; }
+  .freshness-dot { width:7px; height:7px; border-radius:50%; flex:none; }
+  .freshness-dot.ok { background:var(--up); }
+  .freshness-dot.stale { background:var(--warn); }
+  .freshness-country { font-weight:600; min-width:26px; }
+  .freshness-detail { color:var(--dim); }
+  #freshness-note { font-size:11px; padding:4px 0 2px; line-height:1.4; }
+
+  #sidebar-foot { padding:12px 16px; font-size:11px; color:var(--dim);
     border-top:1px solid var(--line); }
   #sidebar-foot a { color:var(--accent); text-decoration:none; }
 
@@ -1469,6 +1523,11 @@ HUB_PAGE = r"""<!doctype html>
   <nav id="panel-nav"></nav>
   <div class="group-label">Portfolio</div>
   <nav id="portfolio-nav"></nav>
+  <div id="data-freshness">
+    <div class="group-label">Data freshness</div>
+    <div id="freshness-rows">Loading&hellip;</div>
+    <div id="freshness-note" class="dim"></div>
+  </div>
   <div id="sidebar-foot">
     Breadth data also published at
     <a href="https://galaneil.github.io/neil-market-breadth-terminal/" target="_blank" rel="noopener">GitHub Pages</a>
@@ -1522,6 +1581,8 @@ const ICONS = {
   "TMLE Leaders": icon('<circle cx="12" cy="8" r="6"/>'
     + '<polyline points="8.5 13.5 7 22 12 19 17 22 15.5 13.5"/>'),
   "TMLE Emerging": icon('<line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/>'),
+  "System Architecture": icon('<circle cx="12" cy="12" r="3"/>'
+    + '<path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/>'),
   "Live Portfolio": icon('<rect x="2" y="7" width="20" height="14" rx="2"/>'
     + '<path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>'),
 };
@@ -1742,6 +1803,43 @@ document.getElementById("reload-btn").onclick = () => {
         '. Click "Sync data now" once the conflict is resolved.';
     }
   } catch (err) { /* status endpoint unreachable — say nothing, not worth alarming over */ }
+})();
+
+// "Why does this panel say a different date than that one" was the single
+// most repeated complaint about this hub — the honest answer was always
+// buried in a data file nobody but Claude ever opened. This reads the exact
+// same environment.jsonl each published page renders from and puts the
+// answer where the question actually gets asked: right in the sidebar,
+// every time the hub is open, not just when something is visibly wrong.
+(async () => {
+  const rowsEl = document.getElementById("freshness-rows");
+  const noteEl = document.getElementById("freshness-note");
+  if (!rowsEl) return;
+  try {
+    const status = await (await fetch("/api/data-status")).json();
+    const labels = { US: "US", IN: "IN" };
+    let anyStale = false;
+    rowsEl.innerHTML = Object.keys(status).map((code) => {
+      const s = status[code];
+      if (!s.asOf) {
+        return '<div class="freshness-row"><span class="freshness-dot stale"></span>' +
+          '<span class="freshness-country">' + (labels[code] || code) + '</span>' +
+          '<span class="freshness-detail">no data yet</span></div>';
+      }
+      const stale = s.staleDays !== null && s.staleDays > 4;
+      if (stale) anyStale = true;
+      return '<div class="freshness-row">' +
+        '<span class="freshness-dot ' + (stale ? "stale" : "ok") + '"></span>' +
+        '<span class="freshness-country">' + (labels[code] || code) + '</span>' +
+        '<span class="freshness-detail">as of ' + s.asOf +
+          (stale ? " (" + s.staleDays + "d old)" : "") + '</span></div>';
+    }).join("");
+    noteEl.textContent = anyStale
+      ? "One market looks behind schedule — try “Sync data now” above, or check the GitHub Action run history."
+      : "US refreshes after its own close (~7pm ET); India refreshes separately after its own close (~5pm IST). A date a session or two behind is normal right after a weekend.";
+  } catch (err) {
+    rowsEl.textContent = "Could not check.";
+  }
 })();
 
 document.getElementById("sync-now").onclick = async (e) => {
