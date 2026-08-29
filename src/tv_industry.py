@@ -42,6 +42,13 @@ def fetch_industry_classification(country_cfg):
         Query()
         .set_markets(country_cfg["tv_market"])
         .select("name", "sector", "industry", "market_cap_basic",
+                # TradingView's own logo slug — free in this same query, and
+                # the one source that actually covers India: FMP's logo images
+                # only exist for US-listed tickers, so NSE positions had no
+                # real logo at all before this, only a colour-initials
+                # fallback. https://s3-symbol-logo.tradingview.com/{logoid}.svg
+                # resolves for both markets off the same field.
+                "logoid",
                 # Fundamentals for TMLE's F2, free in the query already being
                 # made. FMP would cost one call per ticker; this costs nothing.
                 "total_revenue_ttm", "total_revenue_yoy_growth_ttm",

@@ -271,8 +271,11 @@ def run_country(code, client=None):
 
     store.write_index_membership(code, tv_industry.index_membership(industry_df, code))
 
+    # A third element, appended rather than inserted, so every existing
+    # tags[0]/tags[1] read (sector/industry) anywhere in the codebase keeps
+    # working untouched — logoid is additive, not a format change.
     store.write_classification(code, {
-        row["name"]: [row["sector"], row["industry"]]
+        row["name"]: [row["sector"], row["industry"], row.get("logoid")]
         for _, row in industry_df.iterrows()
         if row.get("sector") and row.get("industry")
     })

@@ -73,6 +73,7 @@ def _tag_sector(positions, country):
         hit = tags.get(p["symbol"])
         p["sector"] = hit[0] if hit else None
         p["industry"] = hit[1] if hit and len(hit) > 1 else None
+        p["logoid"] = hit[2] if hit and len(hit) > 2 else None
     return positions
 
 

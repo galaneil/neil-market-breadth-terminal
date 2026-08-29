@@ -88,7 +88,12 @@ HUB_PANELS = [
         {"label": "New Highs / Lows", "path": "panel-breadth-new-hilo.html",
          "note": "How many stocks made a fresh 52-week high vs low each session."},
     ]},
-    {"label": "Hi/Lo Counts & Screener", "path": "panel-breadth-hilo-counts.html"},
+    # "Hi/Lo Counts & Screener" used to sit here too — its counts-over-time
+    # card is redundant now: Money Flows shows the sector/industry breakdown
+    # of the same counts, and Screener already covers the ticker-level view.
+    # The page itself (panel-breadth-hilo-counts.html) is left rendering and
+    # reachable by direct URL, since it may still be embedded in Notion —
+    # this only removes it from the hub's own navigation.
     {"label": "Screener", "path": "panel-screener.html"},
     {"label": "Market Replay", "path": "panel-replay.html"},
     {"label": "Stock Lookup", "path": "panel-stock.html"},
@@ -1110,20 +1115,35 @@ function logoColor(sym) {
 // rest onto the page as visible text. wireLogos() below attaches the actual
 // fallback behaviour after the table is in the DOM, via the DOM API, where
 // there is no string to escape into in the first place.
+// Real logos, tried in order, before ever falling back to initials:
+//  1. TradingView's own logo slug (classification.json's 3rd tuple element,
+//     tagged onto the position server-side) — the only source that actually
+//     covers India; FMP has no logo image for any NSE-listed ticker.
+//  2. FMP's image, for IBKR (US) positions only, in case a ticker's TV
+//     logoid is missing (delisted from that day's classified universe, etc.)
+//     but FMP still recognises the symbol.
 function logoCell(p) {
   const initials = (p.symbol || "??").replace(/[^A-Z]/gi, "").slice(0, 2).toUpperCase();
-  if (data.broker === "ibkr") {
-    return '<img class="pos-logo" data-symbol="' + p.symbol + '" data-initials="' + initials
-      + '" alt="" src="https://images.financialmodelingprep.com/symbol/'
-      + encodeURIComponent(p.symbol) + '.png">';
+  const candidates = [];
+  if (p.logoid) candidates.push("https://s3-symbol-logo.tradingview.com/" + encodeURIComponent(p.logoid) + ".svg");
+  if (data.broker === "ibkr") candidates.push("https://images.financialmodelingprep.com/symbol/" + encodeURIComponent(p.symbol) + ".png");
+  if (!candidates.length) {
+    return '<div class="pos-logo-fallback" style="background:' + logoColor(p.symbol || "") + '">' + initials + '</div>';
   }
-  return '<div class="pos-logo-fallback" style="background:' + logoColor(p.symbol || "") + '">'
-    + initials + '</div>';
+  return '<img class="pos-logo" data-symbol="' + p.symbol + '" data-initials="' + initials
+    + '" data-candidates="' + candidates.join("|") + '" data-next="1" alt="" src="' + candidates[0] + '">';
 }
 
 function wireLogos() {
   document.querySelectorAll("img.pos-logo").forEach(img => {
     img.onerror = () => {
+      const candidates = (img.dataset.candidates || "").split("|").filter(Boolean);
+      const next = parseInt(img.dataset.next || "1", 10);
+      if (next < candidates.length) {
+        img.dataset.next = String(next + 1);
+        img.src = candidates[next];
+        return;
+      }
       const fallback = document.createElement("div");
       fallback.className = "pos-logo-fallback";
       fallback.style.background = logoColor(img.dataset.symbol || "");
