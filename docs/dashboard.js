@@ -125,6 +125,24 @@
     if (v === null || v === undefined || isNaN(v)) return "";
     return v > 0 ? "up" : (v < 0 ? "down" : "");
   }
+  // Exponential moving average over a plain value array, `null`s carried
+  // through unchanged (a gap doesn't reset the average, it just has nothing
+  // new to blend in that day). Computed over the WHOLE series handed to it,
+  // not just whatever tail ends up on screen — an EMA needs run-up room
+  // before it means anything, so callers pass the full history and slice
+  // the result afterward, never the other way around.
+  function emaSeries(values, period) {
+    const k = 2 / (period + 1);
+    const out = new Array(values.length).fill(null);
+    let prev = null;
+    for (let i = 0; i < values.length; i++) {
+      const v = values[i];
+      if (v === null || v === undefined) { out[i] = prev; continue; }
+      prev = prev === null ? v : v * k + prev * (1 - k);
+      out[i] = prev;
+    }
+    return out;
+  }
   function average(items, field) {
     const vals = items.map(function (r) { return r[field]; })
       .filter(function (v) { return v !== null && v !== undefined && !isNaN(v); });
@@ -986,11 +1004,20 @@
           const chartEl = document.getElementById("pin-chart");
           if (pinChart) { pinChart.remove(); pinChart = null; }
           const th = lwTheme();
+          // India's ticker files carry a "volume" key with every entry null —
+          // FMP doesn't give reliable NSE volume through this pipeline — so
+          // presence of the key isn't enough; only reserve room for a volume
+          // pane (and draw one) when at least one real number is in there.
+          const hasVolume = !!(p.volume && p.volume.some(function (v) { return v != null; }));
           pinChart = LightweightCharts.createChart(chartEl, {
             height: chartEl.clientHeight || 120,
             layout: { background: { type: "solid", color: th.bg }, textColor: th.text, fontSize: 10 },
             grid: { vertLines: { color: th.grid }, horzLines: { color: th.grid } },
-            rightPriceScale: { borderColor: th.border },
+            // The price scale leaves its bottom ~26% empty on purpose when
+            // there's a volume pane to put there — its own price scale
+            // ("vol") lives in that gap, so bars and volume never overlap.
+            rightPriceScale: { borderColor: th.border,
+              scaleMargins: hasVolume ? { top: 0.08, bottom: 0.26 } : { top: 0.08, bottom: 0.08 } },
             timeScale: { borderColor: th.border, rightOffset: 2 },
           });
           const tail = 60;
@@ -1003,6 +1030,75 @@
             const prevClose = abs > 0 ? p.close[abs - 1] : p.close[abs];
             return { time: dt, open: prevClose, high: p.high[abs], low: p.low[abs], close: p.close[abs] };
           }));
+          // Shift-drag to measure a move, exactly like every other chart in
+          // the app — the pin is still a real chart, not a stripped-down one.
+          enableMeasure(pinChart, bars, chartEl);
+
+          // Support/resistance at a glance: 10/20/50-session EMAs, each
+          // computed over the FULL price history (so they're already warmed
+          // up by the time the visible tail starts) and sliced down afterward.
+          // Same three colours as every other EMA overlay in this app (see
+          // EMA_COLORS) — Neil's own TradingView layout uses these, so the
+          // two read the same at a glance.
+          const toTail = function (full) {
+            return p.dates.slice(start, n + 1).map(function (dt, i) {
+              return { time: dt, value: full[start + i] };
+            }).filter(function (pt) { return pt.value !== null && pt.value !== undefined; });
+          };
+          [[10, EMA_COLORS.ema10], [20, EMA_COLORS.ema20], [50, EMA_COLORS.ema50]].forEach(function (spec) {
+            const line = pinChart.addLineSeries({
+              color: spec[1], lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+            });
+            line.setData(toTail(emaSeries(p.close, spec[0])));
+          });
+
+          // Volume, squeezed into that reserved bottom strip via its own
+          // price scale ("vol") rather than the main one — plus its own
+          // 30-session EMA, the same "is participation actually building"
+          // read a volume-MA overlay gives on any real charting platform.
+          let avgVol30 = null;
+          if (hasVolume) {
+            const volSeries = pinChart.addHistogramSeries({
+              priceFormat: { type: "volume" }, priceScaleId: "vol",
+              priceLineVisible: false, lastValueVisible: false,
+            });
+            pinChart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.76, bottom: 0 } });
+            volSeries.setData(p.dates.slice(start, n + 1).map(function (dt, i) {
+              const abs = start + i;
+              const up = abs > 0 ? p.close[abs] >= p.close[abs - 1] : true;
+              return { time: dt, value: p.volume[abs] || 0, color: up ? th.up : th.down };
+            }));
+            const volEma = pinChart.addLineSeries({
+              color: th.text, lineWidth: 1, priceScaleId: "vol",
+              priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false,
+            });
+            volEma.setData(toTail(emaSeries(p.volume, 30)));
+
+            // Average turnover = price times a plain trailing 30-session
+            // average volume — "is this actually liquid", not a directional
+            // signal, so a simple average reads truer than the EMA the chart
+            // overlay uses (which leans on the most recent days on purpose).
+            const trail = p.volume.slice(Math.max(0, n - 29), n + 1).filter(function (v) { return v != null; });
+            if (trail.length) avgVol30 = trail.reduce(function (a, b) { return a + b; }, 0) / trail.length;
+          }
+
+          // ADR% (average daily range) comes straight from hilo_quotes.json,
+          // the same file the Screener and Sector Lookup leaderboards already
+          // read — no separate fetch, it is already on this page as DATA.quotes.
+          const quote = (DATA.quotes || {})[ticker];
+          const adr = quote && quote[2] != null ? quote[2] : null;
+          const turnover = (avgVol30 != null) ? avgVol30 * p.close[n] : null;
+          function fmtTurnover(v) {
+            if (v == null) return "—";
+            if (v >= 1e9) return "$" + fmtNum(v / 1e9, 2) + "B";
+            return "$" + fmtNum(v / 1e6, 1) + "M";
+          }
+          document.getElementById("pin-stats").innerHTML =
+            '<div><div class="stock-pin-stat-label">ADR</div><div class="stock-pin-stat-val">'
+              + (adr == null ? "—" : fmtNum(adr, 1) + "%") + '</div></div>' +
+            '<div><div class="stock-pin-stat-label">Avg turnover</div><div class="stock-pin-stat-val">'
+              + fmtTurnover(turnover) + '</div></div>';
+
           pinChart.timeScale().fitContent();
           requestAnimationFrame(function () {
             pinChart.applyOptions({ width: chartEl.clientWidth, height: chartEl.clientHeight || 120 });
@@ -1027,7 +1123,10 @@
               gain: (d.gain || [])[n], episode_days: (d.episode_days || [])[n],
               pct_below_10w: (d.pct_below_10w || [])[n],
             }).replace(/&middot;/g, " · ");
-            document.getElementById("pin-stats").innerHTML =
+            // Appended, not replaced — ADR and average turnover from the
+            // price fetch above already populated this row, and a scored
+            // US name gets these two IN ADDITION rather than instead.
+            document.getElementById("pin-stats").innerHTML +=
               '<div><div class="stock-pin-stat-label">Score</div><div class="stock-pin-stat-val">' + fmtNum(score, 1) + '</div></div>' +
               '<div><div class="stock-pin-stat-label">Off high</div><div class="stock-pin-stat-val" style="color:var(--down)">' + (dd === null ? "—" : fmtNum(dd, 0) + "%") + '</div></div>';
           })
@@ -1201,7 +1300,35 @@
         '<button class="tf-btn' + (state.kind === "industry" ? " active" : "") + '" data-k="industry">Industry</button>';
       document.querySelectorAll("#sl-kind button").forEach(function (b) {
         b.addEventListener("click", function () {
-          state.kind = b.dataset.k;
+          const newKind = b.dataset.k;
+          if (newKind !== state.kind) {
+            // Switching the toggle should hold context, not reset it — an
+            // industry's own name obviously isn't in the sector list (or vice
+            // versa), so falling back to "just take list[0]" landed on
+            // whatever sorted alphabetically first (Commercial Services,
+            // Advertising and Marketing Services...) with zero relation to
+            // what was on screen. Resolve the actual linked entity instead:
+            // industry -> its real parent sector, sector -> whichever of its
+            // member industries currently ranks best.
+            if (newKind === "sector") {
+              const parent = industryParent[state.name];
+              if (parent) state.name = parent;
+            } else {
+              const currentSector = state.name;
+              const members = Object.keys(industryMembers)
+                .filter(function (i) { return industryParent[i] === currentSector; });
+              if (members.length) {
+                let best = members[0], bestRank = Infinity;
+                members.forEach(function (i) {
+                  const row = rowFor("industry", state.dateIdx, i);
+                  const rank = row ? row.rank : Infinity;
+                  if (rank < bestRank) { bestRank = rank; best = i; }
+                });
+                state.name = best;
+              }
+            }
+          }
+          state.kind = newKind;
           const list = entityList(state.kind);
           if (list.indexOf(state.name) === -1) state.name = list[0];
           draw();

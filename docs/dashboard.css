@@ -493,7 +493,7 @@ tbody tr.selected { background: var(--grid-line); outline: 1px solid var(--accen
 .stock-pin-stage { display: inline-block; margin-left: 8px; vertical-align: middle; }
 .stock-pin-verdict { font-size: 12px; color: var(--text-dim); margin-top: 6px; line-height: 1.4; }
 .stock-pin-verdict b { color: var(--text); }
-.stock-pin-stats { display: flex; gap: 14px; margin-top: 10px; }
+.stock-pin-stats { display: flex; gap: 14px; margin-top: 10px; flex-wrap: wrap; }
 .stock-pin-stat-label { font-size: 9.5px; text-transform: uppercase; letter-spacing: .04em; color: var(--text-dim); }
 .stock-pin-stat-val { font-family: "IBM Plex Mono", monospace; font-size: 13px; font-weight: 600; }
 .stock-pin-foot { padding: 8px 12px; border-top: 1px solid var(--border); font-size: 11.5px; }
