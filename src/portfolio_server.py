@@ -80,6 +80,9 @@ HUB_PANELS = [
         {"label": "Industries", "path": "panel-industries.html",
          "note": "TradingView's finer-grained industry groups — more names, "
                  "narrower categories."},
+        {"label": "Lookup", "path": "panel-sector-lookup.html",
+         "note": "Search one sector or industry — its own rank history and "
+                 "the member stocks actually driving it."},
     ]},
     {"label": "Money Flows", "path": "panel-groups.html"},
     # Used to be a group of two raw-counts pages with no read on what they

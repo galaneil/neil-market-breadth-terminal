@@ -940,6 +940,212 @@
   // nowhere near a one-year high, but it will print 13-week highs immediately.
   const HILO_WINDOWS = [["w13", "13-week"], ["w26", "26-week"], ["w52", "52-week"]];
 
+  // ---------- Sector & Industry Lookup ----------
+  // What Stock Lookup already does for one ticker, done for a sector or
+  // industry instead: search, step through sessions, its own rank history —
+  // plus which member stocks are actually driving it (highest market cap,
+  // top gainers, top decliners), the same idea Money Flows already applies
+  // to a whole index, scoped down to just this one group.
+  function renderSectorLookup() {
+    const nameEl = document.getElementById("sl-name");
+    if (!nameEl) return;
+    const sectorRanks = DATA.sectorRanks || [];
+    const industryRanks = DATA.industryRanks || [];
+    const cls = DATA.classification || {};
+    const quotes = DATA.quotes || {};
+    if (!sectorRanks.length && !industryRanks.length) {
+      nameEl.textContent = "No data yet.";
+      return;
+    }
+
+    // industry -> sector, derived once from classification rather than
+    // stored separately — every classified ticker already carries both.
+    const industryParent = {};
+    const sectorMembers = {}, industryMembers = {};
+    Object.keys(cls).forEach(function (t) {
+      const tags = cls[t];
+      if (!tags || !tags[0]) return;
+      const sector = tags[0], industry = tags[1];
+      (sectorMembers[sector] || (sectorMembers[sector] = [])).push(t);
+      if (industry) {
+        (industryMembers[industry] || (industryMembers[industry] = [])).push(t);
+        if (!industryParent[industry]) industryParent[industry] = sector;
+      }
+    });
+
+    const dates = (sectorRanks.length ? sectorRanks : industryRanks).map(function (r) { return r.date; });
+    const state = {
+      kind: "sector",
+      name: sectorRanks.length ? sectorRanks[sectorRanks.length - 1].sectors[0].sector : Object.keys(industryMembers)[0],
+      dateIdx: dates.length - 1,
+    };
+
+    function seriesFor(kind) { return kind === "sector" ? sectorRanks : industryRanks; }
+    function itemsField(kind) { return kind === "sector" ? "sectors" : "industries"; }
+    function nameField(kind) { return kind === "sector" ? "sector" : "industry"; }
+    function entityList(kind) {
+      return kind === "sector" ? Object.keys(sectorMembers).sort() : Object.keys(industryMembers).sort();
+    }
+    function rowFor(kind, dateIdx, name) {
+      const day = seriesFor(kind)[dateIdx];
+      if (!day) return null;
+      return (day[itemsField(kind)] || []).find(function (r) { return r[nameField(kind)] === name; }) || null;
+    }
+    function rankSeries(kind, name) {
+      return seriesFor(kind).map(function (day) {
+        const hit = (day[itemsField(kind)] || []).find(function (r) { return r[nameField(kind)] === name; });
+        return hit ? hit.rank : null;
+      });
+    }
+    function membersOf(kind, name) {
+      return (kind === "sector" ? sectorMembers[name] : industryMembers[name]) || [];
+    }
+
+    let chart = null;
+
+    function draw() {
+      document.getElementById("sl-kind").innerHTML =
+        '<button class="tf-btn' + (state.kind === "sector" ? " active" : "") + '" data-k="sector">Sector</button>' +
+        '<button class="tf-btn' + (state.kind === "industry" ? " active" : "") + '" data-k="industry">Industry</button>';
+      document.querySelectorAll("#sl-kind button").forEach(function (b) {
+        b.addEventListener("click", function () {
+          state.kind = b.dataset.k;
+          const list = entityList(state.kind);
+          if (list.indexOf(state.name) === -1) state.name = list[0];
+          draw();
+        });
+      });
+
+      const list = entityList(state.kind);
+      if (list.indexOf(state.name) === -1) state.name = list[0];
+
+      const dateInput = document.getElementById("sl-date");
+      dateInput.min = dates[0]; dateInput.max = dates[dates.length - 1];
+      dateInput.value = dates[state.dateIdx];
+
+      const row = rowFor(state.kind, state.dateIdx, state.name);
+      const prevRow = rowFor(state.kind, Math.max(0, state.dateIdx - 1), state.name);
+
+      document.getElementById("sl-name").textContent = state.name;
+      document.getElementById("sl-parent").innerHTML = state.kind === "industry"
+        ? (industryParent[state.name] ? "within " + industryParent[state.name] : "")
+        : (row && row.n_members ? row.n_members + " members" : "");
+      document.getElementById("sl-rank").textContent = row ? "#" + row.rank : "—";
+      document.getElementById("sl-rank-sub").textContent = (row && prevRow)
+        ? ((row.rank <= prevRow.rank ? "improved" : "slipped") + " from #" + prevRow.rank) : "";
+
+      function pctItem(label, v) {
+        return '<div class="tmle-stat"><div class="tmle-stat-label">' + label + '</div>' +
+          '<div class="tmle-stat-num ' + (v >= 0 ? "up" : "down") + '">' + (v >= 0 ? "+" : "") + fmtNum(v, 1) + "%</div></div>";
+      }
+      document.getElementById("sl-pcts").innerHTML = row
+        ? pctItem("1D", row.chg_1d) + pctItem("5D", row.chg_5d) + pctItem("20D", row.chg_20d)
+        : "";
+
+      // Rank chart, coloured segment by segment — green while the rank is
+      // improving (the number getting lower), red while it's slipping. Chart.js
+      // segment styling picks the colour per line segment from its own
+      // endpoints, so this needs no manual polyline splitting.
+      const series = rankSeries(state.kind, state.name);
+      const startIdx = Math.max(0, state.dateIdx - 59);
+      const chartDates = dates.slice(startIdx, state.dateIdx + 1);
+      const chartVals = series.slice(startIdx, state.dateIdx + 1);
+      const th = themeColors();
+      const canvas = document.getElementById("sl-rank-canvas");
+      if (chart) chart.destroy();
+      chart = new Chart(canvas, {
+        type: "line",
+        data: { labels: chartDates, datasets: [{
+          data: chartVals, borderWidth: 1.8, pointRadius: dotRadius(chartVals.length), tension: 0.15,
+          segment: {
+            borderColor: function (ctx) {
+              return (ctx.p1.parsed.y <= ctx.p0.parsed.y) ? th.up : th.down;
+            },
+          },
+        }] },
+        options: {
+          responsive: true, maintainAspectRatio: false, animation: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { ticks: { color: th.text, maxTicksLimit: 6, font: { size: 10 } }, grid: { color: th.grid } },
+            y: { reverse: true, ticks: { color: th.text, font: { size: 10 } }, grid: { color: th.grid } },
+          },
+        },
+      });
+
+      // Three leaderboards from the actual member stocks — market cap and
+      // today's quote both already published for the screener, reused here
+      // rather than fetched again.
+      const members = membersOf(state.kind, state.name);
+      const withMetrics = members.map(function (t) {
+        const tags = cls[t] || [];
+        const q = quotes[t] || [];
+        return { sym: t, cap: tags[3] || 0, chg: q[1] };
+      }).filter(function (m) { return m.chg !== undefined && m.chg !== null; });
+
+      function group(title, rows, cssCls, valueFn) {
+        if (!rows.length) return "";
+        return '<div class="mf-level"><div class="mf-level-label">' + title + '</div><div class="mf-stock-chips">' +
+          rows.map(function (r) {
+            return '<span class="mf-stock-chip ' + cssCls + '" data-ticker="' + r.sym + '" title="' + valueFn(r) + '">' + r.sym + '</span>';
+          }).join("") + '</div></div>';
+      }
+      const byCap = withMetrics.slice().sort(function (a, b) { return b.cap - a.cap; }).slice(0, 10);
+      const byGain = withMetrics.slice().sort(function (a, b) { return b.chg - a.chg; }).slice(0, 10);
+      const byLoss = withMetrics.slice().sort(function (a, b) { return a.chg - b.chg; }).slice(0, 10);
+      document.getElementById("sl-leader-groups").innerHTML =
+        group("Highest market cap", byCap, "cap", function (r) { return "$" + (r.cap / 1e9).toFixed(1) + "B"; }) +
+        group("Top gainers", byGain, "up", function (r) { return (r.chg >= 0 ? "+" : "") + fmtNum(r.chg, 1) + "%"; }) +
+        group("Top decliners", byLoss, "down", function (r) { return (r.chg >= 0 ? "+" : "") + fmtNum(r.chg, 1) + "%"; });
+      document.querySelectorAll("#sl-leader-groups .mf-stock-chip").forEach(function (chip) {
+        chip.addEventListener("click", function () { Sync.publish({ ticker: chip.dataset.ticker }); });
+      });
+    }
+
+    // Live-filtering dropdown across both sectors and industries at once.
+    const searchInput = document.getElementById("sl-search");
+    const dropdown = document.getElementById("sl-dropdown");
+    const allEntities = entityList("sector").map(function (n) { return { name: n, kind: "sector" }; })
+      .concat(entityList("industry").map(function (n) { return { name: n, kind: "industry" }; }));
+    function showDropdown(query) {
+      const q = query.trim().toLowerCase();
+      const matches = q ? allEntities.filter(function (e) { return e.name.toLowerCase().indexOf(q) !== -1; }) : allEntities;
+      if (!matches.length) { dropdown.classList.remove("open"); return; }
+      dropdown.innerHTML = matches.slice(0, 20).map(function (e) {
+        return '<div class="search-dropdown-row" data-name="' + e.name + '" data-kind="' + e.kind + '">' + e.name +
+          '<span class="kind-tag">' + e.kind + "</span></div>";
+      }).join("");
+      dropdown.querySelectorAll(".search-dropdown-row").forEach(function (row) {
+        row.addEventListener("click", function () {
+          state.kind = row.dataset.kind;
+          state.name = row.dataset.name;
+          searchInput.value = "";
+          dropdown.classList.remove("open");
+          draw();
+        });
+      });
+      dropdown.classList.add("open");
+    }
+    searchInput.addEventListener("focus", function () { showDropdown(searchInput.value); });
+    searchInput.addEventListener("input", function () { showDropdown(searchInput.value); });
+    document.addEventListener("click", function (e) {
+      if (!e.target.closest(".search-wrap")) dropdown.classList.remove("open");
+    });
+
+    document.getElementById("sl-date").addEventListener("change", function (e) {
+      const idx = dates.indexOf(e.target.value);
+      if (idx !== -1) { state.dateIdx = idx; draw(); }
+    });
+    document.getElementById("sl-prev").addEventListener("click", function () { state.dateIdx = Math.max(0, state.dateIdx - 1); draw(); });
+    document.getElementById("sl-next").addEventListener("click", function () { state.dateIdx = Math.min(dates.length - 1, state.dateIdx + 1); draw(); });
+    document.getElementById("sl-latest").addEventListener("click", function () { state.dateIdx = dates.length - 1; draw(); });
+
+    // A ticker clicked elsewhere (Money Flows, Screener) doesn't name a
+    // sector/industry directly, so this panel has nothing useful to jump to
+    // on that signal — it only ever changes its own controls.
+    draw();
+  }
+
   // ---------- Breadth Internals: a regime read, not just two raw counts ----------
   // Same badge/verdict language Market Environment already uses (bullish/
   // bearish/choppy), computed over a window you pick client-side from the
@@ -1189,6 +1395,7 @@
           return '<span class="mf-stock-chip ' + cssClass + '" data-ticker="' + t + '">' + t + '</span>';
         }).join("");
 
+        const trendId = "mf-trend-" + win;
         blocksHtml.push(
           '<div class="mf-block">' +
             '<div class="mf-block-head"><b>' + label + '</b><span>' + tree.total + ' ' +
@@ -1196,7 +1403,11 @@
             '<div class="mf-verdict">Led by <b>' + sector.name + '</b> (' + sector.count + '), concentrated in <b>' + industry.name + '</b>.</div>' +
             '<div class="mf-block-body">' +
               '<div class="mf-level"><div class="mf-level-label">Sector</div><div class="mf-hbar-list">' + sectorRows + '</div></div>' +
-              '<div class="mf-level"><div class="mf-level-label">Industry, within <b>' + sector.name + '</b></div><div class="mf-hbar-list">' + industryRows + '</div></div>' +
+              '<div class="mf-level"><div class="mf-level-label">Industry, within <b>' + sector.name + '</b>' +
+                '<button class="mf-trend-btn" data-trend-toggle="' + trendId + '" data-industry="' + industry.name.replace(/"/g, "&quot;") + '">trend &#9662;</button></div>' +
+                '<div class="mf-hbar-list">' + industryRows + '</div>' +
+                '<div class="mf-trend-panel" id="' + trendId + '"></div>' +
+              '</div>' +
               '<div class="mf-level"><div class="mf-level-label">Stocks, within <b>' + industry.name + '</b></div><div class="mf-stock-chips">' + chips + '</div></div>' +
             '</div>' +
           '</div>'
@@ -1225,13 +1436,194 @@
           draw();
           flashLogRow(win);
         });
+        // A single click re-drills this window; a double click means "not
+        // this window's slice — the industry itself" and opens its full
+        // Lookup, the same asset_prefix every other cross-panel link uses.
+        row.addEventListener("dblclick", function () {
+          window.location.href = "panel-sector-lookup.html";
+        });
       });
-      // A stock chip sends that ticker to every other panel on the page, the
-      // same Sync bus every other clickable row already publishes to.
+      // A stock chip opens the pinned preview AND sends the ticker to every
+      // other panel on the page, the same Sync bus every other clickable
+      // row already publishes to — the pin doesn't replace that, it adds to it.
       host.querySelectorAll(".mf-stock-chip").forEach(function (chip) {
-        chip.addEventListener("click", function () { Sync.publish({ ticker: chip.dataset.ticker }); });
+        chip.addEventListener("click", function () {
+          Sync.publish({ ticker: chip.dataset.ticker });
+          openStockPin(chip.dataset.ticker);
+        });
+      });
+      host.querySelectorAll("[data-trend-toggle]").forEach(function (btn) {
+        btn.addEventListener("click", function () { toggleIndustryTrend(btn); });
       });
     }
+
+    // Industry trend — an inline sparkline from the industry's own rank
+    // history (already published for the Industries panel), opened right
+    // where you're already looking instead of a separate page to go find.
+    function toggleIndustryTrend(btn) {
+      const panel = document.getElementById(btn.dataset.trendToggle);
+      const willOpen = !panel.classList.contains("open");
+      document.querySelectorAll(".mf-trend-panel.open").forEach(function (p) { p.classList.remove("open"); });
+      if (!willOpen) return;
+      const industryName = btn.dataset.industry;
+      const ranks = (S.industry_ranks || []).map(function (day) {
+        const hit = (day.industries || []).find(function (r) { return r.industry === industryName; });
+        return { date: day.date, rank: hit ? hit.rank : null };
+      }).filter(function (r) { return r.rank !== null; });
+      const tail = ranks.slice(-60);
+      panel.innerHTML = '<canvas id="' + panel.id + '-canvas" height="60"></canvas>' +
+        '<div class="mf-trend-caption"><span>' + industryName + ' rank, ' + tail.length + ' sessions</span>' +
+        '<a href="panel-sector-lookup.html">Open in Lookup &rarr;</a></div>';
+      const th = themeColors();
+      new Chart(document.getElementById(panel.id + "-canvas"), {
+        type: "line",
+        data: { labels: tail.map(function (r) { return r.date; }), datasets: [{
+          data: tail.map(function (r) { return r.rank; }), borderWidth: 1.6, pointRadius: 0, tension: 0.15,
+          segment: { borderColor: function (ctx) { return (ctx.p1.parsed.y <= ctx.p0.parsed.y) ? th.up : th.down; } },
+        }] },
+        options: {
+          responsive: true, maintainAspectRatio: false, animation: false,
+          plugins: { legend: { display: false } },
+          scales: {
+            x: { display: false },
+            y: { reverse: true, ticks: { color: th.text, font: { size: 9 } }, grid: { color: th.grid } },
+          },
+        },
+      });
+      panel.classList.add("open");
+    }
+
+    // Pinned stock preview — opens on top of the page instead of navigating
+    // away. Price comes from the same per-ticker files Stock Lookup already
+    // fetches; the stage/verdict section is optional (US/TMLE only) and
+    // simply doesn't appear if that fetch 404s.
+    const tickerDir = DATA.tickerDir || "tickers";
+    const tmleDir = DATA.tmleDir;
+    let pinChart = null;
+    function openStockPin(ticker) {
+      const pin = document.getElementById("stock-pin");
+      document.getElementById("pin-symbol").textContent = ticker;
+      document.getElementById("pin-name").textContent = state.index;
+      document.getElementById("pin-stage").textContent = "";
+      document.getElementById("pin-verdict").textContent = "";
+      document.getElementById("pin-stats").innerHTML = "";
+      pin.classList.add("open");
+
+      fetch(tickerDir + "/" + encodeURIComponent(ticker) + ".json")
+        .then(function (r) { if (!r.ok) throw new Error("404"); return r.json(); })
+        .then(function (p) {
+          const n = p.dates.length - 1;
+          const chg = ((p.close[n] / p.close[n - 1]) - 1) * 100;
+          document.getElementById("pin-price").textContent = fmtNum(p.close[n], 2);
+          const chgEl = document.getElementById("pin-chg");
+          chgEl.textContent = (chg >= 0 ? "+" : "") + fmtNum(chg, 2) + "%";
+          chgEl.style.color = chg >= 0 ? "var(--up)" : "var(--down)";
+
+          const chartEl = document.getElementById("pin-chart");
+          if (pinChart) { pinChart.remove(); pinChart = null; }
+          const th = lwTheme();
+          pinChart = LightweightCharts.createChart(chartEl, {
+            height: chartEl.clientHeight || 120,
+            layout: { background: { type: "solid", color: th.bg }, textColor: th.text, fontSize: 10 },
+            grid: { vertLines: { color: th.grid }, horzLines: { color: th.grid } },
+            rightPriceScale: { borderColor: th.border },
+            timeScale: { borderColor: th.border, rightOffset: 2 },
+          });
+          const tail = 60;
+          const start = Math.max(0, n - tail);
+          const bars = pinChart.addBarSeries({ upColor: th.up, downColor: th.down, openVisible: false, thinBars: false });
+          // Coloured by close vs prior close, same convention as every
+          // other chart — openVisible is false, so this only changes colour.
+          bars.setData(p.dates.slice(start, n + 1).map(function (dt, i) {
+            const abs = start + i;
+            const prevClose = abs > 0 ? p.close[abs - 1] : p.close[abs];
+            return { time: dt, open: prevClose, high: p.high[abs], low: p.low[abs], close: p.close[abs] };
+          }));
+          pinChart.timeScale().fitContent();
+          requestAnimationFrame(function () {
+            pinChart.applyOptions({ width: chartEl.clientWidth, height: chartEl.clientHeight || 120 });
+            pinChart.timeScale().fitContent();
+          });
+        })
+        .catch(function () {
+          document.getElementById("pin-price").textContent = "—";
+          document.getElementById("pin-chg").textContent = "";
+        });
+
+      if (tmleDir) {
+        fetch(tmleDir + "/" + encodeURIComponent(ticker) + ".json")
+          .then(function (r) { if (!r.ok) throw new Error("404"); return r.json(); })
+          .then(function (d) {
+            const n = d.dates.length - 1;
+            const stage = d.stage[n], score = d.composite[n], dd = d.drawdown[n];
+            const actionable = stage === 2 && dd !== null && dd >= (DATA.maxDrawdown || -25);
+            document.getElementById("pin-stage").innerHTML = stageBadge(stage, actionable);
+            document.getElementById("pin-verdict").innerHTML = leaderVerdict({
+              stage: stage, actionable: actionable, drawdown: dd,
+              gain: (d.gain || [])[n], episode_days: (d.episode_days || [])[n],
+              pct_below_10w: (d.pct_below_10w || [])[n],
+            }).replace(/&middot;/g, " · ");
+            document.getElementById("pin-stats").innerHTML =
+              '<div><div class="stock-pin-stat-label">Score</div><div class="stock-pin-stat-val">' + fmtNum(score, 1) + '</div></div>' +
+              '<div><div class="stock-pin-stat-label">Off high</div><div class="stock-pin-stat-val" style="color:var(--down)">' + (dd === null ? "—" : fmtNum(dd, 0) + "%") + '</div></div>';
+          })
+          .catch(function () { /* not a scored name — price-only pin, same as any unscored ticker */ });
+      }
+    }
+    function stageBadgeText(stage, actionable) {
+      if (actionable) return "Actionable";
+      if (stage === 2) return "Advancing";
+      if (stage === 4) return "Broken";
+      return "Basing";
+    }
+    document.getElementById("pin-close").addEventListener("click", function () {
+      document.getElementById("stock-pin").classList.remove("open");
+    });
+    document.getElementById("pin-open").addEventListener("click", function (e) {
+      e.preventDefault();
+      Sync.publish({ ticker: document.getElementById("pin-symbol").textContent });
+      window.location.href = "panel-stock.html";
+    });
+
+    // Search -> jump straight to an industry, in whichever sector holds it,
+    // across all three windows at once.
+    const searchInput = document.getElementById("mf-search");
+    const dropdown = document.getElementById("mf-dropdown");
+    function allIndustryNames() {
+      const set = new Set();
+      Object.keys(cls).forEach(function (t) { if (cls[t] && cls[t][1]) set.add(cls[t][1]); });
+      return Array.from(set).sort();
+    }
+    function showDropdown(query) {
+      const q = query.trim().toLowerCase();
+      const all = allIndustryNames();
+      const matches = q ? all.filter(function (n) { return n.toLowerCase().indexOf(q) !== -1; }) : all;
+      if (!matches.length) { dropdown.classList.remove("open"); return; }
+      dropdown.innerHTML = matches.slice(0, 20).map(function (n) {
+        return '<div class="search-dropdown-row" data-name="' + n.replace(/"/g, "&quot;") + '">' + n + "</div>";
+      }).join("");
+      dropdown.querySelectorAll(".search-dropdown-row").forEach(function (row) {
+        row.addEventListener("click", function () {
+          const wanted = row.dataset.name;
+          HILO_WINDOWS.forEach(function (pair) {
+            const win = pair[0];
+            const tree = buildTree(win);
+            const sector = tree.sectors.find(function (s) { return s.industries.some(function (i) { return i.name === wanted; }); });
+            if (sector) sel[state.index + state.side + win] = { sector: sector.name, industry: wanted };
+          });
+          searchInput.value = "";
+          dropdown.classList.remove("open");
+          draw();
+          HILO_WINDOWS.forEach(function (pair) { flashLogRow(pair[0]); });
+        });
+      });
+      dropdown.classList.add("open");
+    }
+    searchInput.addEventListener("focus", function () { showDropdown(searchInput.value); });
+    searchInput.addEventListener("input", function () { showDropdown(searchInput.value); });
+    document.addEventListener("click", function (e) {
+      if (!e.target.closest(".search-wrap")) dropdown.classList.remove("open");
+    });
 
     draw();
   }
@@ -3260,6 +3652,7 @@
   renderHiloScreener();
   renderMoneyFlows();
   renderBreadthInternals();
+  renderSectorLookup();
 
   // Each grid container's data-keys attribute lists which series to render
   // there (comma-separated). This lets the same script serve both the full

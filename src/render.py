@@ -562,17 +562,40 @@ def _moneyflows_body():
     return """
 <div class="empty-note">Where new highs and new lows are concentrated, drilled from sector to
 industry to the actual stocks — for one index and one side (Longs/Shorts) at a time, across all
-three windows at once. Click any sector or industry bar to re-drill that window; the log above
-remembers what you found in each.</div>
+three windows at once. Click any sector or industry bar to re-drill that window, double-click an
+industry name to open its full Lookup; the log above remembers what you found in each.</div>
 <div class="mf-controls">
   <div class="tf-toggle" id="mf-index"></div>
   <div class="mf-side" id="mf-side"></div>
+  <div class="search-wrap" style="position:relative">
+    <input class="industry-search" id="mf-search" placeholder="Jump to an industry…" autocomplete="off">
+    <div class="search-dropdown" id="mf-dropdown"></div>
+  </div>
 </div>
 <div class="pass-log" id="mf-log">
   <div class="pass-log-label"><span>This pass, kept automatically</span><span id="mf-log-ctx"></span></div>
   <div id="mf-log-rows"></div>
 </div>
 <div id="mf-blocks"></div>
+""".strip() + "\n" + _stock_pin_html()
+
+
+def _stock_pin_html():
+    return """
+<div class="stock-pin" id="stock-pin">
+  <div class="stock-pin-head">
+    <div><b id="pin-symbol"></b> <span id="pin-name"></span></div>
+    <button class="stock-pin-close" id="pin-close" aria-label="Close">&times;</button>
+  </div>
+  <div class="stock-pin-body">
+    <span class="stock-pin-price" id="pin-price"></span><span class="stock-pin-chg" id="pin-chg"></span>
+    <span class="stock-pin-stage" id="pin-stage"></span>
+    <div class="stock-pin-verdict" id="pin-verdict"></div>
+    <div class="stock-pin-stats" id="pin-stats"></div>
+    <div class="lw-chart" id="pin-chart" style="height:120px; margin-top:10px"></div>
+  </div>
+  <div class="stock-pin-foot">Pinned here — keeps the drill open behind it. <a href="#" id="pin-open">Open full Stock Lookup &rarr;</a></div>
+</div>
 """.strip()
 
 
@@ -727,6 +750,44 @@ def _architecture_body(country):
 
 def _breadth_body(key):
     return f'<div class="card-grid" id="breadth-grid" data-keys="{key}"></div>'
+
+
+def _sector_lookup_body():
+    # What Stock Lookup already does for one ticker, done for a sector or
+    # industry instead — search, step through sessions, its own rank history,
+    # and (new here) which member stocks are actually driving it: highest
+    # market cap, top gainers, top decliners, each its own colour. This is
+    # what double-clicking an industry in Money Flows opens.
+    return """
+<div class="empty-note">Search any sector or industry, step through sessions, and see its own
+rank history — plus which member stocks are actually driving it.</div>
+<div class="mf-controls">
+  <div class="tf-toggle" id="sl-kind"></div>
+  <div class="search-wrap" style="position:relative">
+    <input class="industry-search" id="sl-search" placeholder="Search any sector or industry…" autocomplete="off">
+    <div class="search-dropdown" id="sl-dropdown"></div>
+  </div>
+  <button class="icon-btn" id="sl-prev" title="Previous session">&lsaquo;</button>
+  <input type="date" id="sl-date">
+  <button class="icon-btn" id="sl-next" title="Next session">&rsaquo;</button>
+  <button class="icon-btn" id="sl-latest">Latest</button>
+</div>
+<div class="card">
+  <div class="card-head">
+    <div>
+      <div class="card-title" id="sl-name" style="font-size:20px; font-weight:600; margin-bottom:0"></div>
+      <div class="card-sub" id="sl-parent"></div>
+    </div>
+    <div style="text-align:right">
+      <div class="card-value" id="sl-rank" style="font-size:26px"></div>
+      <div class="card-sub" id="sl-rank-sub"></div>
+    </div>
+  </div>
+  <div class="tmle-stats" id="sl-pcts" style="margin:12px 0"></div>
+  <div class="chart-wrap"><canvas id="sl-rank-canvas"></canvas></div>
+  <div id="sl-leader-groups" style="margin-top:14px"></div>
+</div>
+""".strip()
 
 
 def _breadth_internals_body():
@@ -931,10 +992,30 @@ def render_all_panels(country):
         ["industry_ranks"], series, generated_at,
     ))
 
+    quotes_path = os.path.join(config.data_dir(country), "hilo_quotes.json")
+    quotes = {}
+    if os.path.exists(quotes_path):
+        with open(quotes_path, encoding="utf-8") as f:
+            quotes = json.load(f)
+    paths.append(_write_panel(
+        country, "panel-sector-lookup.html", "Sector & Industry Lookup",
+        _sector_lookup_body(),
+        dict(sectorRanks=series.get("sector_ranks", []), industryRanks=series.get("industry_ranks", []),
+             classification=_load_classification(country), quotes=quotes,
+             generated_at=generated_at, country=country),
+        generated_at, needs_chartjs=True,
+    ))
+
+    mf_extra = dict(_screener_payload(country))
+    if cfg.get("run_tmle"):
+        # Optional — only US has TMLE scores. The pin fetches this per
+        # ticker and simply skips the stage/verdict section if the request
+        # 404s, same graceful-degrade as everywhere else TMLE is optional.
+        mf_extra["tmleDir"] = "tmle"
     paths.append(render_panel(
         country, "panel-groups.html", "Money Flows",
-        _moneyflows_body(), [], series, generated_at,
-        extra=_screener_payload(country), chart_lib="none",
+        _moneyflows_body(), ["industry_ranks"], series, generated_at,
+        extra=mf_extra, chart_lib="both",
     ))
 
     paths.append(render_panel(
