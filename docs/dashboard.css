@@ -44,9 +44,17 @@ body {
   margin: 0;
   background: var(--bg);
   color: var(--text);
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-family: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   font-size: 14px;
   line-height: 1.4;
+}
+/* Every number-heavy element already sets font-variant-numeric: tabular-nums
+   so digits line up in columns — a real monospace face for the same
+   elements is what actually makes it read as a data terminal rather than
+   prose with numbers in it. */
+.mono, .card-value, .tmle-stat-num, .tmle-legend-item b, .digest-count, .env-stat-num,
+.mover-chg, .replay-close, .rs-rating-num {
+  font-family: "IBM Plex Mono", ui-monospace, "SFMono-Regular", Consolas, monospace;
 }
 header {
   display: flex;

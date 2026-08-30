@@ -82,12 +82,12 @@ HUB_PANELS = [
                  "narrower categories."},
     ]},
     {"label": "Money Flows", "path": "panel-groups.html"},
-    {"label": "Breadth Internals", "children": [
-        {"label": "Advance / Decline", "path": "panel-breadth-adv-decl.html",
-         "note": "How many stocks rose vs fell each session."},
-        {"label": "New Highs / Lows", "path": "panel-breadth-new-hilo.html",
-         "note": "How many stocks made a fresh 52-week high vs low each session."},
-    ]},
+    # Used to be a group of two raw-counts pages with no read on what they
+    # meant. Now a single page with a regime badge and a verdict computed
+    # over a window you pick, backed by the same two series. The individual
+    # pages still render (reachable by direct URL) in case either is
+    # embedded elsewhere; only the hub's own nav points at the unified one.
+    {"label": "Breadth Internals", "path": "panel-breadth-internals.html"},
     # "Hi/Lo Counts & Screener" used to sit here too — its counts-over-time
     # card is redundant now: Money Flows shows the sector/industry breakdown
     # of the same counts, and Screener already covers the ticker-level view.
@@ -795,6 +795,9 @@ PORTFOLIO_PAGE = r"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Portfolio — live, local</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <style>
   :root { --bg:#f5f6f8; --panel:#fff; --text:#1a1d24; --dim:#6b7280;
     --line:#e2e5ea; --up:#16a34a; --down:#dc2626; --warn:#ca8a04;
@@ -806,7 +809,8 @@ PORTFOLIO_PAGE = r"""<!doctype html>
   }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--text); font-size:14px;
-    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+    font-family:"IBM Plex Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  .mono, td.num, th.num, .stat-value { font-family:"IBM Plex Mono",ui-monospace,"SFMono-Regular",Consolas,monospace; }
   main { padding:18px; max-width:1500px; margin:0 auto; }
   .top { display:flex; justify-content:space-between; align-items:center;
     flex-wrap:wrap; gap:10px; margin-bottom:14px; }
@@ -1524,6 +1528,9 @@ HUB_PAGE = r"""<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Trading System</title>
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%233b82f6'/%3E%3Cpath d='M6 16l4-6 3 4 5-8' stroke='white' stroke-width='2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <style>
   :root { --bg:#0d0f14; --panel:#171b24; --line:#262b36; --text:#e7e9ee;
     --dim:#9096a3; --accent:#3b82f6; --accent-dim:#1d4ed8;
@@ -1535,7 +1542,7 @@ HUB_PAGE = r"""<!doctype html>
   * { box-sizing:border-box; }
   html, body { height:100%; margin:0; overflow:hidden; }
   body { display:flex; background:var(--bg); color:var(--text);
-    font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    font-family:"IBM Plex Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
     font-size:14px; }
 
   #sidebar { width:230px; flex:none; background:var(--panel);

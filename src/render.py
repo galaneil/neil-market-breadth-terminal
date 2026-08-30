@@ -526,6 +526,8 @@ def _screener_body():
 </div>
 <div class="hilo-lead"></div>
 <div class="tf-toggle" id="hilo-timeframe"></div>
+<div class="tf-toggle" id="hilo-chart-view"></div>
+<div class="empty-note" id="hilo-chart-verdict" style="margin-bottom:8px"></div>
 <div class="chart-wrap"><canvas id="hilo-screener-canvas"></canvas></div>
 <div class="screener-filters">
   <span class="filter-label">ADR</span>
@@ -727,6 +729,35 @@ def _breadth_body(key):
     return f'<div class="card-grid" id="breadth-grid" data-keys="{key}"></div>'
 
 
+def _breadth_internals_body():
+    # Regime badge + one verdict sentence before the raw counts, the same
+    # pattern Market Environment already uses well — computed client-side
+    # from the same two daily series the Advance/Decline and New Highs/Lows
+    # panels already publish, over whichever window is selected, rather than
+    # a second copy of metrics/environment.py's fixed 10-day read.
+    return """
+<div class="empty-note">What advance/decline and new highs/lows are actually saying, read
+over a window you choose — not just the raw counts.</div>
+<div class="tf-toggle" id="bi-window"></div>
+<div id="bi-badge"></div>
+<div class="digest-verdict" id="bi-verdict" style="margin: 8px 0 16px"></div>
+<div class="card-grid">
+  <div class="card">
+    <div class="card-title">Advance / Decline</div>
+    <div class="card-value" id="bi-adv-val"></div>
+    <div class="card-sub" id="bi-adv-sub"></div>
+    <div class="chart-wrap"><canvas id="bi-adv-canvas"></canvas></div>
+  </div>
+  <div class="card">
+    <div class="card-title">New Highs / Lows</div>
+    <div class="card-value" id="bi-hilo-val"></div>
+    <div class="card-sub" id="bi-hilo-sub"></div>
+    <div class="chart-wrap"><canvas id="bi-hilo-canvas"></canvas></div>
+  </div>
+</div>
+""".strip()
+
+
 def _rank_body(name_label, table_id, drilldown_id, sort_key):
     return f"""
 <div class="empty-note">Ranked by 20-trading-day performance (smoother than 1-day, which whipsaws on noise) — click a column to sort by it instead.</div>
@@ -910,6 +941,12 @@ def render_all_panels(country):
         country, "panel-screener.html", "New Highs & Lows Screener",
         _screener_body(), [], series, generated_at,
         extra=_screener_payload(country), chart_lib="both",
+    ))
+
+    paths.append(render_panel(
+        country, "panel-breadth-internals.html", "Breadth Internals",
+        _breadth_internals_body(), ["breadth_adv_decl", "breadth_new_hilo"],
+        series, generated_at,
     ))
 
     members = sector_member_counts(country)

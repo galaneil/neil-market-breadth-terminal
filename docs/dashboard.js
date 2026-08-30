@@ -940,6 +940,94 @@
   // nowhere near a one-year high, but it will print 13-week highs immediately.
   const HILO_WINDOWS = [["w13", "13-week"], ["w26", "26-week"], ["w52", "52-week"]];
 
+  // ---------- Breadth Internals: a regime read, not just two raw counts ----------
+  // Same badge/verdict language Market Environment already uses (bullish/
+  // bearish/choppy), computed over a window you pick client-side from the
+  // same two daily series — not a second copy of metrics/environment.py's
+  // fixed 10-day read, which stays exactly as it was for the environment
+  // panel itself.
+  const BI_WINDOWS = [["1W", 5], ["1M", 21], ["3M", 63]];
+
+  function renderBreadthInternals() {
+    const badgeEl = document.getElementById("bi-badge");
+    if (!badgeEl) return;
+    const adv = S.breadth_adv_decl || [];
+    const hilo = S.breadth_new_hilo || [];
+    let win = "1M";
+
+    function avgNet(rows, n) {
+      const tail = rows.slice(-n);
+      if (!tail.length) return null;
+      return tail.reduce(function (sum, r) { return sum + (r.net || 0); }, 0) / tail.length;
+    }
+
+    function draw() {
+      const windowDays = BI_WINDOWS.find(function (w) { return w[0] === win; })[1];
+      const advAvg = avgNet(adv, windowDays);
+      const hiloAvg = avgNet(hilo, windowDays);
+      const signals = [advAvg, hiloAvg].filter(function (v) { return v !== null; });
+      const positive = signals.filter(function (v) { return v > 0; }).length;
+      const label = !signals.length ? null
+        : positive === signals.length ? "bullish"
+        : positive === 0 ? "bearish" : "choppy";
+
+      badgeEl.innerHTML = label
+        ? '<span class="env-verdict ' + label + '" style="font-size:17px">' + label + "</span>"
+        : '<span class="empty-note">Not enough history yet.</span>';
+
+      const advPosDays = adv.slice(-windowDays).filter(function (r) { return (r.net || 0) > 0; }).length;
+      const verdictEl = document.getElementById("bi-verdict");
+      if (label === "bullish") {
+        verdictEl.textContent = "Advancers have outnumbered decliners on " + advPosDays + " of the last " +
+          windowDays + " sessions, and new highs are running ahead of new lows — real underlying " +
+          "participation, not just a handful of names carrying the tape.";
+      } else if (label === "bearish") {
+        verdictEl.textContent = "Decliners have led on " + (windowDays - advPosDays) + " of the last " +
+          windowDays + " sessions and new lows are outpacing new highs — breadth is thinning under the surface.";
+      } else if (label === "choppy") {
+        verdictEl.textContent = "A mixed read over the last " + windowDays + " sessions — advance/decline and " +
+          "new highs/lows aren't confirming the same direction.";
+      } else {
+        verdictEl.textContent = "";
+      }
+
+      function fillCard(valId, subId, avgVal, windowLabel) {
+        const el = document.getElementById(valId);
+        el.textContent = (avgVal >= 0 ? "+" : "") + Math.round(avgVal);
+        el.className = "card-value " + (avgVal >= 0 ? "up" : "down");
+        document.getElementById(subId).textContent = "avg net, " + windowLabel;
+      }
+      if (advAvg !== null) fillCard("bi-adv-val", "bi-adv-sub", advAvg, win);
+      if (hiloAvg !== null) fillCard("bi-hilo-val", "bi-hilo-sub", hiloAvg, win);
+
+      const advTail = adv.slice(-windowDays);
+      const hiloTail = hilo.slice(-windowDays);
+      const colors = themeColors();
+      lineChart("bi-adv-canvas", advTail.map(function (r) { return r.date; }),
+        [{ label: "Net adv/decl", data: advTail.map(function (r) { return r.net; }),
+           borderColor: colors.accent, borderWidth: 1.5, pointRadius: dotRadius(advTail.length), tension: 0.15 }]);
+      lineChart("bi-hilo-canvas", hiloTail.map(function (r) { return r.date; }),
+        [{ label: "Net hi/lo", data: hiloTail.map(function (r) { return r.net; }),
+           borderColor: colors.accent, borderWidth: 1.5, pointRadius: dotRadius(hiloTail.length), tension: 0.15 }]);
+    }
+
+    // Built directly rather than via setupTimeframeToggle, which assumes the
+    // app's usual 1W/1M/3M/6M/YTD/ALL set — this panel only ever offers three.
+    const toggle = document.getElementById("bi-window");
+    toggle.innerHTML = BI_WINDOWS.map(function (w, i) {
+      return '<button class="tf-btn' + (i === 1 ? " active" : "") + '" data-tf="' + w[0] + '">' + w[0] + "</button>";
+    }).join("");
+    toggle.querySelectorAll(".tf-btn").forEach(function (btn) {
+      btn.addEventListener("click", function () {
+        toggle.querySelectorAll(".tf-btn").forEach(function (b) { b.classList.remove("active"); });
+        btn.classList.add("active");
+        win = btn.dataset.tf;
+        draw();
+      });
+    });
+    draw();
+  }
+
   // ---------- Money Flows: sector -> industry -> stock drill, 3 windows at once ----------
   // The pass Neil actually runs by hand: pick an index and a side (Longs =
   // new highs, Shorts = new lows), then for 13W/26W/52W in turn, find the
@@ -1177,6 +1265,7 @@
     let indexFilter = "";
     let adrBand = "";
     let rows = [];
+    let chartView = "cumulative";
 
     // ADR bands, from the actual distribution of the US universe: median
     // 3.6%, a tenth below 1.9%, a tenth above 7.1%. A 2% ADR name at a new
@@ -1797,12 +1886,33 @@
 
       const colors = themeColors();
       const dotR = dotRadius(period.length);
-      if (document.getElementById("hilo-screener-canvas")) lineChart("hilo-screener-canvas", period.map(function (r) { return r.date; }), [
-        { label: winLabel + " highs", data: period.map(function (r) { return (r[win] || {}).hi; }),
-          borderColor: colors.up, borderWidth: 1.5, pointRadius: dotR, tension: 0.15 },
-        { label: winLabel + " lows", data: period.map(function (r) { return (r[win] || {}).lo; }),
-          borderColor: colors.down, borderWidth: 1.5, pointRadius: dotR, tension: 0.15 },
-      ]);
+      const verdictEl = document.getElementById("hilo-chart-verdict");
+      if (document.getElementById("hilo-screener-canvas")) {
+        if (chartView === "daily") {
+          if (verdictEl) verdictEl.textContent = "Daily counts — good for spotting one sharp session, harder to read as a trend.";
+          lineChart("hilo-screener-canvas", period.map(function (r) { return r.date; }), [
+            { label: winLabel + " highs", data: period.map(function (r) { return (r[win] || {}).hi; }),
+              borderColor: colors.up, borderWidth: 1.5, pointRadius: dotR, tension: 0.15 },
+            { label: winLabel + " lows", data: period.map(function (r) { return (r[win] || {}).lo; }),
+              borderColor: colors.down, borderWidth: 1.5, pointRadius: dotR, tension: 0.15 },
+          ]);
+        } else {
+          // Running total of (highs - lows) — what actually shows whether a
+          // move is persistent, since a single day's bar can't. A rising
+          // line is broadening, sustained strength; flattening or rolling
+          // over is new highs losing ground to new lows.
+          let cum = 0;
+          const cumVals = period.map(function (r) { return (cum += ((r[win] || {}).hi || 0) - ((r[win] || {}).lo || 0)); });
+          const rising = cumVals.length > 1 && cumVals[cumVals.length - 1] > cumVals[Math.floor(cumVals.length / 2)];
+          if (verdictEl) verdictEl.textContent = cumVals.length < 2 ? "" : rising
+            ? "Cumulative " + winLabel + " highs minus lows is climbing — sustained, broadening strength."
+            : "Cumulative " + winLabel + " highs minus lows is flattening or rolling over — losing ground to new lows.";
+          lineChart("hilo-screener-canvas", period.map(function (r) { return r.date; }), [
+            { label: "Cumulative " + winLabel + " highs − lows", data: cumVals,
+              borderColor: rising ? colors.up : colors.down, borderWidth: 1.8, pointRadius: dotR, tension: 0.15, fill: false },
+          ]);
+        }
+      }
 
       redrawTable();
       drawGroups();
@@ -1815,6 +1925,8 @@
     buildToggle("hilo-timeframe", TIMEFRAMES.map(function (t) {
       return [t, t === "ALL" ? "Since Inception" : t];
     }), function () { return tf; }, function (v) { tf = v; });
+    buildToggle("hilo-chart-view", [["cumulative", "Cumulative"], ["daily", "Daily"]],
+                function () { return chartView; }, function (v) { chartView = v; });
 
     buildToggle("hilo-adr", [["", "Any"], ["low", "Low <3%"],
                              ["mid", "Tradeable 3-7%"], ["high", "High >7%"]],
@@ -3147,6 +3259,7 @@
   renderTmleStock();
   renderHiloScreener();
   renderMoneyFlows();
+  renderBreadthInternals();
 
   // Each grid container's data-keys attribute lists which series to render
   // there (comma-separated). This lets the same script serve both the full
