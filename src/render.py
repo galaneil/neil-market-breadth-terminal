@@ -787,7 +787,7 @@ rank history — plus which member stocks are actually driving it.</div>
   <div class="chart-wrap"><canvas id="sl-rank-canvas"></canvas></div>
   <div id="sl-leader-groups" style="margin-top:14px"></div>
 </div>
-""".strip()
+""".strip() + "\n" + _stock_pin_html()
 
 
 def _breadth_internals_body():
@@ -1002,8 +1002,10 @@ def render_all_panels(country):
         _sector_lookup_body(),
         dict(sectorRanks=series.get("sector_ranks", []), industryRanks=series.get("industry_ranks", []),
              classification=_load_classification(country), quotes=quotes,
-             generated_at=generated_at, country=country),
-        generated_at, needs_chartjs=True,
+             generated_at=generated_at, country=country,
+             tickerDir=config.TICKER_DIR_NAME,
+             tmleDir="tmle" if cfg.get("run_tmle") else None),
+        generated_at, needs_chartjs=True, needs_lightweight=True,
     ))
 
     mf_extra = dict(_screener_payload(country))

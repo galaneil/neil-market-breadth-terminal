@@ -941,6 +941,186 @@
   const HILO_WINDOWS = [["w13", "13-week"], ["w26", "26-week"], ["w52", "52-week"]];
 
   // ---------- Sector & Industry Lookup ----------
+  // Pinned stock preview — opens on top of the page instead of navigating
+  // away. Shared by every panel that has a #stock-pin fixture in its HTML
+  // (Money Flows, Sector & Industry Lookup) rather than living inside just
+  // one of them, so clicking a stock chip pops the same pin everywhere.
+  // `openStockPin` starts as a no-op and is replaced once initStockPin() has
+  // somewhere to attach it — callers earlier in the file than initStockPin()
+  // runs still resolve correctly since they only ever call it from a click
+  // handler, long after page load has finished wiring everything up.
+  let openStockPin = function () {};
+
+  function initStockPin() {
+    const pin = document.getElementById("stock-pin");
+    if (!pin) return;
+
+    // Price comes from the same per-ticker files Stock Lookup already
+    // fetches; the stage/verdict section is optional (US/TMLE only) and
+    // simply doesn't appear if that fetch 404s. `context` is whatever the
+    // caller wants shown next to the symbol — Money Flows passes its index
+    // label, Sector Lookup passes the sector/industry the stock was picked
+    // from — purely cosmetic, so it defaults to blank rather than requiring
+    // every caller to have one.
+    const tickerDir = DATA.tickerDir || "tickers";
+    const tmleDir = DATA.tmleDir;
+    let pinChart = null;
+    openStockPin = function (ticker, context) {
+      document.getElementById("pin-symbol").textContent = ticker;
+      document.getElementById("pin-name").textContent = context || "";
+      document.getElementById("pin-stage").textContent = "";
+      document.getElementById("pin-verdict").textContent = "";
+      document.getElementById("pin-stats").innerHTML = "";
+      pin.classList.add("open");
+
+      fetch(tickerDir + "/" + encodeURIComponent(ticker) + ".json")
+        .then(function (r) { if (!r.ok) throw new Error("404"); return r.json(); })
+        .then(function (p) {
+          const n = p.dates.length - 1;
+          const chg = ((p.close[n] / p.close[n - 1]) - 1) * 100;
+          document.getElementById("pin-price").textContent = fmtNum(p.close[n], 2);
+          const chgEl = document.getElementById("pin-chg");
+          chgEl.textContent = (chg >= 0 ? "+" : "") + fmtNum(chg, 2) + "%";
+          chgEl.style.color = chg >= 0 ? "var(--up)" : "var(--down)";
+
+          const chartEl = document.getElementById("pin-chart");
+          if (pinChart) { pinChart.remove(); pinChart = null; }
+          const th = lwTheme();
+          pinChart = LightweightCharts.createChart(chartEl, {
+            height: chartEl.clientHeight || 120,
+            layout: { background: { type: "solid", color: th.bg }, textColor: th.text, fontSize: 10 },
+            grid: { vertLines: { color: th.grid }, horzLines: { color: th.grid } },
+            rightPriceScale: { borderColor: th.border },
+            timeScale: { borderColor: th.border, rightOffset: 2 },
+          });
+          const tail = 60;
+          const start = Math.max(0, n - tail);
+          const bars = pinChart.addBarSeries({ upColor: th.up, downColor: th.down, openVisible: false, thinBars: false });
+          // Coloured by close vs prior close, same convention as every
+          // other chart — openVisible is false, so this only changes colour.
+          bars.setData(p.dates.slice(start, n + 1).map(function (dt, i) {
+            const abs = start + i;
+            const prevClose = abs > 0 ? p.close[abs - 1] : p.close[abs];
+            return { time: dt, open: prevClose, high: p.high[abs], low: p.low[abs], close: p.close[abs] };
+          }));
+          pinChart.timeScale().fitContent();
+          requestAnimationFrame(function () {
+            pinChart.applyOptions({ width: chartEl.clientWidth, height: chartEl.clientHeight || 120 });
+            pinChart.timeScale().fitContent();
+          });
+        })
+        .catch(function () {
+          document.getElementById("pin-price").textContent = "—";
+          document.getElementById("pin-chg").textContent = "";
+        });
+
+      if (tmleDir) {
+        fetch(tmleDir + "/" + encodeURIComponent(ticker) + ".json")
+          .then(function (r) { if (!r.ok) throw new Error("404"); return r.json(); })
+          .then(function (d) {
+            const n = d.dates.length - 1;
+            const stage = d.stage[n], score = d.composite[n], dd = d.drawdown[n];
+            const actionable = stage === 2 && dd !== null && dd >= (DATA.maxDrawdown || -25);
+            document.getElementById("pin-stage").innerHTML = stageBadge(stage, actionable);
+            document.getElementById("pin-verdict").innerHTML = leaderVerdict({
+              stage: stage, actionable: actionable, drawdown: dd,
+              gain: (d.gain || [])[n], episode_days: (d.episode_days || [])[n],
+              pct_below_10w: (d.pct_below_10w || [])[n],
+            }).replace(/&middot;/g, " · ");
+            document.getElementById("pin-stats").innerHTML =
+              '<div><div class="stock-pin-stat-label">Score</div><div class="stock-pin-stat-val">' + fmtNum(score, 1) + '</div></div>' +
+              '<div><div class="stock-pin-stat-label">Off high</div><div class="stock-pin-stat-val" style="color:var(--down)">' + (dd === null ? "—" : fmtNum(dd, 0) + "%") + '</div></div>';
+          })
+          .catch(function () { /* not a scored name — price-only pin, same as any unscored ticker */ });
+      }
+    };
+
+    document.getElementById("pin-close").addEventListener("click", function () {
+      pin.classList.remove("open");
+    });
+    document.getElementById("pin-open").addEventListener("click", function (e) {
+      e.preventDefault();
+      Sync.publish({ ticker: document.getElementById("pin-symbol").textContent });
+      window.location.href = "panel-stock.html";
+    });
+
+    // Draggable (by its header) and resizable (native CSS `resize: both`,
+    // handled at the bottom-right corner) — position and size are saved per
+    // browser so the pin reopens wherever it was left, not back at its
+    // default bottom-right corner every time.
+    const head = document.querySelector(".stock-pin-head");
+    const GEOM_KEY = "mbt-stock-pin-geometry";
+
+    function saveGeometry() {
+      try {
+        const r = pin.getBoundingClientRect();
+        localStorage.setItem(GEOM_KEY, JSON.stringify({
+          left: r.left, top: r.top, width: r.width, height: r.height,
+        }));
+      } catch (e) { /* private mode / storage blocked — geometry just resets next time */ }
+    }
+
+    function restoreGeometry() {
+      let g = null;
+      try { g = JSON.parse(localStorage.getItem(GEOM_KEY) || "null"); } catch (e) { /* ignore */ }
+      if (!g) return;
+      // Clamp onto the current viewport so a saved position from a wider
+      // window (or a since-shrunk one) never opens the pin off-screen.
+      const w = Math.min(g.width, window.innerWidth - 16);
+      const h = Math.min(g.height, window.innerHeight - 16);
+      const left = Math.min(Math.max(g.left, 0), window.innerWidth - Math.min(w, 120));
+      const top = Math.min(Math.max(g.top, 0), window.innerHeight - Math.min(h, 60));
+      pin.style.left = left + "px";
+      pin.style.top = top + "px";
+      pin.style.right = "auto";
+      pin.style.bottom = "auto";
+      pin.style.width = w + "px";
+      pin.style.height = h + "px";
+    }
+    restoreGeometry();
+
+    let dragging = null;
+    head.addEventListener("pointerdown", function (e) {
+      if (e.target.closest(".stock-pin-close")) return;
+      const r = pin.getBoundingClientRect();
+      dragging = { dx: e.clientX - r.left, dy: e.clientY - r.top };
+      pin.classList.add("dragging");
+      head.setPointerCapture(e.pointerId);
+    });
+    head.addEventListener("pointermove", function (e) {
+      if (!dragging) return;
+      const left = Math.min(Math.max(e.clientX - dragging.dx, 0), window.innerWidth - 60);
+      const top = Math.min(Math.max(e.clientY - dragging.dy, 0), window.innerHeight - 40);
+      pin.style.left = left + "px";
+      pin.style.top = top + "px";
+      pin.style.right = "auto";
+      pin.style.bottom = "auto";
+    });
+    function endDrag(e) {
+      if (!dragging) return;
+      dragging = null;
+      pin.classList.remove("dragging");
+      try { head.releasePointerCapture(e.pointerId); } catch (err) { /* already released */ }
+      saveGeometry();
+    }
+    head.addEventListener("pointerup", endDrag);
+    head.addEventListener("pointercancel", endDrag);
+
+    // Native `resize: both` fires no event of its own — a ResizeObserver on
+    // the pin itself is what both persists the new size AND keeps the
+    // Lightweight Charts instance filling its container as it grows.
+    let resizeTimer = null;
+    new ResizeObserver(function () {
+      if (pinChart) {
+        const chartEl = document.getElementById("pin-chart");
+        pinChart.applyOptions({ width: chartEl.clientWidth, height: chartEl.clientHeight });
+        pinChart.timeScale().fitContent();
+      }
+      clearTimeout(resizeTimer);
+      resizeTimer = setTimeout(saveGeometry, 250);
+    }).observe(pin);
+  }
+
   // What Stock Lookup already does for one ticker, done for a sector or
   // industry instead: search, step through sessions, its own rank history —
   // plus which member stocks are actually driving it (highest market cap,
@@ -974,7 +1154,19 @@
     });
 
     const dates = (sectorRanks.length ? sectorRanks : industryRanks).map(function (r) { return r.date; });
-    const state = {
+
+    // A link from Money Flows (double-clicking an industry row, or "Open in
+    // Lookup" under a trend chart) carries the exact sector/industry that was
+    // clicked as a query param — without reading it, this always fell back to
+    // the day's #1-ranked sector regardless of what sent you here, which
+    // looked exactly like a broken sync between the two panels.
+    const linked = new URLSearchParams(location.search);
+    const linkedKind = linked.get("kind");
+    const linkedName = linked.get("name");
+    const linkedValid = linkedKind === "industry" ? !!industryMembers[linkedName]
+      : linkedKind === "sector" ? !!sectorMembers[linkedName] : false;
+
+    const state = linkedValid ? { kind: linkedKind, name: linkedName, dateIdx: dates.length - 1 } : {
       kind: "sector",
       name: sectorRanks.length ? sectorRanks[sectorRanks.length - 1].sectors[0].sector : Object.keys(industryMembers)[0],
       dateIdx: dates.length - 1,
@@ -1098,7 +1290,10 @@
         group("Top gainers", byGain, "up", function (r) { return (r.chg >= 0 ? "+" : "") + fmtNum(r.chg, 1) + "%"; }) +
         group("Top decliners", byLoss, "down", function (r) { return (r.chg >= 0 ? "+" : "") + fmtNum(r.chg, 1) + "%"; });
       document.querySelectorAll("#sl-leader-groups .mf-stock-chip").forEach(function (chip) {
-        chip.addEventListener("click", function () { Sync.publish({ ticker: chip.dataset.ticker }); });
+        chip.addEventListener("click", function () {
+          Sync.publish({ ticker: chip.dataset.ticker });
+          openStockPin(chip.dataset.ticker, state.name);
+        });
       });
     }
 
@@ -1438,9 +1633,14 @@
         });
         // A single click re-drills this window; a double click means "not
         // this window's slice — the industry itself" and opens its full
-        // Lookup, the same asset_prefix every other cross-panel link uses.
+        // Lookup. The industry name travels as a query param — without it,
+        // Lookup has no idea what was just clicked and falls back to its own
+        // default (the day's #1-ranked sector), which is what looked like a
+        // broken sync: double-clicking Biotech and landing on Non-Energy
+        // Minerals because that happened to be #1 that day.
         row.addEventListener("dblclick", function () {
-          window.location.href = "panel-sector-lookup.html";
+          window.location.href = "panel-sector-lookup.html?kind=industry&name="
+            + encodeURIComponent(row.dataset.industry);
         });
       });
       // A stock chip opens the pinned preview AND sends the ticker to every
@@ -1449,7 +1649,7 @@
       host.querySelectorAll(".mf-stock-chip").forEach(function (chip) {
         chip.addEventListener("click", function () {
           Sync.publish({ ticker: chip.dataset.ticker });
-          openStockPin(chip.dataset.ticker);
+          openStockPin(chip.dataset.ticker, state.index);
         });
       });
       host.querySelectorAll("[data-trend-toggle]").forEach(function (btn) {
@@ -1473,7 +1673,8 @@
       const tail = ranks.slice(-60);
       panel.innerHTML = '<div class="mf-trend-chart"><canvas id="' + panel.id + '-canvas"></canvas></div>' +
         '<div class="mf-trend-caption"><span>' + industryName + ' rank, ' + tail.length + ' sessions</span>' +
-        '<a href="panel-sector-lookup.html">Open in Lookup &rarr;</a></div>';
+        '<a href="panel-sector-lookup.html?kind=industry&name=' + encodeURIComponent(industryName)
+        + '">Open in Lookup &rarr;</a></div>';
       // The panel is `display:none` until "open" is added, so Chart.js has to
       // see it added FIRST — measuring a hidden container's canvas gives a
       // 0x0 size that a later resize never corrects, leaving a blank chart.
@@ -1495,177 +1696,6 @@
         },
       });
     }
-
-    // Pinned stock preview — opens on top of the page instead of navigating
-    // away. Price comes from the same per-ticker files Stock Lookup already
-    // fetches; the stage/verdict section is optional (US/TMLE only) and
-    // simply doesn't appear if that fetch 404s.
-    const tickerDir = DATA.tickerDir || "tickers";
-    const tmleDir = DATA.tmleDir;
-    let pinChart = null;
-    function openStockPin(ticker) {
-      const pin = document.getElementById("stock-pin");
-      document.getElementById("pin-symbol").textContent = ticker;
-      document.getElementById("pin-name").textContent = state.index;
-      document.getElementById("pin-stage").textContent = "";
-      document.getElementById("pin-verdict").textContent = "";
-      document.getElementById("pin-stats").innerHTML = "";
-      pin.classList.add("open");
-
-      fetch(tickerDir + "/" + encodeURIComponent(ticker) + ".json")
-        .then(function (r) { if (!r.ok) throw new Error("404"); return r.json(); })
-        .then(function (p) {
-          const n = p.dates.length - 1;
-          const chg = ((p.close[n] / p.close[n - 1]) - 1) * 100;
-          document.getElementById("pin-price").textContent = fmtNum(p.close[n], 2);
-          const chgEl = document.getElementById("pin-chg");
-          chgEl.textContent = (chg >= 0 ? "+" : "") + fmtNum(chg, 2) + "%";
-          chgEl.style.color = chg >= 0 ? "var(--up)" : "var(--down)";
-
-          const chartEl = document.getElementById("pin-chart");
-          if (pinChart) { pinChart.remove(); pinChart = null; }
-          const th = lwTheme();
-          pinChart = LightweightCharts.createChart(chartEl, {
-            height: chartEl.clientHeight || 120,
-            layout: { background: { type: "solid", color: th.bg }, textColor: th.text, fontSize: 10 },
-            grid: { vertLines: { color: th.grid }, horzLines: { color: th.grid } },
-            rightPriceScale: { borderColor: th.border },
-            timeScale: { borderColor: th.border, rightOffset: 2 },
-          });
-          const tail = 60;
-          const start = Math.max(0, n - tail);
-          const bars = pinChart.addBarSeries({ upColor: th.up, downColor: th.down, openVisible: false, thinBars: false });
-          // Coloured by close vs prior close, same convention as every
-          // other chart — openVisible is false, so this only changes colour.
-          bars.setData(p.dates.slice(start, n + 1).map(function (dt, i) {
-            const abs = start + i;
-            const prevClose = abs > 0 ? p.close[abs - 1] : p.close[abs];
-            return { time: dt, open: prevClose, high: p.high[abs], low: p.low[abs], close: p.close[abs] };
-          }));
-          pinChart.timeScale().fitContent();
-          requestAnimationFrame(function () {
-            pinChart.applyOptions({ width: chartEl.clientWidth, height: chartEl.clientHeight || 120 });
-            pinChart.timeScale().fitContent();
-          });
-        })
-        .catch(function () {
-          document.getElementById("pin-price").textContent = "—";
-          document.getElementById("pin-chg").textContent = "";
-        });
-
-      if (tmleDir) {
-        fetch(tmleDir + "/" + encodeURIComponent(ticker) + ".json")
-          .then(function (r) { if (!r.ok) throw new Error("404"); return r.json(); })
-          .then(function (d) {
-            const n = d.dates.length - 1;
-            const stage = d.stage[n], score = d.composite[n], dd = d.drawdown[n];
-            const actionable = stage === 2 && dd !== null && dd >= (DATA.maxDrawdown || -25);
-            document.getElementById("pin-stage").innerHTML = stageBadge(stage, actionable);
-            document.getElementById("pin-verdict").innerHTML = leaderVerdict({
-              stage: stage, actionable: actionable, drawdown: dd,
-              gain: (d.gain || [])[n], episode_days: (d.episode_days || [])[n],
-              pct_below_10w: (d.pct_below_10w || [])[n],
-            }).replace(/&middot;/g, " · ");
-            document.getElementById("pin-stats").innerHTML =
-              '<div><div class="stock-pin-stat-label">Score</div><div class="stock-pin-stat-val">' + fmtNum(score, 1) + '</div></div>' +
-              '<div><div class="stock-pin-stat-label">Off high</div><div class="stock-pin-stat-val" style="color:var(--down)">' + (dd === null ? "—" : fmtNum(dd, 0) + "%") + '</div></div>';
-          })
-          .catch(function () { /* not a scored name — price-only pin, same as any unscored ticker */ });
-      }
-    }
-    function stageBadgeText(stage, actionable) {
-      if (actionable) return "Actionable";
-      if (stage === 2) return "Advancing";
-      if (stage === 4) return "Broken";
-      return "Basing";
-    }
-    document.getElementById("pin-close").addEventListener("click", function () {
-      document.getElementById("stock-pin").classList.remove("open");
-    });
-    document.getElementById("pin-open").addEventListener("click", function (e) {
-      e.preventDefault();
-      Sync.publish({ ticker: document.getElementById("pin-symbol").textContent });
-      window.location.href = "panel-stock.html";
-    });
-
-    // Draggable (by its header) and resizable (native CSS `resize: both`,
-    // handled at the bottom-right corner) — position and size are saved per
-    // browser so the pin reopens wherever it was left, not back at its
-    // default bottom-right corner every time.
-    (function () {
-      const pin = document.getElementById("stock-pin");
-      const head = document.querySelector(".stock-pin-head");
-      const GEOM_KEY = "mbt-stock-pin-geometry";
-
-      function saveGeometry() {
-        try {
-          const r = pin.getBoundingClientRect();
-          localStorage.setItem(GEOM_KEY, JSON.stringify({
-            left: r.left, top: r.top, width: r.width, height: r.height,
-          }));
-        } catch (e) { /* private mode / storage blocked — geometry just resets next time */ }
-      }
-
-      function restoreGeometry() {
-        let g = null;
-        try { g = JSON.parse(localStorage.getItem(GEOM_KEY) || "null"); } catch (e) { /* ignore */ }
-        if (!g) return;
-        // Clamp onto the current viewport so a saved position from a wider
-        // window (or a since-shrunk one) never opens the pin off-screen.
-        const w = Math.min(g.width, window.innerWidth - 16);
-        const h = Math.min(g.height, window.innerHeight - 16);
-        const left = Math.min(Math.max(g.left, 0), window.innerWidth - Math.min(w, 120));
-        const top = Math.min(Math.max(g.top, 0), window.innerHeight - Math.min(h, 60));
-        pin.style.left = left + "px";
-        pin.style.top = top + "px";
-        pin.style.right = "auto";
-        pin.style.bottom = "auto";
-        pin.style.width = w + "px";
-        pin.style.height = h + "px";
-      }
-      restoreGeometry();
-
-      let dragging = null;
-      head.addEventListener("pointerdown", function (e) {
-        if (e.target.closest(".stock-pin-close")) return;
-        const r = pin.getBoundingClientRect();
-        dragging = { dx: e.clientX - r.left, dy: e.clientY - r.top };
-        pin.classList.add("dragging");
-        head.setPointerCapture(e.pointerId);
-      });
-      head.addEventListener("pointermove", function (e) {
-        if (!dragging) return;
-        const left = Math.min(Math.max(e.clientX - dragging.dx, 0), window.innerWidth - 60);
-        const top = Math.min(Math.max(e.clientY - dragging.dy, 0), window.innerHeight - 40);
-        pin.style.left = left + "px";
-        pin.style.top = top + "px";
-        pin.style.right = "auto";
-        pin.style.bottom = "auto";
-      });
-      function endDrag(e) {
-        if (!dragging) return;
-        dragging = null;
-        pin.classList.remove("dragging");
-        try { head.releasePointerCapture(e.pointerId); } catch (err) { /* already released */ }
-        saveGeometry();
-      }
-      head.addEventListener("pointerup", endDrag);
-      head.addEventListener("pointercancel", endDrag);
-
-      // Native `resize: both` fires no event of its own — a ResizeObserver on
-      // the pin itself is what both persists the new size AND keeps the
-      // Lightweight Charts instance filling its container as it grows.
-      let resizeTimer = null;
-      new ResizeObserver(function () {
-        if (pinChart) {
-          const chartEl = document.getElementById("pin-chart");
-          pinChart.applyOptions({ width: chartEl.clientWidth, height: chartEl.clientHeight });
-          pinChart.timeScale().fitContent();
-        }
-        clearTimeout(resizeTimer);
-        resizeTimer = setTimeout(saveGeometry, 250);
-      }).observe(pin);
-    })();
 
     // Search -> jump straight to an industry, in whichever sector holds it,
     // across all three windows at once.
@@ -3732,6 +3762,7 @@
   renderTmleEmerging();
   renderTmleStock();
   renderHiloScreener();
+  initStockPin();
   renderMoneyFlows();
   renderBreadthInternals();
   renderSectorLookup();
