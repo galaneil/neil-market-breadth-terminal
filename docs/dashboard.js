@@ -477,6 +477,9 @@
       box.style.display = "none";
       shade.style.display = "none";
       startY = null;
+      // Hand panning/zooming back to the chart now that the measurement is
+      // done — see the note in mousedown for why it was taken away.
+      chart.applyOptions({ handleScroll: true, handleScale: true });
     }
     hide();
 
@@ -487,6 +490,14 @@
       startX = e.clientX - rect.left;
       startPrice = series.coordinateToPrice(startY);
       if (startPrice === null) { startY = null; return; }
+      // preventDefault stops the BROWSER's own drag behaviour (text
+      // selection, etc.) but lightweight-charts attaches its own pan/zoom
+      // handlers directly to this same container — those keep firing
+      // regardless, which is why shift-drag dragged the chart itself instead
+      // of holding still while the rectangle was drawn. Turning the chart's
+      // own interactivity off for the duration of the gesture is what
+      // actually stops it; hide() turns it back on once the drag ends.
+      chart.applyOptions({ handleScroll: false, handleScale: false });
       e.preventDefault();
     });
 
