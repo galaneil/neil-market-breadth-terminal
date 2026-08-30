@@ -592,7 +592,7 @@ def _stock_pin_html():
     <span class="stock-pin-stage" id="pin-stage"></span>
     <div class="stock-pin-verdict" id="pin-verdict"></div>
     <div class="stock-pin-stats" id="pin-stats"></div>
-    <div class="lw-chart" id="pin-chart" style="height:120px; margin-top:10px"></div>
+    <div class="lw-chart" id="pin-chart" style="flex:1 1 auto; min-height:80px; margin-top:10px"></div>
   </div>
   <div class="stock-pin-foot">Pinned here — keeps the drill open behind it. <a href="#" id="pin-open">Open full Stock Lookup &rarr;</a></div>
 </div>

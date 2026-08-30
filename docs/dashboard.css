@@ -460,18 +460,22 @@ tbody tr.selected { background: var(--grid-line); outline: 1px solid var(--accen
 
 /* Pinned stock preview — opens on top of the page instead of navigating
    away from Money Flows. */
-.stock-pin { position: fixed; right: 20px; bottom: 20px; width: 340px;
+.stock-pin { position: fixed; right: 20px; bottom: 20px; width: 340px; height: 420px;
+  min-width: 300px; min-height: 260px; max-width: min(760px, 94vw); max-height: 88vh;
   background: var(--panel-bg); border: 1px solid var(--border); border-radius: 12px;
-  box-shadow: 0 8px 28px rgba(0,0,0,.22); z-index: 60; overflow: hidden;
-  transform: translateY(12px); opacity: 0; pointer-events: none; transition: all .18s ease; }
+  box-shadow: 0 8px 28px rgba(0,0,0,.22); z-index: 60; overflow: auto; resize: both;
+  display: flex; flex-direction: column;
+  transform: translateY(12px); opacity: 0; pointer-events: none; transition: transform .18s ease, opacity .18s ease; }
 .stock-pin.open { transform: translateY(0); opacity: 1; pointer-events: auto; }
+.stock-pin.dragging { transition: none; user-select: none; }
 .stock-pin-head { display: flex; align-items: center; justify-content: space-between;
-  padding: 10px 12px; border-bottom: 1px solid var(--border); background: var(--bg); }
+  padding: 10px 12px; border-bottom: 1px solid var(--border); background: var(--bg);
+  cursor: move; touch-action: none; flex: none; }
 .stock-pin-head b { font-family: "IBM Plex Mono", monospace; font-size: 14px; }
 .stock-pin-head span { font-size: 11px; color: var(--text-dim); }
 .stock-pin-close { background: none; border: 0; color: var(--text-dim); cursor: pointer; font-size: 18px; line-height: 1; padding: 2px 6px; }
 .stock-pin-close:hover { color: var(--text); }
-.stock-pin-body { padding: 12px; }
+.stock-pin-body { padding: 12px; display: flex; flex-direction: column; flex: 1 1 auto; min-height: 0; }
 .stock-pin-price { font-family: "IBM Plex Mono", monospace; font-size: 20px; font-weight: 600; }
 .stock-pin-chg { font-family: "IBM Plex Mono", monospace; font-size: 12.5px; margin-left: 8px; }
 /* .stage-badge (from the shared stageBadge() helper) supplies the actual

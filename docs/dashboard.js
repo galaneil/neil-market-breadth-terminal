@@ -1474,6 +1474,10 @@
       panel.innerHTML = '<canvas id="' + panel.id + '-canvas" height="60"></canvas>' +
         '<div class="mf-trend-caption"><span>' + industryName + ' rank, ' + tail.length + ' sessions</span>' +
         '<a href="panel-sector-lookup.html">Open in Lookup &rarr;</a></div>';
+      // The panel is `display:none` until "open" is added, so Chart.js has to
+      // see it added FIRST — measuring a hidden container's canvas gives a
+      // 0x0 size that a later resize never corrects, leaving a blank chart.
+      panel.classList.add("open");
       const th = themeColors();
       new Chart(document.getElementById(panel.id + "-canvas"), {
         type: "line",
@@ -1490,7 +1494,6 @@
           },
         },
       });
-      panel.classList.add("open");
     }
 
     // Pinned stock preview — opens on top of the page instead of navigating
@@ -1584,6 +1587,85 @@
       Sync.publish({ ticker: document.getElementById("pin-symbol").textContent });
       window.location.href = "panel-stock.html";
     });
+
+    // Draggable (by its header) and resizable (native CSS `resize: both`,
+    // handled at the bottom-right corner) — position and size are saved per
+    // browser so the pin reopens wherever it was left, not back at its
+    // default bottom-right corner every time.
+    (function () {
+      const pin = document.getElementById("stock-pin");
+      const head = document.querySelector(".stock-pin-head");
+      const GEOM_KEY = "mbt-stock-pin-geometry";
+
+      function saveGeometry() {
+        try {
+          const r = pin.getBoundingClientRect();
+          localStorage.setItem(GEOM_KEY, JSON.stringify({
+            left: r.left, top: r.top, width: r.width, height: r.height,
+          }));
+        } catch (e) { /* private mode / storage blocked — geometry just resets next time */ }
+      }
+
+      function restoreGeometry() {
+        let g = null;
+        try { g = JSON.parse(localStorage.getItem(GEOM_KEY) || "null"); } catch (e) { /* ignore */ }
+        if (!g) return;
+        // Clamp onto the current viewport so a saved position from a wider
+        // window (or a since-shrunk one) never opens the pin off-screen.
+        const w = Math.min(g.width, window.innerWidth - 16);
+        const h = Math.min(g.height, window.innerHeight - 16);
+        const left = Math.min(Math.max(g.left, 0), window.innerWidth - Math.min(w, 120));
+        const top = Math.min(Math.max(g.top, 0), window.innerHeight - Math.min(h, 60));
+        pin.style.left = left + "px";
+        pin.style.top = top + "px";
+        pin.style.right = "auto";
+        pin.style.bottom = "auto";
+        pin.style.width = w + "px";
+        pin.style.height = h + "px";
+      }
+      restoreGeometry();
+
+      let dragging = null;
+      head.addEventListener("pointerdown", function (e) {
+        if (e.target.closest(".stock-pin-close")) return;
+        const r = pin.getBoundingClientRect();
+        dragging = { dx: e.clientX - r.left, dy: e.clientY - r.top };
+        pin.classList.add("dragging");
+        head.setPointerCapture(e.pointerId);
+      });
+      head.addEventListener("pointermove", function (e) {
+        if (!dragging) return;
+        const left = Math.min(Math.max(e.clientX - dragging.dx, 0), window.innerWidth - 60);
+        const top = Math.min(Math.max(e.clientY - dragging.dy, 0), window.innerHeight - 40);
+        pin.style.left = left + "px";
+        pin.style.top = top + "px";
+        pin.style.right = "auto";
+        pin.style.bottom = "auto";
+      });
+      function endDrag(e) {
+        if (!dragging) return;
+        dragging = null;
+        pin.classList.remove("dragging");
+        try { head.releasePointerCapture(e.pointerId); } catch (err) { /* already released */ }
+        saveGeometry();
+      }
+      head.addEventListener("pointerup", endDrag);
+      head.addEventListener("pointercancel", endDrag);
+
+      // Native `resize: both` fires no event of its own — a ResizeObserver on
+      // the pin itself is what both persists the new size AND keeps the
+      // Lightweight Charts instance filling its container as it grows.
+      let resizeTimer = null;
+      new ResizeObserver(function () {
+        if (pinChart) {
+          const chartEl = document.getElementById("pin-chart");
+          pinChart.applyOptions({ width: chartEl.clientWidth, height: chartEl.clientHeight });
+          pinChart.timeScale().fitContent();
+        }
+        clearTimeout(resizeTimer);
+        resizeTimer = setTimeout(saveGeometry, 250);
+      }).observe(pin);
+    })();
 
     // Search -> jump straight to an industry, in whichever sector holds it,
     // across all three windows at once.
