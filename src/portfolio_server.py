@@ -849,11 +849,25 @@ PORTFOLIO_PAGE = r"""<!doctype html>
     font-size:14px; font-family:inherit; background:var(--bg);
     border:1px solid var(--line); border-radius:6px; color:var(--text); }
   .login input:focus { outline:none; border-color:var(--accent); }
-  .table-tools { display:flex; align-items:center; gap:10px; margin-bottom:8px; }
+  .table-tools { display:flex; align-items:center; gap:10px; margin-bottom:8px; flex-wrap:wrap; }
   #filter { padding:6px 10px; font-size:13px; font-family:inherit; width:220px;
     background:var(--panel); border:1px solid var(--line); border-radius:7px;
     color:var(--text); }
   #filter:focus { outline:none; border-color:var(--accent); }
+  .chips { display:flex; gap:5px; flex-wrap:wrap; }
+  #sector-filter { padding:6px 9px; font-size:12.5px; font-family:inherit;
+    background:var(--panel); border:1px solid var(--line); border-radius:7px;
+    color:var(--text); }
+  #sector-filter:focus { outline:none; border-color:var(--accent); }
+  tr.pos-row { cursor:pointer; }
+  tr.pos-row:hover td { background:color-mix(in srgb,var(--accent) 6%,transparent); }
+  tr.pos-row.open td { background:color-mix(in srgb,var(--accent) 9%,transparent); }
+  tr.expand-row td { background:var(--bg); padding:12px 15px; }
+  .expand-stats { display:flex; gap:26px; flex-wrap:wrap; }
+  .expand-stat { display:flex; flex-direction:column; gap:2px; }
+  .expand-stat-label { font-size:10px; color:var(--dim); text-transform:uppercase;
+    letter-spacing:.04em; }
+  .expand-stat-val { font-size:15.5px; font-weight:600; font-variant-numeric:tabular-nums; }
   th.sortable { cursor:pointer; user-select:none; white-space:nowrap; }
   th.sortable:hover { color:var(--text); }
   th.sorted { color:var(--accent); }
@@ -958,6 +972,8 @@ PORTFOLIO_PAGE = r"""<!doctype html>
 
 <div class="table-tools">
   <input id="filter" placeholder="Filter positions…" spellcheck="false">
+  <div class="chips" id="chips"></div>
+  <select id="sector-filter"><option value="">All sectors</option></select>
   <span class="dim" id="filter-note"></span>
 </div>
 <table>
@@ -1017,6 +1033,12 @@ function renderCcy() {
 
 function cutoff(tf, last) {
   const d = new Date(last);
+  if (tf === "WTD") {
+    const c = new Date(d);
+    // getDay(): 0=Sun..6=Sat. Back up to this week's Monday.
+    c.setDate(c.getDate() - ((c.getDay() + 6) % 7));
+    return c;
+  }
   if (tf === "MTD") return new Date(d.getFullYear(), d.getMonth(), 1);
   if (tf === "YTD") return new Date(d.getFullYear(), 0, 1);
   if (DAYS[tf]) { const c = new Date(d); c.setDate(c.getDate() - DAYS[tf]); return c; }
@@ -1223,6 +1245,90 @@ function renderExposure() {
 }
 
 let sortKey = "value", sortDesc = true;
+let posFilter = "all", sectorFilter = "";
+let expandedSymbol = null;
+const perfCache = {};
+
+function renderChips() {
+  const CHIPS = [
+    ["all", "All"], ["winners", "Winners"], ["losers", "Losers"],
+    ["no-stop", "No stop set"],
+  ];
+  document.getElementById("chips").innerHTML = CHIPS.map(([k, label]) =>
+    '<button class="btn' + (posFilter === k ? ' active' : '')
+    + '" data-f="' + k + '">' + label + '</button>').join("");
+  document.querySelectorAll("#chips .btn").forEach(b =>
+    b.onclick = () => { posFilter = b.dataset.f; renderTable(); });
+}
+
+function passesChip(p) {
+  if (posFilter === "winners") return (p.unrealized || 0) > 0;
+  if (posFilter === "losers") return (p.unrealized || 0) < 0;
+  if (posFilter === "no-stop") return p.stop == null;
+  return true;
+}
+
+// The per-ticker price history that already backs the market breadth terminal's
+// own stock chart and TMLE panels — the portfolio page reads the very same
+// files through the /docs proxy, rather than fetching anything of its own.
+// India's positions live under docs/in/tickers/, US under docs/tickers/; any
+// symbol outside that day's classified universe (an ETF, a delisted name,
+// pretty much anything on Angel One that isn't a benchmark constituent) 404s,
+// which is reported as "no price history" rather than left to hang.
+function tickerUrl(symbol) {
+  const sub = data.broker === "angelone" ? "in/" : "";
+  return "/docs/" + sub + "tickers/" + encodeURIComponent(symbol) + ".json";
+}
+
+async function loadPerf(symbol) {
+  const key = data.broker + "|" + symbol;
+  if (perfCache[key]) return perfCache[key];
+  const p = (async () => {
+    const res = await fetch(tickerUrl(symbol));
+    if (!res.ok) return null;
+    const j = await res.json();
+    const dates = j.dates || [], closes = j.close || [];
+    if (!dates.length) return null;
+    const last = dates[dates.length - 1], lastClose = closes[closes.length - 1];
+    const since = tf2 => {
+      const c = cutoff(tf2, last);
+      let i = 0;
+      while (i < dates.length && new Date(dates[i]) < c) i++;
+      if (i >= dates.length || closes[i] == null || lastClose == null) return null;
+      return lastClose / closes[i] - 1;
+    };
+    return { wtd: since("WTD"), mtd: since("MTD"), ytd: since("YTD"), asOf: last };
+  })();
+  perfCache[key] = p;
+  return p;
+}
+
+function expandRowHtml(symbol) {
+  return '<tr class="expand-row" data-expand-for="' + symbol + '">'
+    + '<td colspan="' + COLUMNS.length + '"><div class="expand-stats" id="perf-'
+    + symbol.replace(/[^A-Za-z0-9]/g, "_") + '">Loading price history…</div></td></tr>';
+}
+
+function fillExpandRow(symbol) {
+  const id = "perf-" + symbol.replace(/[^A-Za-z0-9]/g, "_");
+  loadPerf(symbol).then(perf => {
+    const el = document.getElementById(id);
+    if (!el) return; // row was collapsed before the fetch resolved
+    if (!perf) {
+      el.innerHTML = '<span class="dim">No price history for ' + symbol
+        + ' in the classified universe — likely an ETF or a name outside '
+        + 'that day\'s index constituents.</span>';
+      return;
+    }
+    const stat = (label, v) => '<div class="expand-stat"><div class="expand-stat-label">'
+      + label + '</div><div class="expand-stat-val ' + cls(v) + '">' + pct(v, 2)
+      + '</div></div>';
+    el.innerHTML = stat("WTD", perf.wtd) + stat("MTD", perf.mtd) + stat("YTD", perf.ytd)
+      + '<div class="expand-stat"><div class="expand-stat-label">As of</div>'
+      + '<div class="expand-stat-val dim" style="font-size:12.5px;font-weight:500">'
+      + perf.asOf + '</div></div>';
+  });
+}
 
 function renderTable() {
   document.getElementById("head").innerHTML = COLUMNS.map(c =>
@@ -1235,9 +1341,23 @@ function renderTable() {
     renderTable();
   });
 
+  renderChips();
+
+  const sectorSel = document.getElementById("sector-filter");
+  const sectors = Array.from(new Set(data.positions.map(p => p.sector || "Unclassified"))).sort();
+  if (sectorSel.dataset.built !== sectors.join("|")) {
+    sectorSel.innerHTML = '<option value="">All sectors</option>'
+      + sectors.map(s => '<option value="'+s+'">'+s+'</option>').join("");
+    sectorSel.value = sectorFilter;
+    sectorSel.dataset.built = sectors.join("|");
+    sectorSel.onchange = () => { sectorFilter = sectorSel.value; renderTable(); };
+  }
+
   const q = (document.getElementById("filter").value || "").trim().toLowerCase();
   let rows = data.positions.filter(p =>
-    !q || (p.symbol||"").toLowerCase().includes(q));
+    (!q || (p.symbol||"").toLowerCase().includes(q))
+    && passesChip(p)
+    && (!sectorFilter || (p.sector || "Unclassified") === sectorFilter));
 
   rows = rows.slice().sort((a, b) => {
     const x = a[sortKey], y = b[sortKey];
@@ -1248,16 +1368,27 @@ function renderTable() {
     return sortDesc ? -r : r;
   });
 
+  const filtered = q || posFilter !== "all" || sectorFilter;
   document.getElementById("filter-note").textContent =
-    q ? rows.length + " of " + data.positions.length + " positions" : "";
+    filtered ? rows.length + " of " + data.positions.length + " positions" : "";
 
-  document.getElementById("rows").innerHTML = rows.map(p =>
-    '<tr>' + COLUMNS.map(c =>
-      '<td class="'+(c.num===false?'':'num')+'">'+c.cell(p)+'</td>').join("")
-    + '</tr>').join("")
+  document.getElementById("rows").innerHTML = rows.map(p => {
+    const open = expandedSymbol === p.symbol;
+    const row = '<tr class="pos-row'+(open?' open':'')+'" data-symbol="'+p.symbol+'">'
+      + COLUMNS.map(c => '<td class="'+(c.num===false?'':'num')+'">'+c.cell(p)+'</td>').join("")
+      + '</tr>';
+    return row + (open ? expandRowHtml(p.symbol) : "");
+  }).join("")
     || '<tr><td colspan="'+COLUMNS.length+'">'
-       + (q ? 'No positions match "'+q+'".' : 'No open positions.')+'</td></tr>';
+       + (filtered ? 'No positions match.' : 'No open positions.')+'</td></tr>';
   wireLogos();
+
+  document.querySelectorAll("tr.pos-row").forEach(tr => tr.onclick = () => {
+    const sym = tr.dataset.symbol;
+    expandedSymbol = expandedSymbol === sym ? null : sym;
+    renderTable();
+    if (expandedSymbol === sym) fillExpandRow(sym);
+  });
 }
 
 function render() {
