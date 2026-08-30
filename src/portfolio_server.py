@@ -379,24 +379,40 @@ def save_name(broker, label):
     return names
 
 
+# Real brand marks for the brokers this app talks to directly, from the same
+# TradingView logo CDN every position's own logo already comes from (see
+# _stock_pin_html / logoCell — s3-symbol-logo.tradingview.com/{logoid}.svg).
+# IBKR and Angel One are each themselves exchange-listed (NASDAQ:IBKR,
+# NSE:ANGELONE), so their brand logo lives at the same address a position in
+# that ticker would use — found via the same tradingview_screener query
+# tv_industry.py already runs, just against the broker's own symbol instead
+# of a portfolio holding.
+BROKER_TV_LOGOID = {
+    "ibkr": "interactive-brokers-group",
+    "angelone": "angel-broking",
+}
+
+
 def logo_for(broker):
-    """Relative URL of a logo file if one exists, else None.
+    """A logo URL for this broker, local file first, else its real brand mark.
 
     Checks the exact broker id first (logos/angelone2.svg, for a family
-    member's account that wants its own mark), then falls back to the
-    institution's shared file (logos/angelone.svg) with any trailing digit
-    stripped — the same bank's logo applies to every account held there, so
-    dropping in ONE angelone.svg is enough to brand both Angel One accounts.
+    member's account that wants its own mark), then the institution's shared
+    file (logos/angelone.svg) with any trailing digit stripped — one dropped-
+    in file brands every account at that institution. Only once neither
+    exists does it fall back to the broker's own TradingView logo — a file
+    you supply always wins, so this is a default, not the last word.
     """
     import re
-    candidates = [broker]
     family = re.sub(r"\d+$", "", broker)
-    if family != broker:
-        candidates.append(family)
+    candidates = [broker] + ([family] if family != broker else [])
     for name in candidates:
         for ext in ("svg", "png", "jpg", "jpeg", "webp"):
             if os.path.exists(os.path.join(LOGO_DIR, f"{name}.{ext}")):
                 return f"/logo/{name}.{ext}"
+    logoid = BROKER_TV_LOGOID.get(broker) or BROKER_TV_LOGOID.get(family)
+    if logoid:
+        return f"https://s3-symbol-logo.tradingview.com/{logoid}.svg"
     return None
 
 
