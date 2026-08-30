@@ -1471,7 +1471,7 @@
         return { date: day.date, rank: hit ? hit.rank : null };
       }).filter(function (r) { return r.rank !== null; });
       const tail = ranks.slice(-60);
-      panel.innerHTML = '<canvas id="' + panel.id + '-canvas" height="60"></canvas>' +
+      panel.innerHTML = '<div class="mf-trend-chart"><canvas id="' + panel.id + '-canvas"></canvas></div>' +
         '<div class="mf-trend-caption"><span>' + industryName + ' rank, ' + tail.length + ' sessions</span>' +
         '<a href="panel-sector-lookup.html">Open in Lookup &rarr;</a></div>';
       // The panel is `display:none` until "open" is added, so Chart.js has to

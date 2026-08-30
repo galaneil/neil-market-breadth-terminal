@@ -1744,12 +1744,13 @@ HUB_PAGE = r"""<!doctype html>
   #country-switch button.active { background:var(--accent); border-color:var(--accent);
     color:#fff; }
 
-  .group-label { padding:14px 16px 6px; font-size:10px; text-transform:uppercase;
-    letter-spacing:.06em; color:var(--dim); font-weight:700; }
+  .group-label { padding:14px 16px 6px; font-size:10.5px; text-transform:uppercase;
+    letter-spacing:.06em; color:color-mix(in srgb, var(--dim) 55%, var(--text));
+    font-weight:800; }
   #pinned-section[hidden], .group-label[hidden] { display:none; }
 
   nav a { display:flex; align-items:center; gap:9px; padding:8px 16px;
-    color:var(--dim); text-decoration:none; font-size:13px;
+    color:var(--dim); text-decoration:none; font-size:13px; font-weight:500;
     border-left:3px solid transparent; cursor:pointer; }
   nav a .nav-label { flex:1; overflow:hidden; text-overflow:ellipsis;
     white-space:nowrap; }

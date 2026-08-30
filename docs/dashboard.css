@@ -451,6 +451,16 @@ tbody tr.selected { background: var(--grid-line); outline: 1px solid var(--accen
 /* Industry trend toggle + inline sparkline, under Money Flows' industry level. */
 .mf-trend-btn { font-size: 10.5px; color: var(--accent); background: none; border: 0; cursor: pointer; padding: 2px 0; margin-left: 8px; }
 .mf-trend-btn:hover { text-decoration: underline; }
+/* The canvas inside needs a parent with a FIXED height, not one sized by its
+   own content — Chart.js's `responsive: true` resize loop reads the
+   container's height to size the canvas, and if the container's height is
+   itself determined by the canvas (the default for a plain block), each
+   resize check nudges it slightly taller, which grows the container, which
+   triggers another resize: the panel (and everything below it on the page)
+   visibly grows and pushes downward with no user input, forever. Giving
+   .mf-trend-chart a fixed height breaks that circularity — the wrapper's
+   size is settled and Chart.js has something stable to resize into. */
+.mf-trend-chart { height: 90px; position: relative; }
 .mf-trend-panel { display: none; margin-top: 8px; padding: 10px 12px; background: var(--bg);
   border: 1px solid var(--border); border-radius: 8px; }
 .mf-trend-panel.open { display: block; }
