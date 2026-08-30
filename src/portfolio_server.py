@@ -327,6 +327,17 @@ BROKER_META = {
     "ibkr":     {"short": "IBKR", "flag": "\U0001F1FA\U0001F1F8", "color": "#d81222"},
     "sharekhan": {"short": "SK",  "flag": "\U0001F1EE\U0001F1F3", "color": "#00954f"},
     "angelone": {"short": "AO",   "flag": "\U0001F1EE\U0001F1F3", "color": "#ee4b2b"},
+    # A second Angel One account (a family member's own SmartAPI app, under
+    # their own login) — same broker, same login flow, a distinct env prefix
+    # and session slot. See angelone.py's settings(env_prefix=...).
+    "angelone2": {"short": "AO",  "flag": "\U0001F1EE\U0001F1F3", "color": "#ee4b2b"},
+}
+
+# Which broker ids are "an Angel One account" — anything that logs in via
+# PIN + TOTP through angelone.py, as opposed to ibkr's separate gateway flow.
+ANGELONE_BROKERS = {
+    "angelone": "ANGELONE",
+    "angelone2": "ANGELONE2",
 }
 
 # Drop <broker>.png (or .svg) in here and the header uses it instead of the
@@ -545,11 +556,11 @@ def _fetch_fresh(broker):
         except Exception as error:
             log(f"  gateway unavailable ({error}); falling back to Flex")
             view = broker_api.ibkr(stops=stops, log=lambda m: None)
-    elif broker == "angelone":
-        session = _sessions.get("angelone")
+    elif broker in ANGELONE_BROKERS:
+        session = _sessions.get(broker)
         if not session:
             raise NeedsLogin("Angel One needs a login")
-        view = broker_api.angelone(session, stops=stops, log=lambda m: None)
+        view = broker_api.angelone(session, stops=stops, log=lambda m: None, broker_id=broker)
     else:
         raise RuntimeError(f"unknown broker {broker!r}")
 
@@ -579,10 +590,10 @@ def configured(broker):
     """
     if broker == "ibkr":
         return True
-    if broker == "angelone":
+    if broker in ANGELONE_BROKERS:
         try:
             import angelone
-            angelone.settings()
+            angelone.settings(env_prefix=ANGELONE_BROKERS[broker])
             return True
         except Exception:
             return False
@@ -592,7 +603,7 @@ def configured(broker):
 def available():
     """Every broker the page can show, with its identity for the header."""
     ids = ["ibkr"]
-    for broker in ("angelone", "sharekhan"):
+    for broker in list(ANGELONE_BROKERS) + ["sharekhan"]:
         if _sessions.get(broker) or configured(broker):
             ids.append(broker)
 
@@ -759,7 +770,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 body = json.loads(self.rfile.read(length) or b"{}")
                 broker = body.get("broker")
-                if broker != "angelone":
+                if broker not in ANGELONE_BROKERS:
                     raise ValueError(f"{broker} does not log in this way")
 
                 import angelone
@@ -768,10 +779,11 @@ class Handler(BaseHTTPRequestHandler):
                 if not pin or not totp:
                     raise ValueError("PIN and TOTP are both required")
 
-                _sessions["angelone"] = angelone.login(pin, totp)
+                api_key, client_code = angelone.settings(env_prefix=ANGELONE_BROKERS[broker])
+                _sessions[broker] = angelone.login(pin, totp, api_key, client_code)
                 del pin, body
-                _cache.pop("angelone", None)
-                log("  Angel One connected")
+                _cache.pop(broker, None)
+                log(f"  {broker} connected")
                 self._send(200, json.dumps({"ok": True}), "application/json")
             except Exception as error:
                 # Angel One's own message is the useful one ("Invalid totp",
@@ -1276,7 +1288,7 @@ function passesChip(p) {
 // pretty much anything on Angel One that isn't a benchmark constituent) 404s,
 // which is reported as "no price history" rather than left to hang.
 function tickerUrl(symbol) {
-  const sub = data.broker === "angelone" ? "in/" : "";
+  const sub = data.broker.indexOf("angelone") === 0 ? "in/" : "";
   return "/docs/" + sub + "tickers/" + encodeURIComponent(symbol) + ".json";
 }
 

@@ -379,8 +379,13 @@ def ibkr(stops=None, log=print):
 
 # ── Angel One ──────────────────────────────────────────────────────────────
 
-def angelone(session, stops=None, log=print):
+def angelone(session, stops=None, log=print, broker_id="angelone"):
     """Portfolio from SmartAPI. `session` is (token, api_key) from a login.
+
+    `broker_id` is which Angel One ACCOUNT this is (a second account, e.g. a
+    family member's own login, is a distinct broker id — "angelone2" — with
+    its own session and cache slot; this just has to be echoed back into the
+    view so the page and its cache key match what was actually requested).
 
     Marks are live LTPs, so `live` is True. NAV history is not something
     SmartAPI offers — there is no equity-curve endpoint — so the curve is
@@ -421,7 +426,7 @@ def angelone(session, stops=None, log=print):
 
     from datetime import date
     return {
-        "broker": "angelone",
+        "broker": broker_id,
         "label": "Angel One",
         "currency": "INR",
         # No USD position exists to derive a rate from, so this one has to

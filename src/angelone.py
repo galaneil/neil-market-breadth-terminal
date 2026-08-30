@@ -84,8 +84,20 @@ class AngelOneError(RuntimeError):
     pass
 
 
-def settings():
-    """API key and client code from .env — neither is a secret on its own."""
+def settings(env_prefix="ANGELONE"):
+    """API key and client code from .env — neither is a secret on its own.
+
+    `env_prefix` is what makes a second Angel One account possible without a
+    second copy of this file: the default account reads ANGELONE_API_KEY /
+    ANGELONE_CLIENT_CODE exactly as before, and any other account (a second
+    family member's own SmartAPI app, registered under their own login) reads
+    <PREFIX>_API_KEY / <PREFIX>_CLIENT_CODE instead — e.g. env_prefix="ANGELONE2".
+    Each account needs its OWN app registered at smartapi.angelone.in under
+    that person's own Angel One login; the API key is not shareable across
+    accounts.
+    """
+    key_name = f"{env_prefix}_API_KEY"
+    client_name = f"{env_prefix}_CLIENT_CODE"
     values = {}
     path = os.path.join(config.ROOT_DIR, ".env")
     if os.path.exists(path):
@@ -93,14 +105,14 @@ def settings():
             for line in f:
                 key, _, raw = line.partition("=")
                 key = key.strip()
-                if key in ("ANGELONE_API_KEY", "ANGELONE_CLIENT_CODE"):
+                if key in (key_name, client_name):
                     values[key] = raw.strip().strip('"').strip("'")
 
-    api_key = os.environ.get("ANGELONE_API_KEY") or values.get("ANGELONE_API_KEY")
-    client = os.environ.get("ANGELONE_CLIENT_CODE") or values.get("ANGELONE_CLIENT_CODE")
+    api_key = os.environ.get(key_name) or values.get(key_name)
+    client = os.environ.get(client_name) or values.get(client_name)
     if not api_key or not client:
         raise AngelOneError(
-            "ANGELONE_API_KEY and ANGELONE_CLIENT_CODE are not set — add them "
+            f"{key_name} and {client_name} are not set — add them "
             "to .env (create the app at smartapi.angelone.in)")
     return api_key, client
 
