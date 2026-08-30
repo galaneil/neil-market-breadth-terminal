@@ -322,15 +322,21 @@ _sessions = {}
 
 # Per-broker identity for the header. `short` is the fallback mark when no
 # logo file is present; `color` is the broker's own brand colour so the chip
-# is recognisable at a glance rather than being another grey pill.
+# is recognisable at a glance rather than being another grey pill. `flag` is
+# a COUNTRY CODE, not the glyph itself — resolved through flags.py's inline
+# SVGs in available(), same as the market breadth terminal's own nav already
+# does. Windows renders the Unicode flag emoji as plain letters ("US", "IN")
+# instead of a flag, which is exactly the "I don't want to see US/IN as text"
+# complaint — flags.py exists for precisely this reason; the portfolio page
+# just hadn't been switched over to it yet.
 BROKER_META = {
-    "ibkr":     {"short": "IBKR", "flag": "\U0001F1FA\U0001F1F8", "color": "#d81222"},
-    "sharekhan": {"short": "SK",  "flag": "\U0001F1EE\U0001F1F3", "color": "#00954f"},
-    "angelone": {"short": "AO",   "flag": "\U0001F1EE\U0001F1F3", "color": "#ee4b2b"},
+    "ibkr":     {"short": "IBKR", "flag": "US", "color": "#d81222"},
+    "sharekhan": {"short": "SK",  "flag": "IN", "color": "#00954f"},
+    "angelone": {"short": "AO",   "flag": "IN", "color": "#ee4b2b"},
     # A second Angel One account (a family member's own SmartAPI app, under
     # their own login) — same broker, same login flow, a distinct env prefix
     # and session slot. See angelone.py's settings(env_prefix=...).
-    "angelone2": {"short": "AO",  "flag": "\U0001F1EE\U0001F1F3", "color": "#ee4b2b"},
+    "angelone2": {"short": "AO",  "flag": "IN", "color": "#ee4b2b"},
 }
 
 # Which broker ids are "an Angel One account" — anything that logs in via
@@ -374,10 +380,23 @@ def save_name(broker, label):
 
 
 def logo_for(broker):
-    """Relative URL of a logo file if one exists, else None."""
-    for ext in ("svg", "png", "jpg", "jpeg", "webp"):
-        if os.path.exists(os.path.join(LOGO_DIR, f"{broker}.{ext}")):
-            return f"/logo/{broker}.{ext}"
+    """Relative URL of a logo file if one exists, else None.
+
+    Checks the exact broker id first (logos/angelone2.svg, for a family
+    member's account that wants its own mark), then falls back to the
+    institution's shared file (logos/angelone.svg) with any trailing digit
+    stripped — the same bank's logo applies to every account held there, so
+    dropping in ONE angelone.svg is enough to brand both Angel One accounts.
+    """
+    import re
+    candidates = [broker]
+    family = re.sub(r"\d+$", "", broker)
+    if family != broker:
+        candidates.append(family)
+    for name in candidates:
+        for ext in ("svg", "png", "jpg", "jpeg", "webp"):
+            if os.path.exists(os.path.join(LOGO_DIR, f"{name}.{ext}")):
+                return f"/logo/{name}.{ext}"
     return None
 
 
@@ -614,7 +633,9 @@ def available():
         out.append({
             "id": broker,
             "short": meta.get("short", broker.upper()),
-            "flag": meta.get("flag", ""),
+            # An inline SVG, not the raw country code — see BROKER_META's
+            # comment on why this can't be a Unicode flag emoji on Windows.
+            "flag": flags.flag(meta.get("flag", "")),
             "color": meta.get("color", "#6b7280"),
             "logo": logo_for(broker),
             # Brokers whose session is held in memory need a login before they
@@ -831,7 +852,9 @@ PORTFOLIO_PAGE = r"""<!doctype html>
     flex-wrap:wrap; gap:10px; margin-bottom:14px; }
   h1 { font-size:17px; margin:0; }
   .ident { display:flex; align-items:center; gap:9px; flex-wrap:wrap; }
-  .flag { font-size:19px; line-height:1; }
+  #flag { display:inline-flex; align-items:center; }
+  #flag svg.flag { width:20px; height:14px; border-radius:2px; display:block; }
+  #brokers .btn svg.flag { width:15px; height:10px; border-radius:1.5px; vertical-align:-1px; margin-right:3px; }
   .name { font-size:17px; font-weight:600; color:var(--text);
     background:transparent; border:1px solid transparent; border-radius:6px;
     padding:3px 7px; min-width:180px; font-family:inherit; }
@@ -1490,7 +1513,7 @@ function meta() {
 
 function renderIdentity() {
   const m = meta();
-  document.getElementById("flag").textContent = m.flag || "";
+  document.getElementById("flag").innerHTML = m.flag || "";
   // A supplied logo file wins; otherwise a brand-coloured chip, which is
   // recognisable without shipping anyone else's trademarked artwork.
   document.getElementById("mark").innerHTML = m.logo
