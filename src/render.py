@@ -460,6 +460,109 @@ def _tmle_stock_body():
 """.strip()
 
 
+def _compute_breakout_signals(country, max_days=14, limit=60):
+    """Names that flipped into Stage 2 within the last couple of weeks --
+    exactly TMLE's own actionable logic, just surfaced the moment it fires
+    instead of waiting for someone to go looking for it in the leaderboard.
+
+    Reuses tmle_leaders.jsonl's own episode_start/actionable/drawdown/gain
+    fields rather than recomputing any of that: this is the same Stage 2 /
+    actionable read the TMLE Leaders page already shows, filtered down to
+    "started within max_days". Only ever non-empty where TMLE runs (US).
+    """
+    cfg = config.COUNTRIES[country]
+    if not cfg.get("run_tmle"):
+        return []
+
+    data_dir_ = config.data_dir(country)
+    leaders_rows = store.read_jsonl(os.path.join(data_dir_, "tmle_leaders.jsonl"))
+    if not leaders_rows:
+        return []
+    latest = leaders_rows[-1]
+    as_of = latest.get("date")
+    if not as_of:
+        return []
+    as_of_dt = datetime.strptime(as_of, "%Y-%m-%d")
+
+    classification = _load_classification(country)
+    quotes_path = os.path.join(data_dir_, "hilo_quotes.json")
+    quotes = {}
+    if os.path.exists(quotes_path):
+        with open(quotes_path, encoding="utf-8") as f:
+            quotes = json.load(f)
+
+    industry_rows = store.read_jsonl(os.path.join(data_dir_, "industry_ranks.jsonl"))
+
+    def industry_rank_trend(industry, lookback=20):
+        """(rank ~lookback sessions ago, rank today) for one industry, or
+        (None, None) if it can't be found in either snapshot."""
+        if not industry_rows or not industry:
+            return None, None
+        past_idx = max(0, len(industry_rows) - 1 - lookback)
+
+        def rank_of(day):
+            for item in day.get("industries", []):
+                if item.get("industry") == industry:
+                    return item.get("rank")
+            return None
+        return rank_of(industry_rows[past_idx]), rank_of(industry_rows[-1])
+
+    tdir = config.ticker_dir(country)
+    signals = []
+    for row in latest.get("leaders", []):
+        if row.get("stage") != 2:
+            continue
+        episode_start = row.get("episode_start")
+        if not episode_start:
+            continue
+        try:
+            started = datetime.strptime(episode_start, "%Y-%m-%d")
+        except ValueError:
+            continue
+        days_in_stage = (as_of_dt - started).days
+        if days_in_stage < 0 or days_in_stage > max_days:
+            continue
+
+        ticker = row["ticker"]
+        tags = classification.get(ticker) or [None, None, None, None]
+        sector, industry = tags[0], tags[1]
+        quote = quotes.get(ticker) or [None, None, None]
+        adr = quote[2] if len(quote) > 2 else None
+        close_price = quote[0]
+
+        # Turnover: price times a plain trailing 30-session average volume --
+        # same definition the stock pin's "Avg turnover" stat already uses.
+        turnover = None
+        price_path = os.path.join(tdir, ticker + ".json")
+        if os.path.exists(price_path):
+            try:
+                with open(price_path, encoding="utf-8") as f:
+                    p = json.load(f)
+                vols = [v for v in (p.get("volume") or [])[-30:] if v is not None]
+                closes = p.get("close") or []
+                if closes:
+                    close_price = closes[-1]
+                if vols:
+                    turnover = (sum(vols) / len(vols)) * (close_price or 0)
+            except Exception:
+                pass
+
+        rank_from, rank_to = industry_rank_trend(industry)
+
+        signals.append({
+            "sym": ticker, "sector": sector, "industry": industry,
+            "price": close_price, "chg": quote[1],
+            "adr": adr, "turnover": turnover,
+            "daysInStage": days_in_stage,
+            "offHigh": row.get("drawdown"), "gain": row.get("gain"),
+            "actionable": bool(row.get("actionable")),
+            "indRankFrom": rank_from, "indRankTo": rank_to,
+        })
+
+    signals.sort(key=lambda s: s["daysInStage"])
+    return signals[:limit]
+
+
 def _tmle_latest(country):
     """Most recent leaderboard row, plus the score changes that drive the
     emerging view. Both are derived here rather than in the browser: the full
@@ -790,6 +893,97 @@ rank history — plus which member stocks are actually driving it.</div>
 """.strip() + "\n" + _stock_pin_html()
 
 
+def _signals_body():
+    # One signal type built out end to end (Stage 2 breakout, computed
+    # server-side in _compute_breakout_signals from the same TMLE data the
+    # Leaders page already shows), with the rest of the roadmap visible but
+    # marked "soon" — each one lands as a new row here, not a new page.
+    return """
+<div class="signals-shell">
+  <div class="signals-rail" id="signals-rail">
+    <div class="rail-h">Signal type</div>
+    <div class="sig-item active" data-sig="breakout">
+      <span class="sig-dot" style="background:var(--up)"></span>
+      <span class="sig-label">Stage 2 breakout</span>
+      <span class="sig-count" id="sig-count-breakout">0</span>
+    </div>
+    <div class="sig-item soon"><span class="sig-dot" style="background:var(--warn)"></span>
+      <span class="sig-label">Earnings / gap turnaround</span><span class="soon-tag">soon</span></div>
+    <div class="sig-item soon"><span class="sig-dot" style="background:var(--accent)"></span>
+      <span class="sig-label">Cup formation</span><span class="soon-tag">soon</span></div>
+    <div class="sig-item soon"><span class="sig-dot" style="background:var(--down)"></span>
+      <span class="sig-label">Stage 4 breakdown (short)</span><span class="soon-tag">soon</span></div>
+
+    <div class="rail-h">Liquidity floor</div>
+    <div class="filter-row">
+      <label>Min ADR <b id="sig-adr-val">2.0%</b></label>
+      <input type="range" id="sig-adr-slider" min="0" max="8" step="0.5" value="2">
+    </div>
+    <div class="filter-row">
+      <label>Min avg turnover <b id="sig-turn-val">$20M</b></label>
+      <input type="range" id="sig-turn-slider" min="0" max="200" step="10" value="20">
+    </div>
+    <div class="rail-h">Extension</div>
+    <div class="filter-row" style="margin-bottom:0"><label style="display:flex;align-items:center;gap:7px;margin-bottom:0">
+      <input type="checkbox" id="sig-hide-extended" style="margin:0">Hide extended (watchlist-only)</label></div>
+  </div>
+  <div class="signals-main">
+    <div id="signals-head">
+      <h2 id="signals-title">Stage 2 breakout</h2>
+      <div class="empty-note" id="signals-sub" style="margin:4px 0 0"></div>
+    </div>
+    <div class="dim" id="signals-count" style="margin:10px 0"></div>
+    <div class="sig-feed" id="signals-feed"></div>
+  </div>
+</div>
+""".strip() + "\n" + _stock_pin_html()
+
+
+def _watchlist_body():
+    return """
+<div class="signals-shell">
+  <div class="signals-rail" id="wl-rail">
+    <div class="rail-h">Watchlists</div>
+    <div class="wl-picker" id="wl-picker"></div>
+    <button class="icon-btn" id="wl-new-btn" style="width:100%">+ New watchlist</button>
+
+    <div class="rail-h">Filter this list</div>
+    <div class="filter-row">
+      <label>Index</label>
+      <select class="filt-select" id="wl-index-filter"><option value="">All indices</option></select>
+    </div>
+    <div class="filter-row">
+      <label>Sector</label>
+      <select class="filt-select" id="wl-sector-filter"><option value="">All sectors</option></select>
+    </div>
+    <div class="filter-row">
+      <label>Industry</label>
+      <select class="filt-select" id="wl-industry-filter"><option value="">All industries</option></select>
+    </div>
+    <div class="rail-h">Liquidity floor</div>
+    <div class="filter-row">
+      <label>Min ADR <b id="wl-adr-val">0.0%</b></label>
+      <input type="range" id="wl-adr-slider" min="0" max="8" step="0.5" value="0">
+    </div>
+    <div class="filter-row" style="margin-bottom:0">
+      <label>Min avg turnover <b id="wl-turn-val">$0M</b></label>
+      <input type="range" id="wl-turn-slider" min="0" max="200" step="10" value="0">
+    </div>
+  </div>
+  <div class="signals-main">
+    <div id="wl-head">
+      <h2 id="wl-title">Default</h2>
+      <div class="empty-note" style="margin:4px 0 0">Every name here keeps the full setup it was
+        added with — not just the ticker. Add more from the Signals tab; switch, or start a new
+        list, from the left.</div>
+    </div>
+    <div class="dim" id="wl-result-count" style="margin:10px 0"></div>
+    <div class="sig-feed" id="wl-feed"></div>
+  </div>
+</div>
+""".strip() + "\n" + _stock_pin_html()
+
+
 def _breadth_internals_body():
     # Regime badge + one verdict sentence before the raw counts, the same
     # pattern Market Environment already uses well — computed client-side
@@ -1024,6 +1218,25 @@ def render_all_panels(country):
         country, "panel-screener.html", "New Highs & Lows Screener",
         _screener_body(), [], series, generated_at,
         extra=_screener_payload(country), chart_lib="both",
+    ))
+
+    sig_extra = dict(_screener_payload(country))
+    sig_extra["signals"] = _compute_breakout_signals(country)
+    if cfg.get("run_tmle"):
+        sig_extra["tmleDir"] = "tmle"
+    paths.append(_write_panel(
+        country, "panel-signals.html", "Signals",
+        _signals_body(), sig_extra, generated_at,
+        needs_chartjs=True, needs_lightweight=True,
+    ))
+
+    wl_extra = dict(_screener_payload(country))
+    if cfg.get("run_tmle"):
+        wl_extra["tmleDir"] = "tmle"
+    paths.append(_write_panel(
+        country, "panel-watchlist.html", "Watchlist",
+        _watchlist_body(), wl_extra, generated_at,
+        needs_chartjs=True, needs_lightweight=True,
     ))
 
     paths.append(render_panel(

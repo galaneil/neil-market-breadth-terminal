@@ -1002,6 +1002,17 @@
       document.getElementById("pin-stats").innerHTML = "";
       pin.classList.add("open");
 
+      // The price fetch (ADR/turnover) and the TMLE fetch (Score/off-high)
+      // both write into #pin-stats, and race against each other over the
+      // network — whichever resolved second used to silently overwrite
+      // whatever the first one had already put there. Each keeps its own
+      // half in a local var and re-renders the FULL row from both on every
+      // resolve, so order never matters.
+      let priceStatsHtml = "", tmleStatsHtml = "";
+      function paintStats() {
+        document.getElementById("pin-stats").innerHTML = priceStatsHtml + tmleStatsHtml;
+      }
+
       fetch(tickerDir + "/" + encodeURIComponent(ticker) + ".json")
         .then(function (r) { if (!r.ok) throw new Error("404"); return r.json(); })
         .then(function (p) {
@@ -1104,11 +1115,12 @@
             if (v >= 1e9) return "$" + fmtNum(v / 1e9, 2) + "B";
             return "$" + fmtNum(v / 1e6, 1) + "M";
           }
-          document.getElementById("pin-stats").innerHTML =
+          priceStatsHtml =
             '<div><div class="stock-pin-stat-label">ADR</div><div class="stock-pin-stat-val">'
               + (adr == null ? "—" : fmtNum(adr, 1) + "%") + '</div></div>' +
             '<div><div class="stock-pin-stat-label">Avg turnover</div><div class="stock-pin-stat-val">'
               + fmtTurnover(turnover) + '</div></div>';
+          paintStats();
 
           pinChart.timeScale().fitContent();
           requestAnimationFrame(function () {
@@ -1134,12 +1146,12 @@
               gain: (d.gain || [])[n], episode_days: (d.episode_days || [])[n],
               pct_below_10w: (d.pct_below_10w || [])[n],
             }).replace(/&middot;/g, " · ");
-            // Appended, not replaced — ADR and average turnover from the
-            // price fetch above already populated this row, and a scored
-            // US name gets these two IN ADDITION rather than instead.
-            document.getElementById("pin-stats").innerHTML +=
+            // Painted alongside, not instead of, ADR/turnover — see
+            // paintStats() above for why this can't be a plain += anymore.
+            tmleStatsHtml =
               '<div><div class="stock-pin-stat-label">Score</div><div class="stock-pin-stat-val">' + fmtNum(score, 1) + '</div></div>' +
               '<div><div class="stock-pin-stat-label">Off high</div><div class="stock-pin-stat-val" style="color:var(--down)">' + (dd === null ? "—" : fmtNum(dd, 0) + "%") + '</div></div>';
+            paintStats();
           })
           .catch(function () { /* not a scored name — price-only pin, same as any unscored ticker */ });
       }
@@ -1477,6 +1489,295 @@
     // sector/industry directly, so this panel has nothing useful to jump to
     // on that signal — it only ever changes its own controls.
     draw();
+  }
+
+  // ---------- Signals: Stage 2 breakouts, computed server-side ----------
+  // The rest of the roadmap (earnings/gap turnaround, cup formation, the
+  // short side) shows in the rail marked "soon" -- each one is meant to
+  // land as a new entry in SIGNAL_CONFIG, not a new page, once it's ready.
+  const SIGNAL_CONFIG = {
+    breakout: {
+      title: "Stage 2 breakout",
+      sub: "Flipped into Stage 2 within the last two weeks, computed straight from the same "
+        + "TMLE data the Leaders page already shows. <b>Actionable</b> clears the extension "
+        + "check too; <b>watchlist-only</b> broke out but already ran too far to chase.",
+      chip: function (s) { return s.actionable ? ["breakout", "Actionable"] : ["watch", "Watchlist · extended"]; },
+      reason: function (s) {
+        const rankImproved = s.indRankFrom != null && s.indRankTo != null && s.indRankTo < s.indRankFrom;
+        return "Broke into <b>Stage 2</b> " + s.daysInStage + " day" + (s.daysInStage === 1 ? "" : "s") + " ago"
+          + (s.offHigh != null ? " · <b>" + Math.abs(Math.round(s.offHigh)) + "%</b> off high" : "")
+          + (s.gain != null ? ", <b>+" + Math.round(s.gain) + "%</b> from its base" : "")
+          + (rankImproved ? " · <b>" + (s.industry || "its industry") + "</b> industry rank improving ("
+              + s.indRankFrom + "→" + s.indRankTo + " over 20d)" : "")
+          + (s.actionable ? "" : " — <b>already extended</b>, this is a watch-only name, not an entry");
+      },
+      facts: function (s) {
+        const rankImproved = s.indRankFrom != null && s.indRankTo != null && s.indRankTo < s.indRankFrom;
+        return [
+          ["Sector", s.sector || "—"], ["Industry", s.industry || "—"],
+          ["Industry rank (20d)", (s.indRankFrom != null && s.indRankTo != null) ? (s.indRankFrom + " → " + s.indRankTo) : "—",
+            rankImproved ? "up" : "down"],
+          ["Days in Stage 2", s.daysInStage],
+          ["Off 52w high", s.offHigh != null ? Math.round(s.offHigh) + "%" : "—", "down"],
+          ["From base low", s.gain != null ? "+" + Math.round(s.gain) + "%" : "—", "up"],
+        ];
+      },
+    },
+  };
+
+  function sigLogoImg(sym, cls) {
+    const tags = cls[sym];
+    const logoid = tags && tags[2];
+    if (!logoid) return "";
+    return '<img class="sig-logo" src="https://s3-symbol-logo.tradingview.com/'
+      + encodeURIComponent(logoid) + '.svg" alt="" onerror="this.style.visibility=\'hidden\'">';
+  }
+
+  function sigIndexOf(sym) {
+    const codes = (DATA.indexMembership || {})[sym] || [];
+    const labels = (DATA.screenerIndexes || []).filter(function (i) { return codes.indexOf(i.code) !== -1; });
+    return labels.length ? labels.map(function (i) { return i.label; }).join(", ") : "—";
+  }
+
+  function renderSignals() {
+    const railEl = document.getElementById("signals-rail");
+    if (!railEl) return;
+    const cls = DATA.classification || {};
+    const allSignals = DATA.signals || [];
+    let adrMin = 2.0, turnMin = 20, hideExtended = false;
+
+    function fmtTurnover(m) {
+      if (m == null) return "—";
+      return m >= 1e9 ? "$" + fmtNum(m / 1e9, 2) + "B" : "$" + fmtNum(m / 1e6, 1) + "M";
+    }
+    function passes(s) {
+      return (s.adr || 0) >= adrMin && (s.turnover || 0) >= turnMin * 1e6 && (!hideExtended || s.actionable);
+    }
+
+    function draw() {
+      const cfg = SIGNAL_CONFIG.breakout;
+      document.getElementById("signals-title").textContent = cfg.title;
+      document.getElementById("signals-sub").innerHTML = cfg.sub;
+      document.getElementById("sig-adr-val").textContent = fmtNum(adrMin, 1) + "%";
+      document.getElementById("sig-turn-val").textContent = fmtTurnover(turnMin * 1e6);
+
+      const rows = allSignals.filter(passes).sort(function (a, b) { return a.daysInStage - b.daysInStage; });
+      document.getElementById("sig-count-breakout").textContent = allSignals.filter(passes).length;
+      document.getElementById("signals-count").textContent = allSignals.length
+        ? rows.length + " of " + allSignals.length + " candidates clear the liquidity floor"
+        : "No TMLE-scored breakouts in the last two weeks right now.";
+
+      const feed = document.getElementById("signals-feed");
+      if (!rows.length) {
+        feed.innerHTML = '<div class="empty-note">' + (allSignals.length
+          ? "Nothing clears this liquidity floor right now. Loosen the ADR or turnover filter on the left."
+          : "Nothing qualifies right now — check back after the next update, or after the market's had a chance to move.")
+          + "</div>";
+        return;
+      }
+
+      feed.innerHTML = rows.map(function (s) {
+        const up = (s.chg || 0) >= 0;
+        const chip = cfg.chip(s);
+        return '<div class="sig-card" data-sym="' + s.sym + '">'
+          + '<div class="sig-top">'
+            + sigLogoImg(s.sym, cls)
+            + '<span class="sig-sym-block"><span class="sig-sym">' + s.sym + '</span><span class="sig-ind">'
+              + (s.industry || "") + '</span></span>'
+            + '<span class="sig-price-block"><span class="sig-price">' + fmtNum(s.price, 2) + '</span>'
+              + '<span class="sig-chg ' + (up ? "up" : "down") + '">' + (up ? "+" : "") + fmtNum(s.chg, 2) + '%</span></span>'
+            + '<span class="sig-stat"><span class="sig-stat-label">ADR</span>' + fmtNum(s.adr, 1) + '%</span>'
+            + '<span class="sig-stat"><span class="sig-stat-label">Turnover</span>' + fmtTurnover(s.turnover) + '</span>'
+            + '<span class="sig-chip ' + chip[0] + '">' + chip[1] + '</span>'
+          + '</div>'
+          + '<div class="sig-reason">' + cfg.reason(s) + '</div>'
+          + '<div class="sig-expand">'
+            + '<div class="sig-facts">'
+              + cfg.facts(s).map(function (f) {
+                  return '<div class="sig-fact"><span>' + f[0] + '</span><b class="' + (f[2] || "") + '">' + f[1] + '</b></div>';
+                }).join("")
+              + '<div class="sig-actions">'
+                + '<button class="sig-open-lookup">Open Stock Lookup</button>'
+                + '<button class="primary sig-add-wl" data-sym="' + s.sym + '">Add to '
+                  + (Object.keys(loadWatchlists())[0] || "Default") + '</button>'
+              + '</div>'
+            + '</div>'
+          + '</div>'
+        + '</div>';
+      }).join("");
+
+      feed.querySelectorAll(".sig-card").forEach(function (card) {
+        card.addEventListener("click", function (e) {
+          if (e.target.closest("button")) return;
+          const sym = card.dataset.sym;
+          card.classList.toggle("expanded");
+          openStockPin(sym, cfg.title);
+        });
+      });
+      feed.querySelectorAll(".sig-open-lookup").forEach(function (btn) {
+        btn.addEventListener("click", function (e) {
+          e.stopPropagation();
+          const sym = btn.closest(".sig-card").dataset.sym;
+          Sync.publish({ ticker: sym });
+          window.location.href = "panel-stock.html";
+        });
+      });
+      feed.querySelectorAll(".sig-add-wl").forEach(function (btn) {
+        btn.addEventListener("click", function (e) {
+          e.stopPropagation();
+          const sym = btn.dataset.sym;
+          const item = allSignals.find(function (r) { return r.sym === sym; });
+          if (item) addToWatchlist(item, "breakout");
+          btn.textContent = "Added ✓";
+          setTimeout(function () { draw(); }, 1200);
+        });
+      });
+    }
+
+    document.getElementById("sig-adr-slider").addEventListener("input", function (e) { adrMin = Number(e.target.value); draw(); });
+    document.getElementById("sig-turn-slider").addEventListener("input", function (e) { turnMin = Number(e.target.value); draw(); });
+    document.getElementById("sig-hide-extended").addEventListener("change", function (e) { hideExtended = e.target.checked; draw(); });
+    draw();
+  }
+
+  // ---------- Watchlist: multiple lists, each entry keeps its full setup ----------
+  // "Add to watchlist" (wired above, in renderSignals) saves the ENTIRE signal
+  // object, not just the ticker -- SIGNAL_CONFIG[item.signalType] already
+  // knows how to describe whichever kind of signal it came from, so this page
+  // reuses the exact same reason()/facts() functions rather than a second copy.
+  const WL_KEY = "mbt-watchlists";
+  function loadWatchlists() {
+    try {
+      const saved = JSON.parse(localStorage.getItem(WL_KEY) || "null");
+      if (saved && Object.keys(saved).length) return saved;
+    } catch (e) { /* private mode / storage blocked -- start fresh */ }
+    return { "Default": [] };
+  }
+  function saveWatchlists(lists) {
+    try { localStorage.setItem(WL_KEY, JSON.stringify(lists)); } catch (e) { /* ignore */ }
+  }
+  function addToWatchlist(item, signalType) {
+    const lists = loadWatchlists();
+    const name = Object.keys(lists)[0] || "Default";
+    if (!lists[name]) lists[name] = [];
+    const idx = lists[name].findIndex(function (r) { return r.sym === item.sym; });
+    const entry = Object.assign({}, item, { signalType: signalType, addedAt: Date.now() });
+    if (idx === -1) lists[name].push(entry); else lists[name][idx] = entry;
+    saveWatchlists(lists);
+  }
+
+  function renderWatchlist() {
+    const railEl = document.getElementById("wl-rail");
+    if (!railEl) return;
+    const cls = DATA.classification || {};
+    let watchlists = loadWatchlists();
+    let activeList = Object.keys(watchlists)[0];
+    let wlSector = "", wlIndustry = "", wlIndex = "", wlAdrMin = 0, wlTurnMin = 0;
+
+    function fmtTurnover(m) {
+      if (m == null) return "—";
+      return m >= 1e9 ? "$" + fmtNum(m / 1e9, 2) + "B" : "$" + fmtNum(m / 1e6, 1) + "M";
+    }
+
+    function drawRail() {
+      const names = Object.keys(watchlists);
+      document.getElementById("wl-picker").innerHTML = names.map(function (name) {
+        return '<div class="wl-row' + (name === activeList ? " active" : "") + '" data-list="' + name + '">'
+          + '<span class="wl-name">' + name + '</span><span class="wl-n">' + watchlists[name].length + '</span></div>';
+      }).join("");
+      document.querySelectorAll("#wl-picker .wl-row").forEach(function (row) {
+        row.addEventListener("click", function () { activeList = row.dataset.list; drawRail(); drawMain(); });
+      });
+      document.getElementById("wl-new-btn").onclick = function () {
+        const name = (prompt("Name this watchlist:") || "").trim();
+        if (!name) return;
+        if (!watchlists[name]) watchlists[name] = [];
+        activeList = name;
+        saveWatchlists(watchlists);
+        drawRail(); drawMain();
+      };
+
+      const items = watchlists[activeList] || [];
+      function fillSelect(id, values, current) {
+        const el = document.getElementById(id);
+        const opts = Array.from(new Set(values.filter(Boolean))).sort();
+        el.innerHTML = '<option value="">All</option>' + opts.map(function (v) {
+          return '<option value="' + v + '"' + (v === current ? " selected" : "") + '>' + v + '</option>';
+        }).join("");
+      }
+      fillSelect("wl-index-filter", items.map(function (i) { return sigIndexOf(i.sym); }), wlIndex);
+      fillSelect("wl-sector-filter", items.map(function (i) { return i.sector; }), wlSector);
+      fillSelect("wl-industry-filter", items.map(function (i) { return i.industry; }), wlIndustry);
+      document.getElementById("wl-index-filter").onchange = function (e) { wlIndex = e.target.value; drawMain(); };
+      document.getElementById("wl-sector-filter").onchange = function (e) { wlSector = e.target.value; drawMain(); };
+      document.getElementById("wl-industry-filter").onchange = function (e) { wlIndustry = e.target.value; drawMain(); };
+      document.getElementById("wl-adr-slider").value = wlAdrMin;
+      document.getElementById("wl-turn-slider").value = wlTurnMin;
+      document.getElementById("wl-adr-val").textContent = fmtNum(wlAdrMin, 1) + "%";
+      document.getElementById("wl-turn-val").textContent = fmtTurnover(wlTurnMin * 1e6);
+      document.getElementById("wl-adr-slider").oninput = function (e) { wlAdrMin = Number(e.target.value); drawMain(); };
+      document.getElementById("wl-turn-slider").oninput = function (e) { wlTurnMin = Number(e.target.value); drawMain(); };
+    }
+
+    function drawMain() {
+      document.getElementById("wl-title").textContent = activeList;
+      const all = watchlists[activeList] || [];
+      const items = all.filter(function (it) {
+        return (it.adr || 0) >= wlAdrMin && (it.turnover || 0) >= wlTurnMin * 1e6
+          && (!wlIndex || sigIndexOf(it.sym) === wlIndex)
+          && (!wlSector || it.sector === wlSector)
+          && (!wlIndustry || it.industry === wlIndustry);
+      });
+      document.getElementById("wl-result-count").textContent = items.length + " of " + all.length + " names in " + activeList;
+
+      const feed = document.getElementById("wl-feed");
+      if (!items.length) {
+        feed.innerHTML = '<div class="empty-note">' + (all.length
+          ? "Nothing in " + activeList + " clears these filters."
+          : activeList + " is empty — add names from the Signals tab.") + "</div>";
+        return;
+      }
+
+      feed.innerHTML = items.map(function (it) {
+        const cfg = SIGNAL_CONFIG[it.signalType];
+        const up = (it.chg || 0) >= 0;
+        const chip = cfg ? cfg.chip(it) : ["watch", it.signalType];
+        return '<div class="sig-card" data-sym="' + it.sym + '">'
+          + '<div class="sig-top">'
+            + sigLogoImg(it.sym, cls)
+            + '<span class="sig-sym-block"><span class="sig-sym">' + it.sym + '</span><span class="sig-ind">'
+              + (it.industry || "") + " · " + sigIndexOf(it.sym) + '</span></span>'
+            + '<span class="sig-price-block"><span class="sig-price">' + fmtNum(it.price, 2) + '</span>'
+              + '<span class="sig-chg ' + (up ? "up" : "down") + '">' + (up ? "+" : "") + fmtNum(it.chg, 2) + '%</span></span>'
+            + '<span class="sig-stat"><span class="sig-stat-label">ADR</span>' + fmtNum(it.adr, 1) + '%</span>'
+            + '<span class="sig-stat"><span class="sig-stat-label">Turnover</span>' + fmtTurnover(it.turnover) + '</span>'
+            + '<span class="sig-chip ' + chip[0] + '">' + chip[1] + '</span>'
+            + '<button class="wl-remove" data-sym="' + it.sym + '" title="Remove from ' + activeList + '">&times;</button>'
+          + '</div>'
+          + '<div class="sig-reason">' + (cfg ? cfg.reason(it) : "") + ' <span class="wl-added">added '
+            + new Date(it.addedAt).toLocaleDateString() + '</span></div>'
+        + '</div>';
+      }).join("");
+
+      feed.querySelectorAll(".sig-card").forEach(function (card) {
+        card.addEventListener("click", function (e) {
+          if (e.target.closest("button")) return;
+          openStockPin(card.dataset.sym, activeList);
+        });
+      });
+      feed.querySelectorAll(".wl-remove").forEach(function (btn) {
+        btn.addEventListener("click", function (e) {
+          e.stopPropagation();
+          const sym = btn.dataset.sym;
+          watchlists[activeList] = watchlists[activeList].filter(function (r) { return r.sym !== sym; });
+          saveWatchlists(watchlists);
+          drawRail(); drawMain();
+        });
+      });
+    }
+
+    drawRail();
+    drawMain();
   }
 
   // ---------- Breadth Internals: a regime read, not just two raw counts ----------
@@ -3904,6 +4205,8 @@
   renderMoneyFlows();
   renderBreadthInternals();
   renderSectorLookup();
+  renderSignals();
+  renderWatchlist();
 
   // Each grid container's data-keys attribute lists which series to render
   // there (comma-separated). This lets the same script serve both the full

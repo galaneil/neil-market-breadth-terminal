@@ -621,3 +621,89 @@ header h1 { display: flex; align-items: center; }
 /* The replay body now fetches its date before drawing; a brief fade avoids the
    panel looking broken during the request. */
 #replay-body.loading { opacity: .45; transition: opacity .12s; }
+
+/* --- Signals & Watchlist: shared two-column shell ------------------------
+   A left rail (signal type / watchlist picker + liquidity filters) beside a
+   scrollable feed of cards, each expandable in place. New here, but built
+   from the same tokens (--panel-bg/--border/--text-dim/etc.) every other
+   panel already uses, so it reads as part of the same app, not a bolt-on. */
+.signals-shell { display: flex; gap: 18px; align-items: flex-start; }
+.signals-rail { width: 230px; flex: none; background: var(--panel-bg);
+  border: 1px solid var(--border); border-radius: 10px; padding: 14px; }
+.signals-main { flex: 1; min-width: 0; }
+.signals-rail .rail-h { font-size: 10.5px; text-transform: uppercase; letter-spacing: .06em;
+  color: var(--text-dim); font-weight: 800; margin: 16px 0 8px; }
+.signals-rail .rail-h:first-child { margin-top: 0; }
+.sig-item { display: flex; align-items: center; gap: 9px; padding: 8px 9px; border-radius: 8px;
+  cursor: pointer; margin-bottom: 3px; border: 1px solid transparent; }
+.sig-item:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.sig-item.active { background: color-mix(in srgb, var(--accent) 12%, transparent);
+  border-color: color-mix(in srgb, var(--accent) 35%, transparent); }
+.sig-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+.sig-label { flex: 1; font-size: 12.5px; font-weight: 600; }
+.sig-count { font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--text-dim); }
+.sig-item.active .sig-count { color: var(--accent); }
+.sig-item.soon { opacity: .5; cursor: default; }
+.sig-item.soon:hover { background: none; }
+.soon-tag { font-size: 9px; text-transform: uppercase; letter-spacing: .04em;
+  background: var(--border); color: var(--text-dim); padding: 1px 5px; border-radius: 4px; }
+
+.signals-rail .filter-row { margin-bottom: 12px; }
+.signals-rail .filter-row label { display: flex; justify-content: space-between; font-size: 11.5px;
+  color: var(--text-dim); margin-bottom: 4px; }
+.signals-rail .filter-row label b { color: var(--text); font-family: "IBM Plex Mono", monospace; font-weight: 600; }
+.signals-rail input[type="range"] { width: 100%; accent-color: var(--accent); }
+.filt-select { width: 100%; padding: 6px 8px; font-size: 12px; font-family: inherit;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 7px; color: var(--text); }
+
+.wl-picker { display: flex; flex-direction: column; gap: 3px; margin-bottom: 8px; }
+.wl-row { display: flex; align-items: center; gap: 6px; padding: 6px 8px; border-radius: 7px;
+  cursor: pointer; font-size: 12.5px; font-weight: 600; }
+.wl-row:hover { background: color-mix(in srgb, var(--accent) 6%, transparent); }
+.wl-row.active { background: color-mix(in srgb, var(--accent) 12%, transparent); color: var(--accent); }
+.wl-row .wl-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.wl-row .wl-n { font-family: "IBM Plex Mono", monospace; font-size: 11px; color: var(--text-dim); font-weight: 400; }
+
+/* --- Feed cards ---------------------------------------------------------- */
+.sig-feed { display: flex; flex-direction: column; gap: 8px; }
+.sig-card { background: var(--panel-bg); border: 1px solid var(--border); border-radius: 10px;
+  padding: 12px 14px; cursor: pointer; transition: border-color .12s ease; }
+.sig-card:hover { border-color: color-mix(in srgb, var(--accent) 45%, var(--border)); }
+.sig-card.expanded { border-color: var(--accent); }
+.sig-top { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.sig-logo { width: 22px; height: 22px; border-radius: 5px; flex: none; object-fit: cover; background: var(--bg); }
+.sig-sym-block { width: 190px; flex: none; overflow: hidden; }
+.sig-sym { font-family: "IBM Plex Mono", monospace; font-weight: 700; font-size: 13.5px; display: block; }
+.sig-ind { font-size: 11px; color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.sig-price-block { width: 108px; flex: none; text-align: right; }
+.sig-price { font-family: "IBM Plex Mono", monospace; font-weight: 600; font-size: 13.5px; }
+.sig-chg { font-family: "IBM Plex Mono", monospace; font-size: 11.5px; margin-left: 6px; }
+.sig-stat { width: 82px; flex: none; text-align: right; font-family: "IBM Plex Mono", monospace; font-size: 12px; }
+.sig-stat-label { font-size: 9.5px; text-transform: uppercase; letter-spacing: .03em;
+  color: var(--text-dim); display: block; font-family: "IBM Plex Sans", sans-serif; }
+.sig-chip { flex: none; font-size: 10.5px; font-weight: 700; padding: 3px 9px; border-radius: 6px; text-align: center; min-width: 96px; }
+.sig-chip.breakout { background: color-mix(in srgb, var(--up) 18%, transparent); color: var(--up); }
+.sig-chip.watch { background: color-mix(in srgb, var(--warn) 18%, transparent); color: var(--warn); }
+.sig-reason { font-size: 11.5px; color: var(--text-dim); margin-top: 7px; padding-left: 74px; line-height: 1.5; }
+.sig-reason b { color: var(--text); font-weight: 600; }
+.wl-added { font-size: 10.5px; color: var(--text-dim); margin-left: 8px; }
+.wl-remove { background: none; border: 0; color: var(--text-dim); font-size: 15px; cursor: pointer; padding: 2px 4px; line-height: 1; }
+.wl-remove:hover { color: var(--down); }
+
+.sig-expand { display: none; margin-top: 12px; padding-top: 12px; border-top: 1px solid var(--border); }
+.sig-card.expanded .sig-expand { display: block; }
+.sig-facts { display: flex; flex-direction: column; gap: 8px; max-width: 420px; }
+.sig-fact { display: flex; justify-content: space-between; font-size: 12px; padding: 3px 0; border-bottom: 1px dashed var(--border); }
+.sig-fact b { font-family: "IBM Plex Mono", monospace; }
+.sig-actions { display: flex; gap: 8px; margin-top: 4px; }
+.sig-actions button { flex: 1; border-radius: 7px; border: 1px solid var(--border);
+  background: var(--panel-bg); color: var(--text); font-family: inherit; font-size: 11.5px;
+  font-weight: 600; padding: 7px 8px; cursor: pointer; }
+.sig-actions button:hover { border-color: var(--accent); color: var(--accent); }
+.sig-actions button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.sig-actions button.primary:hover { filter: brightness(1.08); color: #fff; }
+
+@media (max-width: 860px) {
+  .signals-shell { flex-direction: column; }
+  .signals-rail { width: 100%; }
+}

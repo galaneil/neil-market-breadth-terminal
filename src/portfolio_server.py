@@ -85,6 +85,8 @@ HUB_PANELS = [
                  "the member stocks actually driving it."},
     ]},
     {"label": "Money Flows", "path": "panel-groups.html"},
+    {"label": "Signals", "path": "panel-signals.html"},
+    {"label": "Watchlist", "path": "panel-watchlist.html"},
     # Used to be a group of two raw-counts pages with no read on what they
     # meant. Now a single page with a regime badge and a verdict computed
     # over a window you pick, backed by the same two series. The individual
