@@ -997,6 +997,12 @@
     openStockPin = function (ticker, context) {
       document.getElementById("pin-symbol").textContent = ticker;
       document.getElementById("pin-name").textContent = context || "";
+      const pinLogo = document.getElementById("pin-logo");
+      const logoTags = (DATA.classification || {})[ticker];
+      const logoid = logoTags && logoTags[2];
+      pinLogo.style.visibility = "";
+      pinLogo.src = logoid ? "https://s3-symbol-logo.tradingview.com/" + encodeURIComponent(logoid) + ".svg" : "";
+      if (!logoid) pinLogo.style.visibility = "hidden";
       document.getElementById("pin-stage").textContent = "";
       document.getElementById("pin-verdict").textContent = "";
       document.getElementById("pin-stats").innerHTML = "";
@@ -1495,6 +1501,7 @@
   // The rest of the roadmap (earnings/gap turnaround, cup formation, the
   // short side) shows in the rail marked "soon" -- each one is meant to
   // land as a new entry in SIGNAL_CONFIG, not a new page, once it's ready.
+  const EARNINGS_GAP_LABEL_THRESHOLD = 5;
   const SIGNAL_CONFIG = {
     breakout: {
       title: "Stage 2 breakout",
@@ -1533,10 +1540,16 @@
         + "(today vs. its own 30-day average) is what tells a real move apart from noise. "
         + "A gap that fully reversed to a red close is left out — that's a bearish signal, "
         + "not this one.",
-      chip: function (s) { return s.gap >= gapMin ? ["gap", "Gap up"] : ["forming", "Wide range"]; },
+      // 5% is a fixed definitional threshold for "this counts as a gap",
+      // not the live filter slider (EARNINGS_GAP_LABEL_THRESHOLD lives at
+      // module scope precisely so this classification doesn't depend on
+      // whatever the user's current liquidity/move-size filter happens to
+      // be set to — moving the slider narrows what's SHOWN, not what
+      // something IS).
+      chip: function (s) { return s.gap >= EARNINGS_GAP_LABEL_THRESHOLD ? ["gap", "Gap up"] : ["forming", "Wide range"]; },
       reason: function (s) {
         const gaveBack = s.giveback >= 30;
-        return (s.gap >= gapMin
+        return (s.gap >= EARNINGS_GAP_LABEL_THRESHOLD
             ? "Gapped up <b>+" + s.gap + "%</b>"
             : "Traced a <b>" + s.range + "%</b> high-low range, closed <b>"
               + (s.chg >= 0 ? "+" : "") + s.chg + "%</b>")
@@ -1610,7 +1623,11 @@
       earnings: function (a, b) { return a.daysAgo - b.daysAgo || b.volMult - a.volMult; },
       cup: function (a, b) { return Math.abs(a.recovery - 100) - Math.abs(b.recovery - 100); },
     };
-    let activeSig = "breakout";
+    // Don't land on a tab that's already known to be empty. Stage 2
+    // breakout needs TMLE, which only runs for the US -- defaulting to it
+    // anyway on the India page meant every visit opened on "nothing
+    // qualifies" with the real signals one click away and easy to miss.
+    let activeSig = DATA.tmleDir ? "breakout" : "earnings";
     let adrMin = 2.0, turnMin = 20;
     let hideExtended = false;
     let gapMin = 5, volMultMin = 2;
@@ -1813,6 +1830,12 @@
       const showingWeek = !document.getElementById("signals-week").hidden;
       if (showingWeek) draw(); else drawWeek();
       this.classList.toggle("active", !showingWeek);
+    });
+    // Sync the rail's highlighted item to whatever activeSig actually
+    // defaulted to — the markup always marks "breakout" active, which is
+    // only right when that's really the tab about to be drawn.
+    document.querySelectorAll("#signals-rail .sig-item[data-sig]").forEach(function (i) {
+      i.classList.toggle("active", i.dataset.sig === activeSig);
     });
     drawTypeFilters();
     draw();

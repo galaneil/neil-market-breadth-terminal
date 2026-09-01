@@ -481,6 +481,8 @@ tbody tr.selected { background: var(--grid-line); outline: 1px solid var(--accen
 .stock-pin-head { display: flex; align-items: center; justify-content: space-between;
   padding: 10px 12px; border-bottom: 1px solid var(--border); background: var(--bg);
   cursor: move; touch-action: none; flex: none; }
+.stock-pin-title { display: flex; align-items: center; gap: 7px; }
+.stock-pin-logo { width: 18px; height: 18px; border-radius: 4px; flex: none; object-fit: cover; }
 .stock-pin-head b { font-family: "IBM Plex Mono", monospace; font-size: 14px; }
 .stock-pin-head span { font-size: 11px; color: var(--text-dim); }
 .stock-pin-close { background: none; border: 0; color: var(--text-dim); cursor: pointer; font-size: 18px; line-height: 1; padding: 2px 6px; }

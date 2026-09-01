@@ -919,7 +919,8 @@ def _stock_pin_html():
     return """
 <div class="stock-pin" id="stock-pin">
   <div class="stock-pin-head">
-    <div><b id="pin-symbol"></b> <span id="pin-name"></span></div>
+    <div class="stock-pin-title"><img class="stock-pin-logo" id="pin-logo" alt=""
+      onerror="this.style.visibility='hidden'"><b id="pin-symbol"></b> <span id="pin-name"></span></div>
     <button class="stock-pin-close" id="pin-close" aria-label="Close">&times;</button>
   </div>
   <div class="stock-pin-body">
