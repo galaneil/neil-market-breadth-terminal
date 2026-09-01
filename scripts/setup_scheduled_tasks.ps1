@@ -27,8 +27,6 @@ function Register-Refresh($name, $country, $time) {
     $action = New-ScheduledTaskAction -Execute $pythonExe `
         -Argument "scripts\run_daily_refresh.py $country" `
         -WorkingDirectory $repoRoot
-    $trigger = New-ScheduledTaskTrigger -Daily -At $time
-    $trigger.DaysOfWeek = $null  # -Daily trigger; day filtering happens below
     $settings = New-ScheduledTaskSettingsSet -StartWhenAvailable `
         -DontStopOnIdleEnd -ExecutionTimeLimit (New-TimeSpan -Minutes 30)
 
@@ -42,15 +40,16 @@ function Register-Refresh($name, $country, $time) {
 
     Register-ScheduledTask -TaskName $name -Action $action `
         -Trigger $weekdayTriggers -Settings $settings -Force `
-        -Description "Runs the $country market breadth pipeline and pushes the result — the reliable local counterpart to .github/workflows/daily-$($country.ToLower()).yml, which depends on GitHub's own scheduler and can run hours late."
+        -Description "Runs the $country market breadth pipeline and pushes the result - the reliable local counterpart to .github/workflows/daily-$($country.ToLower()).yml, which depends on GitHub's own scheduler and can run hours late."
 }
 
 Register-Refresh "MBT Daily US Refresh"    "US" "19:35"
 Register-Refresh "MBT Daily India Refresh" "IN" "07:45"
 
+$logPath = Join-Path (Split-Path -Parent $repoRoot) "Portfolio Local\daily-refresh.log"
 Write-Host "Registered: MBT Daily US Refresh (7:35 PM ET, Mon-Fri)"
 Write-Host "Registered: MBT Daily India Refresh (7:45 AM ET, Mon-Fri)"
 Write-Host ""
-Write-Host "Logs: $((Split-Path -Parent $repoRoot))\Portfolio Local\daily-refresh.log"
-Write-Host "To test one immediately: Start-ScheduledTask -TaskName 'MBT Daily US Refresh'"
-Write-Host "To remove either later:  Unregister-ScheduledTask -TaskName '<name>' -Confirm:`$false"
+Write-Host "Logs: $logPath"
+Write-Host "To test one immediately, run: Start-ScheduledTask -TaskName MBT Daily US Refresh"
+Write-Host "To remove either later, run: Unregister-ScheduledTask -TaskName MBT Daily US Refresh"

@@ -1027,8 +1027,10 @@ PORTFOLIO_PAGE = r"""<!doctype html>
   <input id="filter" placeholder="Filter positions…" spellcheck="false">
   <div class="chips" id="chips"></div>
   <select id="sector-filter"><option value="">All sectors</option></select>
+  <button class="btn" id="avg-toggle">Averages</button>
   <span class="dim" id="filter-note"></span>
 </div>
+<div class="stats" id="averages-panel" hidden></div>
 <table>
   <thead><tr id="head"></tr></thead>
   <tbody id="rows"></tbody>
@@ -1383,6 +1385,57 @@ function fillExpandRow(symbol) {
   });
 }
 
+// Plain arithmetic mean over whichever rows renderTable() just filtered to —
+// same rows the table itself is showing, so the numbers stay in sync with
+// whatever filter/search/sort is active rather than always covering the
+// whole book.
+function avgOf(rows, key) {
+  const vals = rows.map(p => p[key]).filter(v => v != null && !isNaN(v));
+  if (!vals.length) return null;
+  return vals.reduce((a, b) => a + b, 0) / vals.length;
+}
+
+let showAverages = false;
+
+function renderAverages(rows) {
+  const panel = document.getElementById("averages-panel");
+  panel.hidden = !showAverages;
+  if (!showAverages) return;
+  if (!rows.length) {
+    panel.innerHTML = '<div class="stat"><div class="dim">No positions to average.</div></div>';
+    return;
+  }
+  const withStop = rows.filter(p => p.stop != null);
+  const avgRisk = withStop.length ? avgOf(withStop, "risk") : null;
+  const avgUnreal = avgOf(rows, "unrealized"), avgUnrealPct = avgOf(rows, "unrealized_pct");
+  // Mark and cost price are PER-SHARE figures in each instrument's own
+  // currency — averaging across tickers listed in different currencies has
+  // no single honest unit to show it in, so these two stay unconverted
+  // plain numbers rather than run through cash()'s base-currency symbol.
+  const stats = [
+    ["Avg qty", Math.round(avgOf(rows, "quantity") || 0).toLocaleString(LOCALE(data.currency))],
+    ["Avg mark", (avgOf(rows, "mark") || 0).toFixed(2)],
+    ["Avg cost price", (avgOf(rows, "cost_price") || 0).toFixed(2)],
+    ["Avg cost value", cash(avgOf(rows, "cost"))],
+    ["Avg position size", cash(avgOf(rows, "value"))],
+    ["Avg % of NAV", pct(avgOf(rows, "pct_nav"))],
+    ["Avg unrealized", '<span class="'+cls(avgUnreal)+'">' + cash(avgUnreal) + '</span>'],
+    ["Avg unrealized %", '<span class="'+cls(avgUnrealPct)+'">' + pct(avgUnrealPct) + '</span>'],
+    ["Avg risk", avgRisk == null ? "—"
+      : cash(avgRisk) + (withStop.length < rows.length
+          ? ' <span class="dim" style="font-size:11px">(' + withStop.length + '/' + rows.length + ' have a stop)</span>' : "")],
+  ];
+  panel.innerHTML = stats.map(s =>
+    '<div class="stat"><div class="stat-label">' + s[0] + '</div>'
+    + '<div class="stat-value" style="font-size:17px">' + s[1] + '</div></div>').join("");
+}
+
+document.getElementById("avg-toggle").onclick = () => {
+  showAverages = !showAverages;
+  document.getElementById("avg-toggle").classList.toggle("active", showAverages);
+  renderTable();
+};
+
 function renderTable() {
   document.getElementById("head").innerHTML = COLUMNS.map(c =>
     '<th class="sortable'+(c.num===false?'':' num')
@@ -1424,6 +1477,8 @@ function renderTable() {
   const filtered = q || posFilter !== "all" || sectorFilter;
   document.getElementById("filter-note").textContent =
     filtered ? rows.length + " of " + data.positions.length + " positions" : "";
+
+  renderAverages(rows);
 
   document.getElementById("rows").innerHTML = rows.map(p => {
     const open = expandedSymbol === p.symbol;
@@ -1565,8 +1620,27 @@ async function loadBrokers() {
     + (b.flag ? b.flag+" " : "")
     + (b.name || b.short) + '</button>').join("");
   document.querySelectorAll("#brokers .btn").forEach(el =>
-    el.onclick = () => { broker = el.dataset.b; renderIdentity(); loadBrokers(); tick(); });
+    el.onclick = () => switchBroker(el.dataset.b));
   renderIdentity();
+}
+
+// loadBrokers() and tick() both hit the network and both eventually call
+// render() — firing them unawaited (the old behaviour) let them resolve in
+// whichever order the network happened to return them, and the table sat
+// showing the PREVIOUS broker's positions with no indication anything was
+// happening until whichever of the two finished last. Clearing the table to
+// an explicit loading row up front, then awaiting each fetch in order, means
+// a broker switch always shows visible progress instead of looking frozen.
+async function switchBroker(id) {
+  broker = id;
+  data = null;
+  document.getElementById("rows").innerHTML =
+    '<tr><td colspan="' + COLUMNS.length + '">Loading…</td></tr>';
+  document.getElementById("stats").innerHTML = "";
+  document.getElementById("warnings").innerHTML = "";
+  renderIdentity();
+  await loadBrokers();
+  await tick();
 }
 
 document.getElementById("name").addEventListener("blur", saveName);
@@ -1599,7 +1673,7 @@ document.getElementById("login-form").onsubmit = async function (e) {
     })
   });
   const j = await r.json();
-  if (j.ok) { showLogin(false); loadBrokers(); tick(); }
+  if (j.ok) { showLogin(false); await loadBrokers(); await tick(); }
   else { err.textContent = j.error || "login failed"; }
 };
 
@@ -1633,7 +1707,8 @@ document.getElementById("filter").addEventListener("input", () => {
   if (data) renderTable();
 });
 
-loadBrokers(); tick(); setInterval(tick, REFRESH_MS);
+(async () => { await loadBrokers(); await tick(); })();
+setInterval(tick, REFRESH_MS);
 </script>
 </main></body></html>"""
 
