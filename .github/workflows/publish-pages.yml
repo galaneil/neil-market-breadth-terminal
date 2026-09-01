@@ -1,0 +1,46 @@
+name: Publish docs/ to gh-pages on push
+
+# Triggered by a PUSH, not a schedule — this is the fix for the other half of
+# the freshness problem. A scheduled workflow only runs when GitHub's own
+# cron queue gets to it, which on this repo has been running hours late (see
+# daily-us.yml/daily-in.yml's own notes). A push-triggered workflow has no
+# such queue: it starts within moments of the push landing, every time,
+# regardless of what pushed it — the local scheduled refresh
+# (scripts/run_daily_refresh.py), the GitHub Actions fallback, or an
+# ordinary commit made while working on the site itself. Whatever's in
+# docs/ on main is what gets published, right away, from whoever put it there.
+on:
+  push:
+    branches: [main]
+    paths: ["docs/**"]
+  workflow_dispatch: {}
+
+concurrency:
+  # A burst of pushes (e.g. the local US and India refreshes landing minutes
+  # apart) should publish once with the latest content, not race each other
+  # to publish stale versions out of order.
+  group: publish-pages
+  cancel-in-progress: true
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Publish site to gh-pages
+        run: |
+          cd docs
+          git init -q
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git checkout -qb gh-pages
+          git add -A
+          git commit -qm "Site build: $(date -u +'%Y-%m-%d %H:%M UTC')"
+          git push -qf "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" gh-pages
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
