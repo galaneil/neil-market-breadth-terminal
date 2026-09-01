@@ -725,3 +725,19 @@ header h1 { display: flex; align-items: center; }
 .sig-week-tickers span { cursor: pointer; }
 .sig-week-tickers span:hover { color: var(--accent); text-decoration: underline; }
 .sig-week-empty { color: var(--text-dim); font-size: 11.5px; }
+
+/* --- Signals: inline day-strip (replaces the old separate "This week's
+   list" page) ------------------------------------------------------------ */
+.sig-daystrip { display: flex; gap: 6px; margin: 10px 0 0; flex-wrap: wrap; align-items: center; }
+.sig-day-btn { background: var(--panel-bg); border: 1px solid var(--border); border-radius: 8px;
+  padding: 5px 10px; cursor: pointer; font-family: inherit; text-align: center; line-height: 1.3; }
+.sig-day-btn .dow { display: block; font-size: 11px; font-weight: 700; color: var(--text); }
+.sig-day-btn .dom { display: block; font-size: 9.5px; color: var(--text-dim); font-family: "IBM Plex Mono", monospace; }
+.sig-day-btn.selected { background: color-mix(in srgb, var(--accent) 16%, transparent); border-color: var(--accent); }
+.sig-day-btn.selected .dow { color: var(--accent); }
+.sig-day-quick { background: none; border: 1px solid var(--border); border-radius: 8px; color: var(--text-dim);
+  padding: 5px 10px; font-size: 11.5px; cursor: pointer; font-family: inherit; }
+.sig-day-quick.active { background: var(--accent); border-color: var(--accent); color: #fff; }
+.sig-day-sep { width: 1px; align-self: stretch; background: var(--border); margin: 0 2px; }
+.sig-card.historical { opacity: .8; border-style: dashed; }
+.sig-card.historical .sig-chip { background: var(--border); color: var(--text-dim); }

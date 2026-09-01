@@ -526,6 +526,7 @@ def _compute_breakout_signals(country, max_days=14, limit=60):
         ticker = row["ticker"]
         tags = classification.get(ticker) or [None, None, None, None]
         sector, industry = tags[0], tags[1]
+        market_cap = tags[3] if len(tags) > 3 else None
         quote = quotes.get(ticker) or [None, None, None]
         adr = quote[2] if len(quote) > 2 else None
         close_price = quote[0]
@@ -556,7 +557,7 @@ def _compute_breakout_signals(country, max_days=14, limit=60):
             "daysInStage": days_in_stage,
             "offHigh": row.get("drawdown"), "gain": row.get("gain"),
             "actionable": bool(row.get("actionable")),
-            "indRankFrom": rank_from, "indRankTo": rank_to,
+            "indRankFrom": rank_from, "indRankTo": rank_to, "marketCap": market_cap,
         })
 
     signals.sort(key=lambda s: s["daysInStage"])
@@ -580,7 +581,7 @@ def _ema_series(values, period):
 
 
 def _load_ticker_universe(country, quotes):
-    """{ticker: [sector, industry, adr]} for every classified, liquid-enough
+    """{ticker: (sector, industry, adr, market_cap)} for every classified
     name -- the shared starting point for both signal scanners below, so
     each only opens a ticker's own price file once it already knows the
     name is worth looking at (has a sector, has an ADR reading)."""
@@ -591,7 +592,8 @@ def _load_ticker_universe(country, quotes):
             continue
         quote = quotes.get(ticker)
         adr = quote[2] if quote and len(quote) > 2 else None
-        out[ticker] = (tags[0], tags[1] if len(tags) > 1 else None, adr)
+        market_cap = tags[3] if len(tags) > 3 else None
+        out[ticker] = (tags[0], tags[1] if len(tags) > 1 else None, adr, market_cap)
     return out
 
 
@@ -614,7 +616,7 @@ def _compute_earnings_signals(country, lookback_days=5, min_gap=5.0, min_range=8
 
     tdir = config.ticker_dir(country)
     signals = []
-    for ticker, (sector, industry, adr) in universe.items():
+    for ticker, (sector, industry, adr, market_cap) in universe.items():
         path = os.path.join(tdir, ticker + ".json")
         if not os.path.exists(path):
             continue
@@ -671,7 +673,7 @@ def _compute_earnings_signals(country, lookback_days=5, min_gap=5.0, min_range=8
         trail_vols = [v for v in vols[max(0, n - 30):n] if v is not None]
         turnover = (sum(trail_vols) / len(trail_vols)) * closes[n] if trail_vols and closes[n] else None
         signals.append(dict(best, sym=ticker, sector=sector, industry=industry,
-                             adr=adr, turnover=turnover))
+                             adr=adr, turnover=turnover, marketCap=market_cap))
 
     signals.sort(key=lambda s: (s["daysAgo"], -s["volMult"]))
     return signals[:limit]
@@ -693,7 +695,7 @@ def _compute_cup_signals(country, min_correction=15.0, max_correction=40.0,
 
     tdir = config.ticker_dir(country)
     signals = []
-    for ticker, (sector, industry, adr) in universe.items():
+    for ticker, (sector, industry, adr, market_cap) in universe.items():
         path = os.path.join(tdir, ticker + ".json")
         if not os.path.exists(path):
             continue
@@ -756,6 +758,7 @@ def _compute_cup_signals(country, min_correction=15.0, max_correction=40.0,
             "turnover": turnover, "price": last_close, "chg": quote[1],
             "correction": round(correction, 0), "cupDays": n - peak_idx,
             "recovery": round(max(0, min(recovery, 300)), 0), "emaState": ema_state,
+            "marketCap": market_cap,
         })
 
     # Closest to exactly 100% (right at the old high — the textbook
@@ -1163,19 +1166,28 @@ def _signals_body():
       <label>Min avg turnover <b id="sig-turn-val">$20M</b></label>
       <input type="range" id="sig-turn-slider" min="0" max="200" step="10" value="20">
     </div>
+    <div class="filter-row">
+      <label>Min market cap <b id="sig-mcap-val">$0B</b></label>
+      <input type="range" id="sig-mcap-slider" min="0" max="500" step="5" value="0">
+    </div>
     <div id="sig-type-filters"></div>
-
-    <div class="rail-h">History</div>
-    <button class="btn" id="sig-week-toggle" style="width:100%">This week's list</button>
   </div>
   <div class="signals-main">
     <div id="signals-head">
       <h2 id="signals-title">Stage 2 breakout</h2>
       <div class="empty-note" id="signals-sub" style="margin:4px 0 0"></div>
     </div>
+    <input class="industry-search" id="sig-search" placeholder="Search by ticker…" autocomplete="off"
+      style="width:220px;margin:10px 0 0">
+    <!-- Last 5 trading sessions, oldest to newest left to right, today on the
+         right — click one or more to filter the feed to just those days;
+         nothing selected (the default) shows everything in the window. This
+         is what "This week's list" used to be a separate page for; folding
+         it into the feed itself means a day is a FILTER, not a different
+         view to switch to and back from. -->
+    <div class="sig-daystrip" id="sig-daystrip"></div>
     <div class="dim" id="signals-count" style="margin:10px 0"></div>
     <div class="sig-feed" id="signals-feed"></div>
-    <div id="signals-week" hidden></div>
   </div>
 </div>
 """.strip() + "\n" + _stock_pin_html()
@@ -1207,9 +1219,13 @@ def _watchlist_body():
       <label>Min ADR <b id="wl-adr-val">0.0%</b></label>
       <input type="range" id="wl-adr-slider" min="0" max="8" step="0.5" value="0">
     </div>
-    <div class="filter-row" style="margin-bottom:0">
+    <div class="filter-row">
       <label>Min avg turnover <b id="wl-turn-val">$0M</b></label>
       <input type="range" id="wl-turn-slider" min="0" max="200" step="10" value="0">
+    </div>
+    <div class="filter-row" style="margin-bottom:0">
+      <label>Min market cap <b id="wl-mcap-val">$0B</b></label>
+      <input type="range" id="wl-mcap-slider" min="0" max="500" step="5" value="0">
     </div>
   </div>
   <div class="signals-main">

@@ -1628,21 +1628,58 @@
     // anyway on the India page meant every visit opened on "nothing
     // qualifies" with the real signals one click away and easy to miss.
     let activeSig = DATA.tmleDir ? "breakout" : "earnings";
-    let adrMin = 2.0, turnMin = 20;
+    let adrMin = 2.0, turnMin = 20, mcapMin = 0;
     let hideExtended = false;
     let gapMin = 5, volMultMin = 2;
     let corrMin = 15, corrMax = 40;
+    let searchTerm = "";
+    // Which day-strip buttons are toggled on. Empty = no day filter at all --
+    // show the full window (today's live list unioned with whatever the log
+    // has for earlier days), which is also just what today alone looks like
+    // until there's more than one day of history to union with.
+    let selectedDays = [];
 
     function fmtTurnover(m) {
       if (m == null) return "—";
       return m >= 1e9 ? "$" + fmtNum(m / 1e9, 2) + "B" : "$" + fmtNum(m / 1e6, 1) + "M";
     }
+    function fmtMcap(v) {
+      if (v == null) return "—";
+      return v >= 1e9 ? "$" + fmtNum(v / 1e9, 1) + "B" : "$" + fmtNum(v / 1e6, 0) + "M";
+    }
     function passes(s) {
+      if (searchTerm && s.sym.toLowerCase().indexOf(searchTerm) === -1) return false;
+      // A historical-only row (fired on a past day, not in today's live
+      // scan) has none of the numeric fields to filter on -- it already
+      // qualified the day it fired, so only the search box still applies.
+      if (s.historical) return true;
       if ((s.adr || 0) < adrMin || (s.turnover || 0) < turnMin * 1e6) return false;
+      if ((s.marketCap || 0) < mcapMin * 1e9) return false;
       if (activeSig === "breakout") return !hideExtended || s.actionable;
       if (activeSig === "earnings") return s.gap >= gapMin || s.range >= gapMin * 1.6;
       if (activeSig === "cup") return s.correction >= corrMin && s.correction <= corrMax;
       return true;
+    }
+
+    // The last 5 logged trading sessions, oldest to newest -- rolls forward
+    // on its own as the log grows day by day, no separate "new week" logic
+    // needed since it's always just "whatever the last 5 entries are".
+    function recentDays() {
+      return (DATA.signalsLog || []).slice(-5);
+    }
+
+    // Every symbol that fired `type` on any of `days` (an empty array means
+    // every day currently in the log). Union, not intersection -- a name
+    // that fired Monday and again today shows once, not twice.
+    function symbolsForDays(type, days) {
+      const log = DATA.signalsLog || [];
+      const wanted = days.length ? days : log.map(function (d) { return d.date; });
+      const set = new Set();
+      log.forEach(function (day) {
+        if (wanted.indexOf(day.date) === -1) return;
+        (day[type] || []).forEach(function (sym) { set.add(sym); });
+      });
+      return set;
     }
 
     function drawTypeFilters() {
@@ -1678,31 +1715,86 @@
       }
     }
 
+    // The day-strip itself: last 5 sessions, oldest to newest left to right
+    // (today rightmost), each a toggle -- clicking one adds/removes it from
+    // selectedDays; clicking a SELECTED one again clears it back to "no
+    // filter". A separate "All" pill makes clearing an explicit action too,
+    // for when more than one day is selected.
+    function drawDayStrip() {
+      const host = document.getElementById("sig-daystrip");
+      const days = recentDays();
+      if (!days.length) {
+        host.innerHTML = '<span class="dim" style="font-size:11.5px">History fills in day by day as the refresh runs.</span>';
+        return;
+      }
+      const todayStr = new Date().toISOString().slice(0, 10);
+      host.innerHTML = '<button class="sig-day-quick' + (!selectedDays.length ? " active" : "") + '" data-quick="all">All</button>'
+        + '<span class="sig-day-sep"></span>'
+        + days.map(function (day) {
+            const d = new Date(day.date + "T00:00:00");
+            const dow = d.toLocaleDateString(undefined, { weekday: "short" });
+            const dom = d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
+            const sel = selectedDays.indexOf(day.date) !== -1;
+            return '<button class="sig-day-btn' + (sel ? " selected" : "") + '" data-date="' + day.date + '" '
+              + 'title="' + (day.date === todayStr ? "Today" : day.date) + '">'
+              + '<span class="dow">' + dow + '</span><span class="dom">' + dom + '</span></button>';
+          }).join("");
+      host.querySelectorAll(".sig-day-btn").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          const d = btn.dataset.date;
+          const idx = selectedDays.indexOf(d);
+          if (idx === -1) selectedDays.push(d); else selectedDays.splice(idx, 1);
+          drawDayStrip();
+          draw();
+        });
+      });
+      host.querySelectorAll('[data-quick="all"]').forEach(function (btn) {
+        btn.addEventListener("click", function () { selectedDays = []; drawDayStrip(); draw(); });
+      });
+    }
+
     function draw() {
-      document.getElementById("signals-week").hidden = true;
-      document.getElementById("signals-feed").hidden = false;
       const cfg = SIGNAL_CONFIG[activeSig];
-      const allSignals = SOURCES[activeSig];
+      const liveSignals = SOURCES[activeSig];
       document.getElementById("signals-title").textContent = cfg.title;
       document.getElementById("signals-sub").innerHTML = cfg.sub + (cfg.note
         ? '<div class="dim" style="margin-top:6px;font-size:11.5px">' + cfg.note + '</div>' : "");
       document.getElementById("sig-adr-val").textContent = fmtNum(adrMin, 1) + "%";
       document.getElementById("sig-turn-val").textContent = fmtTurnover(turnMin * 1e6);
+      document.getElementById("sig-mcap-val").textContent = "$" + fmtNum(mcapMin, 0) + "B";
       Object.keys(SOURCES).forEach(function (k) {
         const el = document.getElementById("sig-count-" + k);
         if (el) el.textContent = SOURCES[k].filter(passes).length;
       });
 
-      const rows = allSignals.filter(passes).sort(SORTERS[activeSig]);
-      document.getElementById("signals-count").textContent = allSignals.length
-        ? rows.length + " of " + allSignals.length + " candidates clear the filters"
+      // Merge: every symbol logged for the selected day(s) (or the whole
+      // window, if none are selected), backed by today's live stats where
+      // the name still shows up there, or flagged historical when it
+      // doesn't -- a name that fired Wednesday and no longer qualifies
+      // today still gets a row, just without live price/ADR/etc. to show.
+      const liveById = {};
+      liveSignals.forEach(function (s) { liveById[s.sym] = s; });
+      const symbols = symbolsForDays(activeSig, selectedDays);
+      const merged = Array.from(symbols).map(function (sym) {
+        return liveById[sym] || { sym: sym, historical: true };
+      });
+      const rows = merged.filter(passes).sort(function (a, b) {
+        if (!!a.historical !== !!b.historical) return a.historical ? 1 : -1;
+        return a.historical ? a.sym.localeCompare(b.sym) : SORTERS[activeSig](a, b);
+      });
+
+      const windowLabel = selectedDays.length
+        ? selectedDays.length + " selected day" + (selectedDays.length === 1 ? "" : "s")
+        : "the last " + Math.max(recentDays().length, 1) + " session" + (recentDays().length === 1 ? "" : "s");
+      document.getElementById("signals-count").textContent = merged.length
+        ? rows.length + " of " + merged.length + " candidates clear the filters, from " + windowLabel
         : "Nothing qualifies right now" + (activeSig === "breakout" && !DATA.tmleDir
             ? " — TMLE isn't scored for this market yet, so this signal has nothing to show here."
             : " — check back after the next update, or after the market's had a chance to move.");
 
       const feed = document.getElementById("signals-feed");
       if (!rows.length) {
-        feed.innerHTML = '<div class="empty-note">' + (allSignals.length
+        feed.innerHTML = '<div class="empty-note">' + (merged.length
           ? "Nothing clears these filters right now. Loosen the liquidity floor or the signal-specific filter on the left."
           : (activeSig === "breakout" && !DATA.tmleDir
               ? "TMLE isn't scored for this market yet — Stage 2 breakout has nothing to show here. "
@@ -1713,6 +1805,15 @@
       }
 
       feed.innerHTML = rows.map(function (s) {
+        if (s.historical) {
+          return '<div class="sig-card historical" data-sym="' + s.sym + '">'
+            + '<div class="sig-top">'
+              + sigLogoImg(s.sym, cls)
+              + '<span class="sig-sym-block"><span class="sig-sym">' + s.sym + '</span><span class="sig-ind">from the log — not in today\'s live scan</span></span>'
+              + '<span class="sig-chip forming">Historical</span>'
+            + '</div>'
+          + '</div>';
+        }
         const up = (s.chg || 0) >= 0;
         const chip = cfg.chip(s);
         return '<div class="sig-card" data-sym="' + s.sym + '">'
@@ -1762,55 +1863,10 @@
         btn.addEventListener("click", function (e) {
           e.stopPropagation();
           const sym = btn.dataset.sym;
-          const item = allSignals.find(function (r) { return r.sym === sym; });
+          const item = liveById[sym];
           if (item) addToWatchlist(item, activeSig);
           btn.textContent = "Added ✓";
           setTimeout(function () { draw(); }, 1200);
-        });
-      });
-    }
-
-    // Monday through Friday, most recent session last, each day showing
-    // exactly what fired that day (symbol only — click one to pull up its
-    // current pin; a past day's own stats aren't kept, only what qualified).
-    // Missing a day in the log (a holiday, the refresh not having run yet)
-    // shows as an empty day rather than skipping it, so a gap is visible
-    // instead of silently making the week look shorter than it was.
-    function drawWeek() {
-      document.getElementById("signals-feed").hidden = true;
-      const host = document.getElementById("signals-week");
-      host.hidden = false;
-      const log = (DATA.signalsLog || []).slice(-5);
-      if (!log.length) {
-        host.innerHTML = '<div class="empty-note">No history yet — this fills in day by day as the refresh runs.</div>';
-        return;
-      }
-      const todayStr = new Date().toISOString().slice(0, 10);
-      const TYPE_LABEL = { breakout: "Stage 2 breakout", earnings: "Earnings / gap", cup: "Cup formation" };
-      host.innerHTML = log.slice().reverse().map(function (day) {
-        const d = new Date(day.date + "T00:00:00");
-        const dow = d.toLocaleDateString(undefined, { weekday: "long" });
-        return '<div class="sig-week-day">'
-          + '<div class="sig-week-head"><span class="sig-week-dow">' + dow + '</span>'
-            + '<span class="sig-week-date">' + day.date + '</span>'
-            + (day.date === todayStr ? '<span class="sig-week-today">Latest</span>' : '')
-          + '</div>'
-          + Object.keys(TYPE_LABEL).map(function (type) {
-              const list = day[type] || [];
-              return '<div class="sig-week-row"><span class="sig-week-type">' + TYPE_LABEL[type] + '</span>'
-                + (list.length
-                    ? '<span class="sig-week-tickers">' + list.map(function (sym) {
-                        return '<span data-sym="' + sym + '">' + sym + '</span>';
-                      }).join(', ') + '</span>'
-                    : '<span class="sig-week-empty">none</span>')
-              + '</div>';
-            }).join("")
-        + '</div>';
-      }).join("");
-      host.querySelectorAll(".sig-week-tickers span").forEach(function (el) {
-        el.addEventListener("click", function () {
-          Sync.publish({ ticker: el.dataset.sym });
-          openStockPin(el.dataset.sym, "This week");
         });
       });
     }
@@ -1826,11 +1882,8 @@
     });
     document.getElementById("sig-adr-slider").addEventListener("input", function (e) { adrMin = Number(e.target.value); draw(); });
     document.getElementById("sig-turn-slider").addEventListener("input", function (e) { turnMin = Number(e.target.value); draw(); });
-    document.getElementById("sig-week-toggle").addEventListener("click", function () {
-      const showingWeek = !document.getElementById("signals-week").hidden;
-      if (showingWeek) draw(); else drawWeek();
-      this.classList.toggle("active", !showingWeek);
-    });
+    document.getElementById("sig-mcap-slider").addEventListener("input", function (e) { mcapMin = Number(e.target.value); draw(); });
+    document.getElementById("sig-search").addEventListener("input", function (e) { searchTerm = e.target.value.trim().toLowerCase(); draw(); });
     // Sync the rail's highlighted item to whatever activeSig actually
     // defaulted to — the markup always marks "breakout" active, which is
     // only right when that's really the tab about to be drawn.
@@ -1838,6 +1891,7 @@
       i.classList.toggle("active", i.dataset.sig === activeSig);
     });
     drawTypeFilters();
+    drawDayStrip();
     draw();
   }
 
@@ -1873,7 +1927,7 @@
     const cls = DATA.classification || {};
     let watchlists = loadWatchlists();
     let activeList = Object.keys(watchlists)[0];
-    let wlSector = "", wlIndustry = "", wlIndex = "", wlAdrMin = 0, wlTurnMin = 0;
+    let wlSector = "", wlIndustry = "", wlIndex = "", wlAdrMin = 0, wlTurnMin = 0, wlMcapMin = 0;
 
     function fmtTurnover(m) {
       if (m == null) return "—";
@@ -1918,6 +1972,9 @@
       document.getElementById("wl-turn-val").textContent = fmtTurnover(wlTurnMin * 1e6);
       document.getElementById("wl-adr-slider").oninput = function (e) { wlAdrMin = Number(e.target.value); drawMain(); };
       document.getElementById("wl-turn-slider").oninput = function (e) { wlTurnMin = Number(e.target.value); drawMain(); };
+      document.getElementById("wl-mcap-slider").value = wlMcapMin;
+      document.getElementById("wl-mcap-val").textContent = "$" + fmtNum(wlMcapMin, 0) + "B";
+      document.getElementById("wl-mcap-slider").oninput = function (e) { wlMcapMin = Number(e.target.value); drawMain(); };
     }
 
     function drawMain() {
@@ -1925,6 +1982,7 @@
       const all = watchlists[activeList] || [];
       const items = all.filter(function (it) {
         return (it.adr || 0) >= wlAdrMin && (it.turnover || 0) >= wlTurnMin * 1e6
+          && (it.marketCap || 0) >= wlMcapMin * 1e9
           && (!wlIndex || sigIndexOf(it.sym) === wlIndex)
           && (!wlSector || it.sector === wlSector)
           && (!wlIndustry || it.industry === wlIndustry);

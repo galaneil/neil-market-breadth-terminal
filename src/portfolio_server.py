@@ -1993,6 +1993,9 @@ const ICONS = {
   "TMLE Leaders": icon('<circle cx="12" cy="8" r="6"/>'
     + '<polyline points="8.5 13.5 7 22 12 19 17 22 15.5 13.5"/>'),
   "TMLE Emerging": icon('<line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/>'),
+  "Signals": icon('<path d="M12 12m-1 0a1 1 0 1 0 2 0a1 1 0 1 0 -2 0"/>'
+    + '<path d="M8.5 8.5a5 5 0 0 1 7 0"/><path d="M5.5 5.5a9 9 0 0 1 13 0"/>'),
+  "Watchlist": icon('<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>'),
   "System Architecture": icon('<circle cx="12" cy="12" r="3"/>'
     + '<path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/>'),
   "Live Portfolio": icon('<rect x="2" y="7" width="20" height="14" rx="2"/>'
