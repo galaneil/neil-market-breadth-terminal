@@ -67,6 +67,13 @@ DOCS_ROOT = config.DOCS_DIR
 # than two competing sidebar rows. Selecting the row shows a small in-content
 # toggle for its children plus a one-line note on what each one is, rather
 # than expanding the sidebar itself.
+# Three separate sidebar sections, each its own labelled list (NOT the
+# "children" grouping mechanism used below for Sector & Industry / Indices --
+# that mechanism stacks every child on one page when the group itself is
+# clicked, which is right for a handful of tightly-related sub-views but
+# wrong for a whole category of otherwise-unrelated panels. Market Breadth /
+# Signals / Algorithms are plain flat lists under their own header, same as
+# Portfolio and System already are.
 HUB_PANELS = [
     {"label": "Market Environment", "path": "panel-summary.html"},
     # Each country tracks a different set of indices (US: 3, India: 4), so
@@ -85,8 +92,6 @@ HUB_PANELS = [
                  "the member stocks actually driving it."},
     ]},
     {"label": "Money Flows", "path": "panel-groups.html"},
-    {"label": "Signals", "path": "panel-signals.html"},
-    {"label": "Watchlist", "path": "panel-watchlist.html"},
     # Used to be a group of two raw-counts pages with no read on what they
     # meant. Now a single page with a regime badge and a verdict computed
     # over a window you pick, backed by the same two series. The individual
@@ -102,6 +107,14 @@ HUB_PANELS = [
     {"label": "Screener", "path": "panel-screener.html"},
     {"label": "Market Replay", "path": "panel-replay.html"},
     {"label": "Stock Lookup", "path": "panel-stock.html"},
+]
+
+SIGNALS_PANELS = [
+    {"label": "Signals", "path": "panel-signals.html"},
+    {"label": "Watchlist", "path": "panel-watchlist.html"},
+]
+
+ALGORITHMS_PANELS = [
     {"label": "TMLE Leaders", "path": "panel-tmle-leaders.html"},
     {"label": "TMLE Emerging", "path": "panel-tmle-emerging.html"},
 ]
@@ -1780,6 +1793,8 @@ def _hub_nav_json():
             "code": code, "label": cfg.get("short", code),
             "flag": flags.flag(code) if flags else "",
             "panels": [resolve(entry, cfg, prefix) for entry in HUB_PANELS],
+            "signalsPanels": [resolve(entry, cfg, prefix) for entry in SIGNALS_PANELS],
+            "algorithmsPanels": [resolve(entry, cfg, prefix) for entry in ALGORITHMS_PANELS],
             "systemPanels": [resolve(entry, cfg, prefix) for entry in SYSTEM_PANELS],
         })
     return json.dumps(countries)
@@ -1912,6 +1927,10 @@ HUB_PAGE = r"""<!doctype html>
   </div>
   <div class="group-label">Market Breadth</div>
   <nav id="panel-nav"></nav>
+  <div class="group-label">Signals</div>
+  <nav id="signals-nav"></nav>
+  <div class="group-label">Algorithms</div>
+  <nav id="algorithms-nav"></nav>
   <div class="group-label">Portfolio</div>
   <nav id="portfolio-nav"></nav>
   <div class="group-label">System</div>
@@ -1990,7 +2009,11 @@ let pins = JSON.parse(localStorage.getItem("hub-pins") || "[]");
 // the synthetic Portfolio entry, so pinning and restoring do not care which
 // section something came from.
 function topLevelItems() {
-  return country.panels.concat([portfolioItem]).concat(country.systemPanels || []);
+  return country.panels
+    .concat(country.signalsPanels || [])
+    .concat(country.algorithmsPanels || [])
+    .concat([portfolioItem])
+    .concat(country.systemPanels || []);
 }
 
 // Nav rows are rebuilt with innerHTML on pretty much every interaction (a pin
@@ -2081,7 +2104,8 @@ function pinButton(item) {
 }
 
 function refreshNav() {
-  renderPanelNav(); renderPortfolioNav(); renderSystemNav(); renderPinned();
+  renderPanelNav(); renderSignalsNav(); renderAlgorithmsNav();
+  renderPortfolioNav(); renderSystemNav(); renderPinned();
 }
 
 function wireItem(a, item) {
@@ -2150,6 +2174,14 @@ function renderSystemNav() {
 
 function renderPanelNav() {
   renderGroup(document.getElementById("panel-nav"), country.panels);
+}
+
+function renderSignalsNav() {
+  renderGroup(document.getElementById("signals-nav"), country.signalsPanels || []);
+}
+
+function renderAlgorithmsNav() {
+  renderGroup(document.getElementById("algorithms-nav"), country.algorithmsPanels || []);
 }
 
 function renderCountrySwitch() {
