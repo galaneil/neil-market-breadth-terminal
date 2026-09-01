@@ -563,6 +563,238 @@ def _compute_breakout_signals(country, max_days=14, limit=60):
     return signals[:limit]
 
 
+def _ema_series(values, period):
+    """Plain EMA over a list, None carried through as a hold rather than a
+    reset -- a data gap doesn't erase the average, it just has nothing new
+    to blend in that day. Same definition dashboard.js's emaSeries() uses."""
+    k = 2 / (period + 1)
+    out = []
+    prev = None
+    for v in values:
+        if v is None:
+            out.append(prev)
+            continue
+        prev = v if prev is None else v * k + prev * (1 - k)
+        out.append(prev)
+    return out
+
+
+def _load_ticker_universe(country, quotes):
+    """{ticker: [sector, industry, adr]} for every classified, liquid-enough
+    name -- the shared starting point for both signal scanners below, so
+    each only opens a ticker's own price file once it already knows the
+    name is worth looking at (has a sector, has an ADR reading)."""
+    classification = _load_classification(country)
+    out = {}
+    for ticker, tags in classification.items():
+        if not tags or not tags[0]:
+            continue
+        quote = quotes.get(ticker)
+        adr = quote[2] if quote and len(quote) > 2 else None
+        out[ticker] = (tags[0], tags[1] if len(tags) > 1 else None, adr)
+    return out
+
+
+def _compute_earnings_signals(country, lookback_days=5, min_gap=5.0, min_range=8.0,
+                               min_vol_mult=2.0, limit=60):
+    """A clean gap up, OR a wide-range day that gave back most of its gain --
+    both say the same thing: something changed. Scanned straight off each
+    ticker's own price file (open/high/low/close/volume, already published),
+    not gated on TMLE at all -- this is why it can cover India too, unlike
+    Stage 2 breakout which genuinely needs TMLE's stage classification and
+    has no India equivalent yet.
+    """
+    data_dir_ = config.data_dir(country)
+    quotes_path = os.path.join(data_dir_, "hilo_quotes.json")
+    quotes = {}
+    if os.path.exists(quotes_path):
+        with open(quotes_path, encoding="utf-8") as f:
+            quotes = json.load(f)
+    universe = _load_ticker_universe(country, quotes)
+
+    tdir = config.ticker_dir(country)
+    signals = []
+    for ticker, (sector, industry, adr) in universe.items():
+        path = os.path.join(tdir, ticker + ".json")
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path, encoding="utf-8") as f:
+                p = json.load(f)
+        except Exception:
+            continue
+        closes = p.get("close") or []
+        n = len(closes) - 1
+        if n < 35:
+            continue
+        opens, highs, lows, vols = p.get("open") or [], p.get("high") or [], p.get("low") or [], p.get("volume") or []
+
+        best = None
+        for days_ago in range(0, min(lookback_days, n)):
+            i = n - days_ago
+            if i < 31 or closes[i] is None or closes[i - 1] is None:
+                continue
+            prev_close = closes[i - 1]
+            if not prev_close:
+                continue
+            o, h, l, c = opens[i], highs[i], lows[i], closes[i]
+            if o is None or h is None or l is None:
+                continue
+            gap = (o / prev_close - 1) * 100
+            rng = (h - l) / prev_close * 100
+            chg = (c / prev_close - 1) * 100
+            trail_vols = [v for v in vols[max(0, i - 30):i] if v is not None]
+            if not trail_vols or vols[i] is None:
+                continue
+            vol_mult = vols[i] / (sum(trail_vols) / len(trail_vols)) if sum(trail_vols) else 0
+            if vol_mult < min_vol_mult or (gap < min_gap and rng < min_range):
+                continue
+            # A gap up that round-trips to a red close ("gap and crap") is a
+            # bearish reversal, not the bullish catalyst this signal is for
+            # -- long-only for now, same as the short side being explicitly
+            # deferred. Requiring the close to hold AT OR ABOVE the PRIOR
+            # close (chg >= 0) keeps a wide-range day that gave back some of
+            # its intraday high (still a real signal, still finished green)
+            # while dropping anything that finished the session net negative.
+            if chg < 0:
+                continue
+            giveback = 0.0
+            if h > o:
+                giveback = max(0.0, (h - c) / (h - o) * 100) if h != o else 0.0
+            best = {"daysAgo": days_ago, "gap": round(gap, 1), "range": round(rng, 1),
+                    "chg": round(chg, 2), "volMult": round(vol_mult, 1),
+                    "giveback": round(min(giveback, 100), 0), "price": c}
+            break  # most recent qualifying day wins; older ones are noise once a fresher one fired
+
+        if best is None:
+            continue
+        trail_vols = [v for v in vols[max(0, n - 30):n] if v is not None]
+        turnover = (sum(trail_vols) / len(trail_vols)) * closes[n] if trail_vols and closes[n] else None
+        signals.append(dict(best, sym=ticker, sector=sector, industry=industry,
+                             adr=adr, turnover=turnover))
+
+    signals.sort(key=lambda s: (s["daysAgo"], -s["volMult"]))
+    return signals[:limit]
+
+
+def _compute_cup_signals(country, min_correction=15.0, max_correction=40.0,
+                          window=130, limit=60):
+    """A real reset, not a crack: price ran up, corrected 15-40% into a
+    rounded low, and is on its way back. Same price-file scan as the
+    earnings signal, needs no TMLE -- covers India the same way.
+    """
+    data_dir_ = config.data_dir(country)
+    quotes_path = os.path.join(data_dir_, "hilo_quotes.json")
+    quotes = {}
+    if os.path.exists(quotes_path):
+        with open(quotes_path, encoding="utf-8") as f:
+            quotes = json.load(f)
+    universe = _load_ticker_universe(country, quotes)
+
+    tdir = config.ticker_dir(country)
+    signals = []
+    for ticker, (sector, industry, adr) in universe.items():
+        path = os.path.join(tdir, ticker + ".json")
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path, encoding="utf-8") as f:
+                p = json.load(f)
+        except Exception:
+            continue
+        closes = p.get("close") or []
+        n = len(closes) - 1
+        if n < window:
+            continue
+        start = n - window
+        win_closes = closes[start:n + 1]
+        if any(v is None for v in win_closes):
+            continue
+
+        # Peak excludes the most recent 10 sessions -- "the peak" has to be
+        # something the price has already turned away from, not today.
+        peak_search = win_closes[:-10] if len(win_closes) > 10 else win_closes
+        if not peak_search:
+            continue
+        peak_rel = max(range(len(peak_search)), key=lambda i: peak_search[i])
+        peak_idx = start + peak_rel
+        trough_slice = closes[peak_idx:n + 1]
+        trough_rel = min(range(len(trough_slice)), key=lambda i: trough_slice[i])
+        trough_idx = peak_idx + trough_rel
+
+        peak_close, trough_close, last_close = closes[peak_idx], closes[trough_idx], closes[n]
+        if not peak_close or peak_close <= 0:
+            continue
+        correction = (peak_close - trough_close) / peak_close * 100
+        if not (min_correction <= correction <= max_correction):
+            continue
+
+        span = peak_close - trough_close
+        recovery = ((last_close - trough_close) / span * 100) if span > 0 else 0
+
+        ema10 = _ema_series(closes, 10)[n]
+        ema20 = _ema_series(closes, 20)[n]
+        ema50 = _ema_series(closes, 50)[n]
+        if None in (ema10, ema20, ema50) or not last_close:
+            ema_state = "converged"
+        else:
+            spread_pct = (max(ema10, ema20, ema50) - min(ema10, ema20, ema50)) / last_close * 100
+            if spread_pct < 3:
+                ema_state = "converged"
+            elif ema10 > ema20 > ema50 and last_close > ema10:
+                ema_state = "re-extending"
+            else:
+                ema_state = "diverging"
+
+        quote = quotes.get(ticker) or [None, None]
+        vols = p.get("volume") or []
+        trail_vols = [v for v in vols[max(0, n - 30):n] if v is not None]
+        turnover = (sum(trail_vols) / len(trail_vols)) * last_close if trail_vols else None
+
+        signals.append({
+            "sym": ticker, "sector": sector, "industry": industry, "adr": adr,
+            "turnover": turnover, "price": last_close, "chg": quote[1],
+            "correction": round(correction, 0), "cupDays": n - peak_idx,
+            "recovery": round(max(0, min(recovery, 300)), 0), "emaState": ema_state,
+        })
+
+    # Closest to exactly 100% (right at the old high — the textbook
+    # resolution point) sorts first, not just highest recovery. Ranking by
+    # raw recovery alone surfaced only names already well past their old
+    # high and long since broken out, which is a different, later story
+    # than "coming out of the cup" — every single result landed at the same
+    # capped value the first time this ran, which is what caught it.
+    signals.sort(key=lambda s: abs(s["recovery"] - 100))
+    return signals[:limit]
+
+
+# One entry per trading day, per country -- "did I see this fire this week"
+# needs the days to actually be kept, not just today's live snapshot. Keyed
+# by date so re-rendering the SAME day (testing, a retry) overwrites that
+# day's entry rather than duplicating it; a new date appends. Trimmed to the
+# last 10 sessions on write -- two trading weeks is plenty for a "what did I
+# miss" glance without the file growing forever.
+def _update_signals_log(country, date, breakout, earnings, cup):
+    if not date:
+        return
+    path = os.path.join(config.data_dir(country), "signals_log.jsonl")
+    rows = store.read_jsonl(path)
+    entry = {
+        "date": date,
+        "breakout": [s["sym"] for s in breakout],
+        "earnings": [s["sym"] for s in earnings],
+        "cup": [s["sym"] for s in cup],
+    }
+    rows = [r for r in rows if r.get("date") != date]
+    rows.append(entry)
+    rows.sort(key=lambda r: r["date"])
+    rows = rows[-10:]
+    with open(path, "w", encoding="utf-8") as f:
+        for r in rows:
+            f.write(json.dumps(r, separators=(",", ":")) + "\n")
+    return rows
+
+
 def _tmle_latest(country):
     """Most recent leaderboard row, plus the score changes that drive the
     emerging view. Both are derived here rather than in the browser: the full
@@ -894,10 +1126,11 @@ rank history — plus which member stocks are actually driving it.</div>
 
 
 def _signals_body():
-    # One signal type built out end to end (Stage 2 breakout, computed
-    # server-side in _compute_breakout_signals from the same TMLE data the
-    # Leaders page already shows), with the rest of the roadmap visible but
-    # marked "soon" — each one lands as a new row here, not a new page.
+    # Three signal types built out end to end, all computed server-side
+    # straight from data already published (TMLE for breakout; each
+    # ticker's own price file for earnings and cup — which is why those two
+    # cover India and breakout doesn't: TMLE simply hasn't run there yet).
+    # The short side stays "soon" until the long side has proven itself.
     return """
 <div class="signals-shell">
   <div class="signals-rail" id="signals-rail">
@@ -907,10 +1140,16 @@ def _signals_body():
       <span class="sig-label">Stage 2 breakout</span>
       <span class="sig-count" id="sig-count-breakout">0</span>
     </div>
-    <div class="sig-item soon"><span class="sig-dot" style="background:var(--warn)"></span>
-      <span class="sig-label">Earnings / gap turnaround</span><span class="soon-tag">soon</span></div>
-    <div class="sig-item soon"><span class="sig-dot" style="background:var(--accent)"></span>
-      <span class="sig-label">Cup formation</span><span class="soon-tag">soon</span></div>
+    <div class="sig-item" data-sig="earnings">
+      <span class="sig-dot" style="background:var(--warn)"></span>
+      <span class="sig-label">Earnings / gap turnaround</span>
+      <span class="sig-count" id="sig-count-earnings">0</span>
+    </div>
+    <div class="sig-item" data-sig="cup">
+      <span class="sig-dot" style="background:var(--accent)"></span>
+      <span class="sig-label">Cup formation</span>
+      <span class="sig-count" id="sig-count-cup">0</span>
+    </div>
     <div class="sig-item soon"><span class="sig-dot" style="background:var(--down)"></span>
       <span class="sig-label">Stage 4 breakdown (short)</span><span class="soon-tag">soon</span></div>
 
@@ -923,9 +1162,10 @@ def _signals_body():
       <label>Min avg turnover <b id="sig-turn-val">$20M</b></label>
       <input type="range" id="sig-turn-slider" min="0" max="200" step="10" value="20">
     </div>
-    <div class="rail-h">Extension</div>
-    <div class="filter-row" style="margin-bottom:0"><label style="display:flex;align-items:center;gap:7px;margin-bottom:0">
-      <input type="checkbox" id="sig-hide-extended" style="margin:0">Hide extended (watchlist-only)</label></div>
+    <div id="sig-type-filters"></div>
+
+    <div class="rail-h">History</div>
+    <button class="btn" id="sig-week-toggle" style="width:100%">This week's list</button>
   </div>
   <div class="signals-main">
     <div id="signals-head">
@@ -934,6 +1174,7 @@ def _signals_body():
     </div>
     <div class="dim" id="signals-count" style="margin:10px 0"></div>
     <div class="sig-feed" id="signals-feed"></div>
+    <div id="signals-week" hidden></div>
   </div>
 </div>
 """.strip() + "\n" + _stock_pin_html()
@@ -1221,9 +1462,18 @@ def render_all_panels(country):
     ))
 
     sig_extra = dict(_screener_payload(country))
-    sig_extra["signals"] = _compute_breakout_signals(country)
+    breakout_signals = _compute_breakout_signals(country)
+    earnings_signals = _compute_earnings_signals(country)
+    cup_signals = _compute_cup_signals(country)
+    sig_extra["signals"] = breakout_signals
+    sig_extra["earningsSignals"] = earnings_signals
+    sig_extra["cupSignals"] = cup_signals
     if cfg.get("run_tmle"):
         sig_extra["tmleDir"] = "tmle"
+    env_rows = series.get("environment") or []
+    as_of = env_rows[-1]["date"] if env_rows else None
+    sig_extra["signalsLog"] = _update_signals_log(
+        country, as_of, breakout_signals, earnings_signals, cup_signals)
     paths.append(_write_panel(
         country, "panel-signals.html", "Signals",
         _signals_body(), sig_extra, generated_at,

@@ -1522,6 +1522,63 @@
           ["From base low", s.gain != null ? "+" + Math.round(s.gain) + "%" : "—", "up"],
         ];
       },
+      note: "TMLE-scored, US only — this signal needs Stage classification, which "
+        + "doesn't run for India yet. Earnings/gap and Cup formation don't depend on "
+        + "TMLE at all, which is why those two work for both markets.",
+    },
+    earnings: {
+      title: "Earnings / gap turnaround",
+      sub: "Either a clean gap up, or a wide-range day that gave back some of its gain but "
+        + "still closed green — both say the same thing: something changed. Volume multiple "
+        + "(today vs. its own 30-day average) is what tells a real move apart from noise. "
+        + "A gap that fully reversed to a red close is left out — that's a bearish signal, "
+        + "not this one.",
+      chip: function (s) { return s.gap >= gapMin ? ["gap", "Gap up"] : ["forming", "Wide range"]; },
+      reason: function (s) {
+        const gaveBack = s.giveback >= 30;
+        return (s.gap >= gapMin
+            ? "Gapped up <b>+" + s.gap + "%</b>"
+            : "Traced a <b>" + s.range + "%</b> high-low range, closed <b>"
+              + (s.chg >= 0 ? "+" : "") + s.chg + "%</b>")
+          + " on <b>" + s.volMult.toFixed(1) + "&times;</b> its 30-day average volume"
+          + (gaveBack ? " — gave back <b>" + s.giveback + "%</b> of the day's high, still closed green" : "")
+          + ", " + s.daysAgo + " session" + (s.daysAgo === 1 ? "" : "s") + " ago";
+      },
+      facts: function (s) {
+        return [
+          ["Sector", s.sector || "—"], ["Industry", s.industry || "—"],
+          ["Gap (open vs. prior close)", (s.gap >= 0 ? "+" : "") + s.gap + "%", s.gap >= 0 ? "up" : "down"],
+          ["Day's range (high-low)", s.range + "%"],
+          ["Volume vs. 30d average", s.volMult.toFixed(1) + "×", "up"],
+          ["Gave back from high", s.giveback + "%", s.giveback >= 30 ? "down" : ""],
+        ];
+      },
+    },
+    cup: {
+      title: "Cup formation",
+      sub: "A real reset, not a crack: price ran up, corrected 15–40% into a rounded low, "
+        + "and is on its way back — <b>re-extending</b> means the moving averages are "
+        + "spreading apart again on the way out; <b>converged</b> means it's still basing "
+        + "right at the bottom; <b>diverging</b> means it's still running, too early to call "
+        + "the cup done. Sorted by how close to exactly back at the old high — the textbook "
+        + "resolution point — not just \"most recovered\".",
+      chip: function (s) { return s.emaState === "re-extending" ? ["cup-ready", "Cup, re-extending"] : ["forming", "Cup, " + s.emaState]; },
+      reason: function (s) {
+        const stateWords = { diverging: "still running, moving averages spreading — too early to call the cup done",
+          converged: "moving averages converged while it based — right at the bottom of the cup",
+          "re-extending": "moving averages beginning to spread again — coming out the other side" };
+        return "<b>" + s.correction + "%</b> correction over " + s.cupDays + " sessions, now <b>"
+          + s.recovery + "%</b> of the way back to its old high — " + stateWords[s.emaState];
+      },
+      facts: function (s) {
+        return [
+          ["Sector", s.sector || "—"], ["Industry", s.industry || "—"],
+          ["Correction depth", s.correction + "%", "down"],
+          ["Sessions in the cup", s.cupDays],
+          ["Recovered toward old high", s.recovery + "%", "up"],
+          ["EMA10/20/50 state", s.emaState],
+        ];
+      },
     },
   };
 
@@ -1543,35 +1600,97 @@
     const railEl = document.getElementById("signals-rail");
     if (!railEl) return;
     const cls = DATA.classification || {};
-    const allSignals = DATA.signals || [];
-    let adrMin = 2.0, turnMin = 20, hideExtended = false;
+    const SOURCES = {
+      breakout: DATA.signals || [],
+      earnings: DATA.earningsSignals || [],
+      cup: DATA.cupSignals || [],
+    };
+    const SORTERS = {
+      breakout: function (a, b) { return a.daysInStage - b.daysInStage; },
+      earnings: function (a, b) { return a.daysAgo - b.daysAgo || b.volMult - a.volMult; },
+      cup: function (a, b) { return Math.abs(a.recovery - 100) - Math.abs(b.recovery - 100); },
+    };
+    let activeSig = "breakout";
+    let adrMin = 2.0, turnMin = 20;
+    let hideExtended = false;
+    let gapMin = 5, volMultMin = 2;
+    let corrMin = 15, corrMax = 40;
 
     function fmtTurnover(m) {
       if (m == null) return "—";
       return m >= 1e9 ? "$" + fmtNum(m / 1e9, 2) + "B" : "$" + fmtNum(m / 1e6, 1) + "M";
     }
     function passes(s) {
-      return (s.adr || 0) >= adrMin && (s.turnover || 0) >= turnMin * 1e6 && (!hideExtended || s.actionable);
+      if ((s.adr || 0) < adrMin || (s.turnover || 0) < turnMin * 1e6) return false;
+      if (activeSig === "breakout") return !hideExtended || s.actionable;
+      if (activeSig === "earnings") return s.gap >= gapMin || s.range >= gapMin * 1.6;
+      if (activeSig === "cup") return s.correction >= corrMin && s.correction <= corrMax;
+      return true;
+    }
+
+    function drawTypeFilters() {
+      const host = document.getElementById("sig-type-filters");
+      if (activeSig === "breakout") {
+        host.innerHTML = '<div class="rail-h">Extension</div>'
+          + '<div class="filter-row" style="margin-bottom:0"><label style="display:flex;align-items:center;gap:7px;margin-bottom:0">'
+          + '<input type="checkbox" id="sig-hide-extended" style="margin:0">Hide extended (watchlist-only)</label></div>';
+        document.getElementById("sig-hide-extended").checked = hideExtended;
+        document.getElementById("sig-hide-extended").addEventListener("change", function (e) { hideExtended = e.target.checked; draw(); });
+      } else if (activeSig === "earnings") {
+        host.innerHTML = '<div class="rail-h">Move size</div>'
+          + '<div class="filter-row"><label>Min gap / wide-range <b id="sig-gap-val">5.0%</b></label>'
+          + '<input type="range" id="sig-gap-slider" min="1" max="15" step="0.5" value="' + gapMin + '"></div>'
+          + '<div class="filter-row" style="margin-bottom:0"><label>Min volume multiple <b id="sig-volmult-val">2.0&times;</b></label>'
+          + '<input type="range" id="sig-volmult-slider" min="1" max="8" step="0.5" value="' + volMultMin + '"></div>';
+        document.getElementById("sig-gap-val").textContent = fmtNum(gapMin, 1) + "%";
+        document.getElementById("sig-volmult-val").textContent = fmtNum(volMultMin, 1) + "×";
+        document.getElementById("sig-gap-slider").addEventListener("input", function (e) { gapMin = Number(e.target.value); draw(); });
+        document.getElementById("sig-volmult-slider").addEventListener("input", function (e) { volMultMin = Number(e.target.value); draw(); });
+      } else if (activeSig === "cup") {
+        host.innerHTML = '<div class="rail-h">Correction depth</div>'
+          + '<div class="filter-row"><label>Min <b id="sig-corrmin-val">15%</b></label>'
+          + '<input type="range" id="sig-corrmin-slider" min="5" max="40" step="1" value="' + corrMin + '"></div>'
+          + '<div class="filter-row" style="margin-bottom:0"><label>Max <b id="sig-corrmax-val">40%</b></label>'
+          + '<input type="range" id="sig-corrmax-slider" min="15" max="50" step="1" value="' + corrMax + '"></div>';
+        document.getElementById("sig-corrmin-val").textContent = corrMin + "%";
+        document.getElementById("sig-corrmax-val").textContent = corrMax + "%";
+        document.getElementById("sig-corrmin-slider").addEventListener("input", function (e) { corrMin = Number(e.target.value); draw(); });
+        document.getElementById("sig-corrmax-slider").addEventListener("input", function (e) { corrMax = Number(e.target.value); draw(); });
+      } else {
+        host.innerHTML = "";
+      }
     }
 
     function draw() {
-      const cfg = SIGNAL_CONFIG.breakout;
+      document.getElementById("signals-week").hidden = true;
+      document.getElementById("signals-feed").hidden = false;
+      const cfg = SIGNAL_CONFIG[activeSig];
+      const allSignals = SOURCES[activeSig];
       document.getElementById("signals-title").textContent = cfg.title;
-      document.getElementById("signals-sub").innerHTML = cfg.sub;
+      document.getElementById("signals-sub").innerHTML = cfg.sub + (cfg.note
+        ? '<div class="dim" style="margin-top:6px;font-size:11.5px">' + cfg.note + '</div>' : "");
       document.getElementById("sig-adr-val").textContent = fmtNum(adrMin, 1) + "%";
       document.getElementById("sig-turn-val").textContent = fmtTurnover(turnMin * 1e6);
+      Object.keys(SOURCES).forEach(function (k) {
+        const el = document.getElementById("sig-count-" + k);
+        if (el) el.textContent = SOURCES[k].filter(passes).length;
+      });
 
-      const rows = allSignals.filter(passes).sort(function (a, b) { return a.daysInStage - b.daysInStage; });
-      document.getElementById("sig-count-breakout").textContent = allSignals.filter(passes).length;
+      const rows = allSignals.filter(passes).sort(SORTERS[activeSig]);
       document.getElementById("signals-count").textContent = allSignals.length
-        ? rows.length + " of " + allSignals.length + " candidates clear the liquidity floor"
-        : "No TMLE-scored breakouts in the last two weeks right now.";
+        ? rows.length + " of " + allSignals.length + " candidates clear the filters"
+        : "Nothing qualifies right now" + (activeSig === "breakout" && !DATA.tmleDir
+            ? " — TMLE isn't scored for this market yet, so this signal has nothing to show here."
+            : " — check back after the next update, or after the market's had a chance to move.");
 
       const feed = document.getElementById("signals-feed");
       if (!rows.length) {
         feed.innerHTML = '<div class="empty-note">' + (allSignals.length
-          ? "Nothing clears this liquidity floor right now. Loosen the ADR or turnover filter on the left."
-          : "Nothing qualifies right now — check back after the next update, or after the market's had a chance to move.")
+          ? "Nothing clears these filters right now. Loosen the liquidity floor or the signal-specific filter on the left."
+          : (activeSig === "breakout" && !DATA.tmleDir
+              ? "TMLE isn't scored for this market yet — Stage 2 breakout has nothing to show here. "
+                + "Try Earnings/gap turnaround or Cup formation instead; those read straight off price data and cover every market."
+              : "Nothing qualifies right now — check back after the next update."))
           + "</div>";
         return;
       }
@@ -1627,16 +1746,75 @@
           e.stopPropagation();
           const sym = btn.dataset.sym;
           const item = allSignals.find(function (r) { return r.sym === sym; });
-          if (item) addToWatchlist(item, "breakout");
+          if (item) addToWatchlist(item, activeSig);
           btn.textContent = "Added ✓";
           setTimeout(function () { draw(); }, 1200);
         });
       });
     }
 
+    // Monday through Friday, most recent session last, each day showing
+    // exactly what fired that day (symbol only — click one to pull up its
+    // current pin; a past day's own stats aren't kept, only what qualified).
+    // Missing a day in the log (a holiday, the refresh not having run yet)
+    // shows as an empty day rather than skipping it, so a gap is visible
+    // instead of silently making the week look shorter than it was.
+    function drawWeek() {
+      document.getElementById("signals-feed").hidden = true;
+      const host = document.getElementById("signals-week");
+      host.hidden = false;
+      const log = (DATA.signalsLog || []).slice(-5);
+      if (!log.length) {
+        host.innerHTML = '<div class="empty-note">No history yet — this fills in day by day as the refresh runs.</div>';
+        return;
+      }
+      const todayStr = new Date().toISOString().slice(0, 10);
+      const TYPE_LABEL = { breakout: "Stage 2 breakout", earnings: "Earnings / gap", cup: "Cup formation" };
+      host.innerHTML = log.slice().reverse().map(function (day) {
+        const d = new Date(day.date + "T00:00:00");
+        const dow = d.toLocaleDateString(undefined, { weekday: "long" });
+        return '<div class="sig-week-day">'
+          + '<div class="sig-week-head"><span class="sig-week-dow">' + dow + '</span>'
+            + '<span class="sig-week-date">' + day.date + '</span>'
+            + (day.date === todayStr ? '<span class="sig-week-today">Latest</span>' : '')
+          + '</div>'
+          + Object.keys(TYPE_LABEL).map(function (type) {
+              const list = day[type] || [];
+              return '<div class="sig-week-row"><span class="sig-week-type">' + TYPE_LABEL[type] + '</span>'
+                + (list.length
+                    ? '<span class="sig-week-tickers">' + list.map(function (sym) {
+                        return '<span data-sym="' + sym + '">' + sym + '</span>';
+                      }).join(', ') + '</span>'
+                    : '<span class="sig-week-empty">none</span>')
+              + '</div>';
+            }).join("")
+        + '</div>';
+      }).join("");
+      host.querySelectorAll(".sig-week-tickers span").forEach(function (el) {
+        el.addEventListener("click", function () {
+          Sync.publish({ ticker: el.dataset.sym });
+          openStockPin(el.dataset.sym, "This week");
+        });
+      });
+    }
+
+    document.querySelectorAll("#signals-rail .sig-item[data-sig]").forEach(function (item) {
+      item.addEventListener("click", function () {
+        document.querySelectorAll("#signals-rail .sig-item[data-sig]").forEach(function (i) { i.classList.remove("active"); });
+        item.classList.add("active");
+        activeSig = item.dataset.sig;
+        drawTypeFilters();
+        draw();
+      });
+    });
     document.getElementById("sig-adr-slider").addEventListener("input", function (e) { adrMin = Number(e.target.value); draw(); });
     document.getElementById("sig-turn-slider").addEventListener("input", function (e) { turnMin = Number(e.target.value); draw(); });
-    document.getElementById("sig-hide-extended").addEventListener("change", function (e) { hideExtended = e.target.checked; draw(); });
+    document.getElementById("sig-week-toggle").addEventListener("click", function () {
+      const showingWeek = !document.getElementById("signals-week").hidden;
+      if (showingWeek) draw(); else drawWeek();
+      this.classList.toggle("active", !showingWeek);
+    });
+    drawTypeFilters();
     draw();
   }
 
