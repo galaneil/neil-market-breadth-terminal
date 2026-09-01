@@ -1287,13 +1287,19 @@ def render_tmle_panels(country, generated_at):
     # "Leader Score" page shows, so it needs that panel's data too:
     # classification (industry/sector for the header), tmleDir (where its
     # per-ticker score history is fetched from), and scored (the autocomplete
-    # list plus what a click is validated against).
+    # list plus what a click is validated against). scored has to include
+    # BOTH leaders and broken names -- a broken name still has a real score
+    # history (that's the whole point of the Broken tab), so excluding it
+    # here just meant clicking one silently did nothing: the Stock Context
+    # panel's Sync subscriber checked `scored.indexOf(ticker) !== -1` before
+    # even trying to fetch, so a broken ticker never got past that guard.
+    scored_tickers = [item["ticker"] for item in tmle_data["leaders"] + tmle_data["broken"]]
     paths = []
     paths.append(_write_panel(
         country, "panel-tmle-leaders.html", "Market Leaders", _tmle_leaders_body(),
         dict(common, leaders=tmle_data["leaders"], broken=tmle_data["broken"],
              counts=tmle_data["counts"], classification=_load_classification(country),
-             tmleDir="tmle", scored=[item["ticker"] for item in tmle_data["leaders"]]),
+             tmleDir="tmle", scored=scored_tickers),
         generated_at, needs_chartjs=True, needs_lightweight=True,
     ))
     paths.append(_write_panel(
@@ -1303,8 +1309,7 @@ def render_tmle_panels(country, generated_at):
     paths.append(_write_panel(
         country, "panel-tmle-stock.html", "Leader Score", _tmle_stock_body(),
         dict(common, classification=_load_classification(country),
-             tmleDir="tmle",
-             scored=[item["ticker"] for item in tmle_data["leaders"]]),
+             tmleDir="tmle", scored=scored_tickers),
         generated_at, needs_chartjs=True, needs_lightweight=True,
     ))
     return paths

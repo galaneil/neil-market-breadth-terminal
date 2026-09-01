@@ -66,17 +66,35 @@ jobs:
           FMP_API_KEY: ${{ secrets.FMP_API_KEY }}
         run: python src/main.py US
 
+      # Commit FIRST, pull-rebase SECOND — not the other way around. Pulling
+      # with rebase while the pipeline's own output sits uncommitted in the
+      # working tree is exactly what git refuses to do the moment origin has
+      # moved at all since checkout: it hard-fails rather than risk clobbering
+      # dirty files, which is a fatal error under this shell's default -e, not
+      # a merge conflict to work through. Committing locally first gives
+      # rebase a clean tree and a real commit to replay, which works whether
+      # or not origin moved in the meantime. The push retry loop is the other
+      # half: two country workflows committing to the same branch minutes
+      # apart can each see a stale origin at push time even with the
+      # reordering, so a rejected push re-pulls and retries before giving up.
       - name: Commit source data back to main
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git pull --rebase origin main
           git add data/us/ docs/
           if git diff --staged --quiet; then
             echo "No changes to commit"
           else
             git commit -m "US daily refresh: $(date -u +'%Y-%m-%d %H:%M UTC')"
-            git push
+            for attempt in 1 2 3 4 5; do
+              git pull --rebase origin main && git push && break
+              echo "push attempt $attempt failed, retrying..."
+              sleep $((attempt * 5))
+              if [ "$attempt" = 5 ]; then
+                echo "::error::could not push US refresh after 5 attempts"
+                exit 1
+              fi
+            done
           fi
 
       # The site is published to a branch that is replaced wholesale each run
