@@ -1,0 +1,144 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>System Architecture — India — Market Breadth Terminal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="../dashboard.css?v=023b738626">
+<style>
+/* Single-panel embed pages are meant to sit inside a small Notion embed
+   block, not a full browser window — trim the chrome accordingly. */
+body { margin: 0; }
+header { padding: 10px 14px; }
+header h1 { font-size: 14px; }
+/* Embeds should use the frame they are given — no centred max-width column,
+   which just produces large empty margins inside a wide Notion block. */
+main { padding: 12px; max-width: none; margin: 0; }
+section { margin-bottom: 0; }
+footer { display: none; }
+</style>
+</head>
+<body>
+
+<header>
+  <h1><svg class="flag" width="18" height="12" viewBox="0 0 24 16" role="img" aria-label="India"><rect width="24" height="5.333" fill="#FF9933"/><rect y="5.333" width="24" height="5.334" fill="#fff"/><rect y="10.667" width="24" height="5.333" fill="#138808"/><circle cx="12" cy="8" r="2.1" fill="none" stroke="#000080" stroke-width="0.45"/><circle cx="12" cy="8" r="0.45" fill="#000080"/></svg>System Architecture</h1>
+  <div class="header-controls">
+    <span class="country-switch">
+      <a href="../panel-architecture.html" title="United States"><svg class="flag" width="18" height="12" viewBox="0 0 24 16" role="img" aria-label="United States"><rect width="24" height="16" fill="#fff"/><g fill="#B22234"><rect y="0.000" width="24" height="1.231"/><rect y="2.462" width="24" height="1.231"/><rect y="4.923" width="24" height="1.231"/><rect y="7.385" width="24" height="1.231"/><rect y="9.846" width="24" height="1.231"/><rect y="12.308" width="24" height="1.231"/><rect y="14.769" width="24" height="1.231"/></g><rect width="10" height="8.615" fill="#3C3B6E"/></svg>US</a>
+      <a href="panel-architecture.html" title="India" class="active"><svg class="flag" width="18" height="12" viewBox="0 0 24 16" role="img" aria-label="India"><rect width="24" height="5.333" fill="#FF9933"/><rect y="5.333" width="24" height="5.334" fill="#fff"/><rect y="10.667" width="24" height="5.333" fill="#138808"/><circle cx="12" cy="8" r="2.1" fill="none" stroke="#000080" stroke-width="0.45"/><circle cx="12" cy="8" r="0.45" fill="#000080"/></svg>IN</a>
+    </span>
+    <span class="generated-at">Updated 2026-09-02 14:29 UTC</span>
+    <button class="icon-btn" id="theme-toggle" title="Toggle dark/light">&#9788;</button>
+  </div>
+</header>
+
+<main>
+<div class="empty-note">How this page's own data actually gets here, end to end &mdash; for tracing a number back to its source rather than taking it on faith.</div>
+
+<div class="arch-section">
+  <h3>1. Where the numbers come from</h3>
+  <table class="arch-table">
+    <tr><td>Prices (India)</td><td>Yahoo Finance (yfinance)</td></tr>
+    <tr><td>Prices (United States)</td><td>Financial Modeling Prep (FMP)</td></tr>
+    <tr><td>Sector / industry classification</td><td>TradingView's public screener &mdash; both markets</td></tr>
+    <tr><td>Breadth universe</td><td>Top 1,000 NSE names by market cap (from the TradingView classification pull itself &mdash; India has no free constituent list)</td></tr>
+  </table>
+</div>
+
+<div class="arch-section">
+  <h3>2. Pipeline order (src/main.py, one country at a time)</h3>
+  <ol>
+    <li>Pull TradingView classification (sector/industry tags, and India's universe)</li>
+    <li>Build the breadth universe (S&amp;P 1500 for US; top-1000 by cap for India)</li>
+    <li>Update the rolling price cache &mdash; new tickers get full history; existing ones get the last 7 days re-checked (not just today &mdash; see the reliability note below)</li>
+    <li>Backfill index history (OHLC + EMA10/20/50 + volume where available) &mdash; fetched directly per index, independent of the breadth universe</li>
+    <li>Backfill breadth internals (advance/decline, new highs/lows, % up/down) from the price cache</li>
+    <li>Backfill sector and industry performance/rank</li>
+    <li>Compute the Market Environment read (trend/participation/internals)</li>
+    <li>Compute relative-strength ratings</li>
+    <li>(TMLE does not run for India &mdash; see note in step above)</li>
+    <li>Render every page in docs/ from what was just written</li>
+  </ol>
+</div>
+
+<div class="arch-section">
+  <h3>3. Update schedule</h3>
+  <table class="arch-table">
+    <tr><td>India</td><td>GitHub Action <code>daily-in.yml</code> &mdash; runs after India's own market close, independently of the other country</td></tr>
+    <tr><td>Session cutoff</td><td>10:30 UTC &mdash; today's bar is excluded entirely until the wall clock clears this, so a live/forming session is never mistaken for a finished one</td></tr>
+    <tr><td>Self-healing</td><td>Every run recomputes the full trailing 252-day window and upserts by date &mdash; a day that failed to price on one run fills itself in on the next successful one, automatically</td></tr>
+  </table>
+</div>
+
+<div class="arch-section">
+  <h3>4. Storage model</h3>
+  <table class="arch-table">
+    <tr><td><code>data/in/*.jsonl</code></td><td>Permanent accumulating history, one row per session, git-tracked in <code>main</code>. This IS the chart history.</td></tr>
+    <tr><td><code>docs/in/panel-*.html</code></td><td>Generated pages, one per panel, rebuilt fresh every run and git-tracked (so the last good render always survives a bad run).</td></tr>
+    <tr><td><code>docs/in/tickers/</code></td><td>Per-ticker price files (chart depth back to 2020) &mdash; deliberately <b>not</b> git-tracked in main (thousands of files rewritten daily would bloat history for nothing); lives only on the <code>gh-pages</code> branch and this hub's local sync.</td></tr>
+  </table>
+</div>
+
+<div class="arch-section">
+  <h3>5. Known data caveats</h3>
+  <ul>
+    <li><code>nifty500</code> (Nifty 500) &mdash; own volume from Yahoo Finance (yfinance)</li>
+    <li>BSE Sensex, Nifty Midcap 150, Nifty Smallcap 250 &mdash; no volume panel; the underlying source has no usable figure for these (near-zero or always-zero), so it's omitted rather than shown misleadingly.</li>
+    <li>Russell 2000's own volume from FMP is byte-identical to the S&amp;P 500's every day &mdash; not real Russell volume, just a mirrored composite figure &mdash; which is why it uses IWM (the Russell 2000 ETF) as a proxy instead.</li>
+  </ul>
+</div>
+
+<div class="arch-section">
+  <h3>6. Reliability</h3>
+  <p class="env-block-sub">FMP's real-time quote endpoint previously went dark for entire runs on several separate days, pricing under 1% of tickers while reporting success &mdash; breadth/sector/industry correctly refused to count those as sessions and fell behind, while index history (fetched differently) kept advancing, which is what caused different panels to show different "as of" dates with nothing explaining why. Today's close is now fetched via the same historical-EOD endpoint used everywhere else, and a run aborts loudly (committing nothing) if fewer than 50% of tickers come back priced, rather than silently accepting a near-empty session.</p>
+</div>
+</main>
+
+<script src="../vendor/chart.umd.min.js"></script>
+
+<script id="dashboard-data" type="application/json">{"generated_at":"2026-09-02 14:29","country":"IN","indexLabels":{"index_sensex":"BSE Sensex","index_nifty500":"Nifty 500","index_niftymidcap150":"Nifty Midcap 150","index_niftysmallcap250":"Nifty Smallcap 250"},"series":{},"build":"023b738626","assetPrefix":"../"}</script>
+<script>
+// Series too big to inline are fetched before the dashboard starts, and the
+// page paints from a one-year tail. Full history follows once the page is
+// usable — "Since Inception" is the default timeframe, so that second fetch
+// is a correction rather than a nicety.
+(function () {
+  var data = JSON.parse(document.getElementById("dashboard-data").textContent);
+  var manifest = data.seriesManifest;
+  var src = "../dashboard.js?v=023b738626";
+
+  function start() {
+    var s = document.createElement("script");
+    s.src = src;
+    document.body.appendChild(s);
+  }
+
+  // Nothing was externalized: behave exactly as the page did before.
+  if (!manifest) { start(); return; }
+
+  var store = (window.MBT_SERIES = window.MBT_SERIES || {});
+  var keys = Object.keys(manifest);
+
+  function grab(url) {
+    return fetch(url)
+      .then(function (r) { return r.ok ? r.json() : []; })
+      .catch(function () { return []; });   // offline: show what we have
+  }
+
+  Promise.all(keys.map(function (k) {
+    return grab(manifest[k].tail).then(function (rows) { store[k] = rows; });
+  })).then(function () {
+    start();
+    keys.forEach(function (k) {
+      grab(manifest[k].full).then(function (rows) {
+        if (window.MBT_EXTEND) window.MBT_EXTEND(k, rows);
+      });
+    });
+  });
+})();
+</script>
+</body>
+</html>
