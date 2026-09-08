@@ -36,25 +36,38 @@ jobs:
         run: pip install -r requirements.txt
 
       # The per-ticker chart files hold history back to 2020, fetched once in
-      # bulk. They are gitignored in main and live only on gh-pages, so a fresh
-      # runner starts without them — and the nightly price source returns a
-      # much shallower window. Without this restore, store.write_ticker_ohlc
-      # would merge into nothing and each night would quietly truncate the
-      # charts back to whatever the daily fetch happened to return. Restoring
-      # BOTH countries' ticker dirs here (not just US) is deliberate: the
-      # gh-pages publish step below replaces the whole site wholesale, so
-      # India's tickers need to already be in docs/in/tickers before that
-      # happens or this run would silently wipe them off the published site.
-      - name: Restore deep ticker history from gh-pages
+      # bulk. They are gitignored in main, so a fresh runner starts without
+      # them — and the nightly price source returns a much shallower window.
+      # Without this restore, store.write_ticker_ohlc would merge into
+      # nothing and each night would quietly truncate the charts back to
+      # whatever the daily fetch happened to return.
+      #
+      # Restored from data-tickers, a dedicated branch this job (and
+      # daily-in.yml) publishes directly to below — NOT from gh-pages. They
+      # used to be the same branch, back when this workflow published to
+      # gh-pages itself; once that publish step moved into the separate,
+      # push-triggered publish-pages.yml, gh-pages stopped ever receiving
+      # ticker files at all (that workflow's own checkout of main never has
+      # them, gitignored), and this restore silently became a no-op for
+      # months — the "if [ -d ... ]" guard meant a missing directory failed
+      # open instead of loud. Every run since then quietly regenerated
+      # tickers from a short window and threw the result away, and nothing
+      # ever surfaced that. A dedicated branch, written to by the one job
+      # that actually has fresh files, closes that gap for good: it can never
+      # be silently overwritten by the unrelated HTML/CSS/JS publish, because
+      # nothing else ever touches this branch.
+      - name: Restore deep ticker history from data-tickers
         continue-on-error: true
         run: |
-          git clone --depth 1 --branch gh-pages \
+          git clone --depth 1 --branch data-tickers \
             "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" /tmp/site
           for dir in tickers in/tickers; do
             if [ -d "/tmp/site/$dir" ]; then
               mkdir -p "docs/$dir"
               cp -r "/tmp/site/$dir/." "docs/$dir/"
               echo "restored $(ls "docs/$dir" | wc -l) files into docs/$dir"
+            else
+              echo "::warning::docs/$dir not found on data-tickers -- starting empty, history will be shallow this run"
             fi
           done
           rm -rf /tmp/site
@@ -97,8 +110,49 @@ jobs:
             done
           fi
 
-      # Publishing to gh-pages happens in publish-pages.yml now, triggered by
-      # this job's own push to main rather than duplicated here — one place
-      # that does it, reused by every path that can update docs/ (this
-      # schedule, the local refresh in scripts/run_daily_refresh.py, or an
-      # ordinary commit made while working on the site).
+      # Publishing docs/**.html/css/js to gh-pages happens in
+      # publish-pages.yml, triggered by this job's own push to main above —
+      # one place that does it, reused by every path that can update docs/.
+      # Tickers are published separately, right here, to their OWN branch:
+      # they're gitignored (never reach main, so publish-pages.yml's checkout
+      # never has them either), and this job is the only place fresh ones
+      # exist before the runner is torn down. A dedicated branch means this
+      # can never race or get silently overwritten by the unrelated
+      # HTML/CSS/JS publish — see the restore step above for the fuller
+      # story of what broke without this.
+      - name: Publish US tickers to data-tickers branch
+        run: |
+          git clone --depth 1 --branch data-tickers \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" /tmp/tb \
+            || (mkdir -p /tmp/tb && cd /tmp/tb && git init -q && git checkout -qb data-tickers)
+          cd /tmp/tb
+          rm -rf tickers
+          cp -r "$GITHUB_WORKSPACE/docs/tickers" tickers
+          # India's own tickers (already present from the restore step, or
+          # from whatever data-tickers already held) are left untouched —
+          # this job only ever replaces its own country's subtree.
+          git checkout --orphan data-tickers-fresh
+          git add -A
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -qm "US tickers: $(date -u +'%Y-%m-%d %H:%M UTC')"
+          git branch -M data-tickers
+          git push -qf "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" data-tickers
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # Fail loudly, not silently, if the publish above didn't actually take
+      # — the raw purpose of this whole step is to make sure the exact
+      # failure mode that caused this fix in the first place (branch pushed
+      # to but never actually reachable/current) shows up as a red X on this
+      # run instead of nothing at all for weeks.
+      - name: Verify US tickers actually published
+        run: |
+          sleep 5
+          code=$(curl -s -o /dev/null -w "%{http_code}" \
+            "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/data-tickers/tickers/AAPL.json")
+          if [ "$code" != "200" ]; then
+            echo "::error::AAPL.json unreachable on data-tickers after publish (HTTP $code) — ticker publish did not take"
+            exit 1
+          fi
+          echo "verified: AAPL.json reachable on data-tickers"

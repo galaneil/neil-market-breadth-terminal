@@ -34,21 +34,23 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      # See daily-us.yml for why both countries' ticker dirs are restored
-      # here regardless of which country this run refreshes: the gh-pages
-      # publish step below replaces the whole site wholesale, so the OTHER
-      # country's tickers need to already be on disk or this run would
-      # silently wipe them off the published site.
-      - name: Restore deep ticker history from gh-pages
+      # See daily-us.yml for the fuller story: this used to restore from
+      # gh-pages, which silently stopped ever having ticker files once
+      # publishing moved to the separate publish-pages.yml. Restored from
+      # data-tickers instead now — a dedicated branch that only this job and
+      # daily-us.yml ever write to, published directly below.
+      - name: Restore deep ticker history from data-tickers
         continue-on-error: true
         run: |
-          git clone --depth 1 --branch gh-pages \
+          git clone --depth 1 --branch data-tickers \
             "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" /tmp/site
           for dir in tickers in/tickers; do
             if [ -d "/tmp/site/$dir" ]; then
               mkdir -p "docs/$dir"
               cp -r "/tmp/site/$dir/." "docs/$dir/"
               echo "restored $(ls "docs/$dir" | wc -l) files into docs/$dir"
+            else
+              echo "::warning::docs/$dir not found on data-tickers -- starting empty, history will be shallow this run"
             fi
           done
           rm -rf /tmp/site
@@ -92,8 +94,37 @@ jobs:
             done
           fi
 
-      # Publishing to gh-pages happens in publish-pages.yml now, triggered by
-      # this job's own push to main rather than duplicated here — one place
-      # that does it, reused by every path that can update docs/ (this
-      # schedule, the local refresh in scripts/run_daily_refresh.py, or an
-      # ordinary commit made while working on the site).
+      # Publishing docs/**.html/css/js to gh-pages happens in
+      # publish-pages.yml, triggered by this job's own push to main above.
+      # Tickers publish separately, right here — see daily-us.yml for why.
+      - name: Publish India tickers to data-tickers branch
+        run: |
+          git clone --depth 1 --branch data-tickers \
+            "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" /tmp/tb \
+            || (mkdir -p /tmp/tb && cd /tmp/tb && git init -q && git checkout -qb data-tickers)
+          cd /tmp/tb
+          rm -rf in/tickers
+          mkdir -p in
+          cp -r "$GITHUB_WORKSPACE/docs/in/tickers" in/tickers
+          # US's own tickers are left untouched — this job only ever
+          # replaces its own country's subtree.
+          git checkout --orphan data-tickers-fresh
+          git add -A
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git commit -qm "India tickers: $(date -u +'%Y-%m-%d %H:%M UTC')"
+          git branch -M data-tickers
+          git push -qf "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" data-tickers
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify India tickers actually published
+        run: |
+          sleep 5
+          code=$(curl -s -o /dev/null -w "%{http_code}" \
+            "https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/data-tickers/in/tickers/RELIANCE.json")
+          if [ "$code" != "200" ]; then
+            echo "::error::RELIANCE.json unreachable on data-tickers after publish (HTTP $code) — ticker publish did not take"
+            exit 1
+          fi
+          echo "verified: RELIANCE.json reachable on data-tickers"

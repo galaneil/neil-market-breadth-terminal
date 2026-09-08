@@ -35,13 +35,21 @@ one-time setup that registers both tasks.
 """
 
 import os
+import shutil
 import subprocess
 import sys
+import tempfile
 import time
 from datetime import datetime
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOG_DIR = os.path.join(os.path.dirname(ROOT), "Portfolio Local")
+REPO_URL = "https://github.com/galaneil/neil-market-breadth-terminal.git"
+# {country: (local ticker dir, its path inside the data-tickers branch)}
+TICKER_PATHS = {
+    "US": ("docs/tickers", "tickers"),
+    "IN": ("docs/in/tickers", "in/tickers"),
+}
 
 
 def log(msg):
@@ -63,6 +71,57 @@ def git(*args):
     return run(["git", *args])
 
 
+def publish_tickers(country):
+    """Push this country's freshly-updated ticker files to data-tickers --
+    a dedicated branch, separate from gh-pages, that only the two daily
+    workflows and this script ever write to. See daily-us.yml for the full
+    story of why this has to be its own branch: gh-pages is published by a
+    disconnected workflow whose own checkout never has these gitignored
+    files, so anything written only there was silently discarded for months.
+    This machine's own docs/tickers is never at risk the same way (it is
+    real, persistent local disk, not an ephemeral runner) -- this step is
+    about making that freshness reach everyone ELSE: GitHub Actions' own
+    restore-history step, the local hub's sync-from-branch fallback, and
+    (still gitignored, still never on main) anyone else who clones fresh.
+    """
+    local_dir, branch_path = TICKER_PATHS[country]
+    local_dir = os.path.join(ROOT, local_dir)
+    if not os.path.isdir(local_dir):
+        log(f"{country}: no {local_dir} on disk, skipping ticker publish")
+        return
+
+    tmp = tempfile.mkdtemp(prefix="data-tickers-")
+    try:
+        clone = run(["git", "clone", "--depth", "1", "--branch", "data-tickers", REPO_URL, tmp])
+        if clone.returncode != 0:
+            run(["git", "init", "-q"], cwd=tmp)
+            run(["git", "checkout", "-qb", "data-tickers"], cwd=tmp)
+
+        dest = os.path.join(tmp, branch_path)
+        if os.path.isdir(dest):
+            shutil.rmtree(dest)
+        os.makedirs(os.path.dirname(dest) or tmp, exist_ok=True)
+        shutil.copytree(local_dir, dest)
+
+        run(["git", "checkout", "--orphan", "data-tickers-fresh"], cwd=tmp)
+        run(["git", "add", "-A"], cwd=tmp)
+        run(["git", "config", "user.name", "Neil (local refresh)"], cwd=tmp)
+        run(["git", "config", "user.email", "neilgala04@gmail.com"], cwd=tmp)
+        commit = run(["git", "commit", "-qm",
+                     f"{country} tickers (local): {datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}"], cwd=tmp)
+        if commit.returncode != 0:
+            log(f"{country}: nothing new to publish on data-tickers")
+            return
+        run(["git", "branch", "-M", "data-tickers"], cwd=tmp)
+        push = run(["git", "push", "-qf", REPO_URL, "data-tickers"], cwd=tmp)
+        if push.returncode != 0:
+            log(f"{country}: data-tickers push failed:\n{push.stdout}\n{push.stderr}")
+        else:
+            log(f"{country}: tickers published to data-tickers")
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
 def main():
     if len(sys.argv) < 2 or sys.argv[1].upper() not in ("US", "IN"):
         log("usage: run_daily_refresh.py US|IN")
@@ -82,6 +141,8 @@ def main():
             f"(exit {result.returncode}) — not committing anything")
         sys.exit(1)
     log(f"{country}: pipeline done in {time.time() - started:.0f}s")
+
+    publish_tickers(country)
 
     git("config", "user.name", "Neil (local refresh)")
     git("config", "user.email", "neilgala04@gmail.com")

@@ -249,8 +249,15 @@ def _save_sync_state(state):
 
 
 def sync_tickers_from_ghpages(log=print):
+    # Despite the name (kept for the sync_state.json key and log lines
+    # already written), this pulls from data-tickers, not gh-pages -- see
+    # daily-us.yml for why: gh-pages is published by a disconnected workflow
+    # whose own checkout never has these gitignored files, so anything only
+    # published there was silently never actually reachable. data-tickers is
+    # a dedicated branch only the daily pipeline (local or Actions) writes
+    # to, specifically so this download always has something real to find.
     url = (f"https://codeload.github.com/{GITHUB_REPO}"
-          "/tar.gz/refs/heads/gh-pages")
+          "/tar.gz/refs/heads/data-tickers")
     archive_path = os.path.join(OUTPUT_DIR, "_ghpages_sync.tar.gz")
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     log("  downloading current ticker history from gh-pages (~1 min)...")
