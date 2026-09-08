@@ -114,6 +114,34 @@ def download_many(symbols, period="2y", on_progress=None):
     return result
 
 
+def retry_individual(symbols, period="10d", on_progress=None):
+    """Single-ticker fallback for names the bulk chunk call dropped.
+
+    download_many's group_by="ticker" request either fails a whole 100-symbol
+    chunk on one transient error, or silently omits one illiquid/halted name
+    whose columns come back all-NaN inside an otherwise fine chunk — both cases
+    leave that symbol simply absent from the result, so its stored price cache
+    quietly stops updating with no error anywhere. This re-fetches exactly
+    those leftover symbols one at a time (no group_by, nothing to drop), which
+    is slow per-symbol but only ever runs against a short list.
+
+    Same return shape as download_many: {original_symbol: [rows]}.
+    """
+    result = {}
+    for i, original in enumerate(symbols):
+        y = to_yahoo(original)
+        try:
+            df = yf.Ticker(y).history(period=period, auto_adjust=True)
+        except Exception:
+            df = None
+        rows = _frame_to_rows(df) if df is not None else []
+        if rows:
+            result[original] = rows
+        if on_progress:
+            on_progress(i + 1, len(symbols))
+    return result
+
+
 def historical_index(symbol, period="2y"):
     """Single index series. Kept separate from download_many because index
     tickers must not go through the .NS symbol translation."""

@@ -112,6 +112,7 @@ HUB_PANELS = [
 SIGNALS_PANELS = [
     {"label": "Signals", "path": "panel-signals.html"},
     {"label": "Watchlist", "path": "panel-watchlist.html"},
+    {"label": "Feedback Log", "path": "panel-feedback-log.html"},
 ]
 
 ALGORITHMS_PANELS = [
@@ -680,6 +681,54 @@ def available():
     return out
 
 
+# ── Signal feedback log ──────────────────────────────────────────────────
+#
+# One JSONL file per country, one row per RATED signal (not per day like
+# signals_log.jsonl -- a rating is keyed on sym+date+signalType and lives
+# indefinitely until you change it, not capped or rolled off). Lives only on
+# this local server: docs/ is static files with nothing to write to, so
+# rating and browsing this log both require the local hub, by construction
+# rather than by an access check anywhere.
+
+def _feedback_path(country):
+    return os.path.join(config.data_dir(country), "signal_feedback.jsonl")
+
+
+def _load_feedback(country):
+    path = _feedback_path(country)
+    if not os.path.exists(path):
+        return []
+    with open(path, encoding="utf-8") as f:
+        return [json.loads(line) for line in f if line.strip()]
+
+
+def _load_feedback_all():
+    """Every rating across both countries, each row carrying its own
+    country -- the panel shows one combined log rather than a separate one
+    per market, since a rating is a personal judgment call, not market data."""
+    out = []
+    for code in config.COUNTRIES:
+        out.extend(_load_feedback(code))
+    out.sort(key=lambda r: r.get("ratedAt") or "", reverse=True)
+    return out
+
+
+def _upsert_feedback(country, entry):
+    """Replaces any existing row for the same (sym, date, signalType);
+    appends otherwise. `entry` must already carry sym/date/signalType/good."""
+    path = _feedback_path(country)
+    rows = _load_feedback(country)
+    key = (entry["sym"], entry["date"], entry["signalType"])
+    rows = [r for r in rows
+            if (r.get("sym"), r.get("date"), r.get("signalType")) != key]
+    rows.append(entry)
+    rows.sort(key=lambda r: r.get("date") or "")
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "w", encoding="utf-8") as f:
+        for r in rows:
+            f.write(json.dumps(r, separators=(",", ":")) + "\n")
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, *args):
         pass                       # the access log is noise here
@@ -746,6 +795,9 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, json.dumps({
                 code: _country_data_status(code) for code in config.COUNTRIES
             }), "application/json")
+            return
+        if route.path == "/api/signal-feedback":
+            self._send(200, json.dumps(_load_feedback_all()), "application/json")
             return
         if route.path == "/api/brokers":
             self._send(200, json.dumps(available()), "application/json")
@@ -843,6 +895,33 @@ class Handler(BaseHTTPRequestHandler):
                 # replaced with something generic.
                 self._send(200, json.dumps({"ok": False, "error": str(error)}),
                            "application/json")
+            return
+
+        if route.path == "/api/signal-feedback":
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                body = json.loads(self.rfile.read(length) or b"{}")
+                country = (body.get("country") or "").upper()
+                sym = body.get("sym")
+                date = body.get("date")
+                signal_type = body.get("signalType")
+                if country not in config.COUNTRIES or not sym or not date or not signal_type:
+                    raise ValueError("country, sym, date and signalType are all required")
+                now = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+                existing = next((r for r in _load_feedback(country)
+                                 if (r.get("sym"), r.get("date"), r.get("signalType"))
+                                    == (sym, date, signal_type)), None)
+                entry = {
+                    "sym": sym, "date": date, "signalType": signal_type,
+                    "country": country, "good": bool(body.get("good")),
+                    "note": (body.get("note") or "").strip(),
+                    "ratedAt": existing["ratedAt"] if existing else now,
+                    "editedAt": now,
+                }
+                _upsert_feedback(country, entry)
+                self._send(200, json.dumps(_load_feedback_all()), "application/json")
+            except Exception as error:
+                self._send(400, json.dumps({"error": str(error)}), "application/json")
             return
 
         if route.path == "/api/name":
@@ -1948,6 +2027,17 @@ HUB_PAGE = r"""<!doctype html>
       <a id="sync-now" href="#">Sync data now</a>
       <span id="sync-status" class="dim"></span>
     </div>
+    <div style="margin-top:6px">
+      Manual refresh on GitHub:
+      <a href="https://github.com/galaneil/neil-market-breadth-terminal/actions/workflows/daily-us.yml"
+         target="_blank" rel="noopener">US</a>
+      &middot;
+      <a href="https://github.com/galaneil/neil-market-breadth-terminal/actions/workflows/daily-in.yml"
+         target="_blank" rel="noopener">India</a>
+      <span class="dim" style="display:block;font-size:10.5px;margin-top:2px">
+        Opens the Action's page — click "Run workflow" there. Runs on GitHub's servers, not this machine.
+      </span>
+    </div>
     <div id="sync-warning" hidden style="margin-top:8px; padding:8px; border-radius:6px;
          background:color-mix(in srgb, var(--warn) 15%, transparent);
          border:1px solid var(--warn); color:var(--warn); font-size:11px; line-height:1.4;"></div>
@@ -1996,6 +2086,8 @@ const ICONS = {
   "Signals": icon('<path d="M12 12m-1 0a1 1 0 1 0 2 0a1 1 0 1 0 -2 0"/>'
     + '<path d="M8.5 8.5a5 5 0 0 1 7 0"/><path d="M5.5 5.5a9 9 0 0 1 13 0"/>'),
   "Watchlist": icon('<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>'),
+  "Feedback Log": icon('<path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3H14z"/>'
+    + '<path d="M7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/>'),
   "System Architecture": icon('<circle cx="12" cy="12" r="3"/>'
     + '<path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/>'),
   "Live Portfolio": icon('<rect x="2" y="7" width="20" height="14" rx="2"/>'
@@ -2266,8 +2358,9 @@ document.getElementById("reload-btn").onclick = () => {
         '<span class="freshness-detail">as of ' + s.asOf +
           (stale ? " (" + s.staleDays + "d old)" : "") + '</span></div>';
     }).join("");
-    noteEl.textContent = anyStale
-      ? "One market looks behind schedule — try “Sync data now” above, or check the GitHub Action run history."
+    noteEl.innerHTML = anyStale
+      ? 'One market looks behind schedule &mdash; try "Sync data now" below, or trigger a '
+        + '<a href="https://github.com/galaneil/neil-market-breadth-terminal/actions" target="_blank" rel="noopener">manual refresh on GitHub</a> directly.'
       : "US refreshes after its own close (~7pm ET); India refreshes separately after its own close (~5pm IST). A date a session or two behind is normal right after a weekend.";
   } catch (err) {
     rowsEl.textContent = "Could not check.";

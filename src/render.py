@@ -1157,6 +1157,20 @@ def _signals_body():
     <div class="sig-item soon"><span class="sig-dot" style="background:var(--down)"></span>
       <span class="sig-label">Stage 4 breakdown (short)</span><span class="soon-tag">soon</span></div>
 
+    <div class="rail-h">Filter</div>
+    <div class="filter-row">
+      <label>Sector</label>
+      <select class="filt-select" id="sig-sector-filter"><option value="">All sectors</option></select>
+    </div>
+    <div class="filter-row">
+      <label>Industry</label>
+      <select class="filt-select" id="sig-industry-filter"><option value="">All industries</option></select>
+    </div>
+    <div class="filter-row">
+      <label>Min % change <b id="sig-chg-val">Any</b></label>
+      <input type="range" id="sig-chg-slider" min="-20" max="20" step="1" value="-20">
+    </div>
+
     <div class="rail-h">Liquidity floor</div>
     <div class="filter-row">
       <label>Min ADR <b id="sig-adr-val">2.0%</b></label>
@@ -1188,6 +1202,50 @@ def _signals_body():
     <div class="sig-daystrip" id="sig-daystrip"></div>
     <div class="dim" id="signals-count" style="margin:10px 0"></div>
     <div class="sig-feed" id="signals-feed"></div>
+  </div>
+</div>
+""".strip() + "\n" + _stock_pin_html()
+
+
+def _feedback_log_body():
+    # This panel only works against /api/signal-feedback, which exists on
+    # the local hub server and nowhere else -- there is nothing on the other
+    # end of that call on the published GitHub Pages site, which is static
+    # files with no backend at all. dashboard.js feature-detects this itself
+    # (one failed fetch) rather than this page assuming either way, so the
+    # exact same file works correctly in both places: full log locally, a
+    # plain "not available here" message on the public link.
+    return """
+<div class="signals-shell" id="fb-shell">
+  <div class="signals-main" style="grid-column:1/-1">
+    <div id="fb-unavailable" class="empty-note" style="display:none">
+      This log lives on the local hub's server (it writes to a file on disk), so it isn't reachable from
+      a page served without one — including the published link. Open the local hub to rate signals and
+      browse the log.
+    </div>
+    <div id="fb-available">
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px">
+        <div>
+          <h2 style="margin:0">Feedback Log</h2>
+          <div class="empty-note" style="margin:4px 0 0">
+            Every good/bad rating from the Signals page lands here — one row per rated signal, editable
+            any time. Nothing here changes which signals fire; it's the record a future pass would read
+            from to actually do that.
+          </div>
+        </div>
+        <div style="display:flex;gap:8px">
+          <button class="icon-btn" id="fb-export-csv">&#8681; Export CSV</button>
+          <button class="icon-btn" id="fb-export-json">&#8681; Export JSON</button>
+        </div>
+      </div>
+      <div class="dim" id="fb-count" style="margin:14px 0 8px"></div>
+      <div style="overflow-x:auto">
+        <table class="fb-table">
+          <thead><tr><th>Ticker</th><th>Market</th><th>Signal</th><th>Date</th><th>Verdict</th><th>Note</th><th></th></tr></thead>
+          <tbody id="fb-body"></tbody>
+        </table>
+      </div>
+    </div>
   </div>
 </div>
 """.strip() + "\n" + _stock_pin_html()
@@ -1479,6 +1537,7 @@ def render_all_panels(country):
     ))
 
     sig_extra = dict(_screener_payload(country))
+    sig_extra["country"] = country
     breakout_signals = _compute_breakout_signals(country)
     earnings_signals = _compute_earnings_signals(country)
     cup_signals = _compute_cup_signals(country)
@@ -1498,12 +1557,21 @@ def render_all_panels(country):
     ))
 
     wl_extra = dict(_screener_payload(country))
+    wl_extra["country"] = country
     if cfg.get("run_tmle"):
         wl_extra["tmleDir"] = "tmle"
     paths.append(_write_panel(
         country, "panel-watchlist.html", "Watchlist",
         _watchlist_body(), wl_extra, generated_at,
         needs_chartjs=True, needs_lightweight=True,
+    ))
+
+    fb_extra = dict(_screener_payload(country))
+    fb_extra["country"] = country
+    paths.append(_write_panel(
+        country, "panel-feedback-log.html", "Feedback Log",
+        _feedback_log_body(), fb_extra, generated_at,
+        needs_chartjs=False, needs_lightweight=True,
     ))
 
     paths.append(render_panel(

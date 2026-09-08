@@ -213,6 +213,29 @@ def run_country(code, client=None):
             for row in drop_partial(rows)[:config.PRICE_WINDOW_DAYS]:
                 cache_mod.set_value(price_cache, ticker, row["date"], row["close"])
         log(f"{code}: {len(bulk)}/{len(all_price_tickers)} symbols returned usable history")
+
+        # The bulk chunk call drops a symbol silently on either a whole-chunk
+        # error or a single illiquid/halted name inside an otherwise-fine
+        # chunk — with no per-symbol error to log. Left alone, that ticker's
+        # price cache just stops updating, forever, with nothing to point at.
+        # Retry exactly the names still missing today's session individually;
+        # this is what surfaced ADFFOODS, APCOTEXIND and 40+ others stuck
+        # weeks stale with every earlier run reporting clean success.
+        if not skip_today:
+            missing = [t for t in all_price_tickers
+                      if today not in price_cache.get(t, {})]
+            if missing:
+                log(f"{code}: {len(missing)} tickers missing {today} after the bulk pull — "
+                    f"retrying individually...")
+                retried = yf_client.retry_individual(missing)
+                for ticker, rows in retried.items():
+                    for row in drop_partial(rows)[:config.PRICE_WINDOW_DAYS]:
+                        cache_mod.set_value(price_cache, ticker, row["date"], row["close"])
+                still_missing = [t for t in missing
+                                 if today not in price_cache.get(t, {})]
+                log(f"{code}: retry recovered {len(retried)}/{len(missing)}"
+                    + (f" — still stale: {', '.join(sorted(still_missing)[:15])}"
+                       + (" ..." if len(still_missing) > 15 else "") if still_missing else ""))
         for symbol in index_tickers:
             for row in drop_partial(yf_client.historical_index(symbol, period="2y"))[:config.PRICE_WINDOW_DAYS]:
                 cache_mod.set_value(price_cache, symbol, row["date"], row["close"])

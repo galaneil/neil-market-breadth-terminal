@@ -1609,6 +1609,34 @@
     return labels.length ? labels.map(function (i) { return i.label; }).join(", ") : "—";
   }
 
+  // ---------- Signal feedback: shared between the Signals page (rating) and
+  // the Feedback Log page (browsing/export). Lives only on the local hub's
+  // server -- the published static site has nothing at the other end of
+  // these calls, so every caller feature-detects with one GET and degrades
+  // to "not available here" rather than assuming either way.
+  const FEEDBACK_API = "/api/signal-feedback";
+  let feedbackCache = null;   // null = not loaded yet; [] = loaded, empty
+  function feedbackAvailable() {
+    return fetch(FEEDBACK_API).then(function (r) {
+      if (!r.ok) throw new Error("unavailable");
+      return r.json();
+    }).then(function (rows) { feedbackCache = rows; return true; })
+      .catch(function () { feedbackCache = null; return false; });
+  }
+  function rateSignal(entry) {
+    return fetch(FEEDBACK_API, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(entry),
+    }).then(function (r) { return r.json(); })
+      .then(function (rows) { feedbackCache = rows; return rows; });
+  }
+  function feedbackFor(sym, date, signalType) {
+    if (!feedbackCache) return null;
+    return feedbackCache.find(function (r) {
+      return r.sym === sym && r.date === date && r.signalType === signalType;
+    }) || null;
+  }
+
   function renderSignals() {
     const railEl = document.getElementById("signals-rail");
     if (!railEl) return;
@@ -1633,11 +1661,27 @@
     let gapMin = 5, volMultMin = 2;
     let corrMin = 15, corrMax = 40;
     let searchTerm = "";
+    let sigSector = "", sigIndustry = "", chgMin = -20;
     // Which day-strip buttons are toggled on. Empty = no day filter at all --
     // show the full window (today's live list unioned with whatever the log
     // has for earlier days), which is also just what today alone looks like
     // until there's more than one day of history to union with.
     let selectedDays = [];
+    // Feedback needs the local hub's server, which the published static
+    // site has none of -- undecided until the one probe fetch resolves,
+    // then either on (draw a rate row on every live card) or off (draw
+    // nothing extra) for the rest of the page's life.
+    let feedbackReady = false;
+    let feedbackEditing = null;   // sym currently showing an open note box, or null
+    feedbackAvailable().then(function (ok) { feedbackReady = ok; draw(); });
+    // Every rating is keyed to the session the signal panel is showing --
+    // the latest entry in the log, same date the day-strip's rightmost
+    // button represents -- not "whenever you happened to click", so rating
+    // the same signal again later edits the same row instead of forking it.
+    function fbDate() {
+      const log = DATA.signalsLog || [];
+      return log.length ? log[log.length - 1].date : new Date().toISOString().slice(0, 10);
+    }
 
     function fmtTurnover(m) {
       if (m == null) return "—";
@@ -1655,6 +1699,9 @@
       if (s.historical) return true;
       if ((s.adr || 0) < adrMin || (s.turnover || 0) < turnMin * 1e6) return false;
       if ((s.marketCap || 0) < mcapMin * 1e9) return false;
+      if (sigSector && s.sector !== sigSector) return false;
+      if (sigIndustry && s.industry !== sigIndustry) return false;
+      if ((s.chg == null ? 0 : s.chg) < chgMin) return false;
       if (activeSig === "breakout") return !hideExtended || s.actionable;
       if (activeSig === "earnings") return s.gap >= gapMin || s.range >= gapMin * 1.6;
       if (activeSig === "cup") return s.correction >= corrMin && s.correction <= corrMax;
@@ -1680,6 +1727,24 @@
         (day[type] || []).forEach(function (sym) { set.add(sym); });
       });
       return set;
+    }
+
+    // Sector/industry options are scoped to whichever tab is active -- each
+    // signal type has its own name universe, so a stale option list from the
+    // previous tab would just silently match nothing.
+    function drawSectorIndustryFilters() {
+      const rows = SOURCES[activeSig] || [];
+      function fillSelect(id, values, current) {
+        const el = document.getElementById(id);
+        const opts = Array.from(new Set(values.filter(Boolean))).sort();
+        if (current && opts.indexOf(current) === -1) current = "";
+        el.innerHTML = '<option value="">All</option>' + opts.map(function (v) {
+          return '<option value="' + v + '"' + (v === current ? " selected" : "") + '>' + v + '</option>';
+        }).join("");
+        return current;
+      }
+      sigSector = fillSelect("sig-sector-filter", rows.map(function (r) { return r.sector; }), sigSector);
+      sigIndustry = fillSelect("sig-industry-filter", rows.map(function (r) { return r.industry; }), sigIndustry);
     }
 
     function drawTypeFilters() {
@@ -1838,10 +1903,26 @@
                 + '<button class="primary sig-add-wl" data-sym="' + s.sym + '">Add to '
                   + (Object.keys(loadWatchlists())[0] || "Default") + '</button>'
               + '</div>'
+              + (feedbackReady ? feedbackRowHTML(s.sym) : '')
             + '</div>'
           + '</div>'
         + '</div>';
       }).join("");
+
+      function feedbackRowHTML(sym) {
+        const r = feedbackFor(sym, fbDate(), activeSig);
+        const editing = feedbackEditing === sym;
+        return '<div class="fb-row" data-fb-sym="' + sym + '">'
+          + '<span class="fb-label">Was this a good signal?</span>'
+          + '<button class="fb-btn good' + (r && r.good ? ' active' : '') + '" data-fbgood="' + sym + '">\u{1F44D} Good</button>'
+          + '<button class="fb-btn bad' + (r && r && !r.good ? ' active' : '') + '" data-fbbad="' + sym + '">\u{1F44E} Bad</button>'
+          + (r && !editing
+              ? '<span class="fb-done">' + (r.note ? '"' + r.note + '"' : 'No note') + '</span>'
+                + '<button class="log-edit-btn" data-fbeditnote="' + sym + '">' + (r.note ? "Edit note" : "Add note") + '</button>'
+              : (r ? '<input class="fb-note shown" data-fbnote="' + sym + '" placeholder="Why? (Enter to save)" value="'
+                    + (r.note || "").replace(/"/g, "&quot;") + '">' : ''))
+        + '</div>';
+      }
 
       feed.querySelectorAll(".sig-card").forEach(function (card) {
         card.addEventListener("click", function (e) {
@@ -1869,6 +1950,41 @@
           setTimeout(function () { draw(); }, 1200);
         });
       });
+
+      function submitRating(sym, good) {
+        const prev = feedbackFor(sym, fbDate(), activeSig);
+        rateSignal({
+          country: DATA.country, sym: sym, date: fbDate(), signalType: activeSig,
+          good: good, note: prev ? prev.note : "",
+        }).then(function () { feedbackEditing = null; draw(); });
+      }
+      feed.querySelectorAll("[data-fbgood]").forEach(function (btn) {
+        btn.addEventListener("click", function (e) { e.stopPropagation(); submitRating(btn.dataset.fbgood, true); });
+      });
+      feed.querySelectorAll("[data-fbbad]").forEach(function (btn) {
+        btn.addEventListener("click", function (e) { e.stopPropagation(); submitRating(btn.dataset.fbbad, false); });
+      });
+      feed.querySelectorAll("[data-fbeditnote]").forEach(function (btn) {
+        btn.addEventListener("click", function (e) {
+          e.stopPropagation();
+          feedbackEditing = btn.dataset.fbeditnote;
+          draw();
+          const input = feed.querySelector('[data-fbnote="' + feedbackEditing + '"]');
+          if (input) input.focus();
+        });
+      });
+      feed.querySelectorAll("[data-fbnote]").forEach(function (input) {
+        input.addEventListener("click", function (e) { e.stopPropagation(); });
+        input.addEventListener("keydown", function (e) {
+          if (e.key !== "Enter") return;
+          const sym = input.dataset.fbnote;
+          const prev = feedbackFor(sym, fbDate(), activeSig);
+          rateSignal({
+            country: DATA.country, sym: sym, date: fbDate(), signalType: activeSig,
+            good: prev ? prev.good : true, note: input.value.trim(),
+          }).then(function () { feedbackEditing = null; draw(); });
+        });
+      });
     }
 
     document.querySelectorAll("#signals-rail .sig-item[data-sig]").forEach(function (item) {
@@ -1877,6 +1993,7 @@
         item.classList.add("active");
         activeSig = item.dataset.sig;
         drawTypeFilters();
+        drawSectorIndustryFilters();
         draw();
       });
     });
@@ -1884,6 +2001,14 @@
     document.getElementById("sig-turn-slider").addEventListener("input", function (e) { turnMin = Number(e.target.value); draw(); });
     document.getElementById("sig-mcap-slider").addEventListener("input", function (e) { mcapMin = Number(e.target.value); draw(); });
     document.getElementById("sig-search").addEventListener("input", function (e) { searchTerm = e.target.value.trim().toLowerCase(); draw(); });
+    document.getElementById("sig-sector-filter").addEventListener("change", function (e) { sigSector = e.target.value; draw(); });
+    document.getElementById("sig-industry-filter").addEventListener("change", function (e) { sigIndustry = e.target.value; draw(); });
+    document.getElementById("sig-chg-slider").addEventListener("input", function (e) {
+      chgMin = Number(e.target.value);
+      document.getElementById("sig-chg-val").textContent = chgMin <= -20 ? "Any" : (chgMin > 0 ? "+" : "") + chgMin + "%";
+      draw();
+    });
+    drawSectorIndustryFilters();
     // Sync the rail's highlighted item to whatever activeSig actually
     // defaulted to — the markup always marks "breakout" active, which is
     // only right when that's really the tab about to be drawn.
@@ -1900,13 +2025,26 @@
   // object, not just the ticker -- SIGNAL_CONFIG[item.signalType] already
   // knows how to describe whichever kind of signal it came from, so this page
   // reuses the exact same reason()/facts() functions rather than a second copy.
-  const WL_KEY = "mbt-watchlists";
+  // Scoped per country -- both dashboards share one localStorage origin, so an
+  // unscoped key showed the same three US names on the India page and vice
+  // versa. Existing lists saved under the old unscoped key are migrated once
+  // into the US slot (where the bug was first noticed) rather than dropped.
+  const WL_KEY = "mbt-watchlists-" + (DATA.country || "US");
+  (function migrateUnscopedWatchlist() {
+    try {
+      const legacy = localStorage.getItem("mbt-watchlists");
+      if (legacy && (DATA.country || "US") === "US" && !localStorage.getItem(WL_KEY)) {
+        localStorage.setItem(WL_KEY, legacy);
+      }
+      if (legacy) localStorage.removeItem("mbt-watchlists");
+    } catch (e) { /* ignore */ }
+  })();
   function loadWatchlists() {
     try {
       const saved = JSON.parse(localStorage.getItem(WL_KEY) || "null");
       if (saved && Object.keys(saved).length) return saved;
     } catch (e) { /* private mode / storage blocked -- start fresh */ }
-    return { "Default": [] };
+    return { "My Watchlist": [] };
   }
   function saveWatchlists(lists) {
     try { localStorage.setItem(WL_KEY, JSON.stringify(lists)); } catch (e) { /* ignore */ }
@@ -1938,10 +2076,25 @@
       const names = Object.keys(watchlists);
       document.getElementById("wl-picker").innerHTML = names.map(function (name) {
         return '<div class="wl-row' + (name === activeList ? " active" : "") + '" data-list="' + name + '">'
-          + '<span class="wl-name">' + name + '</span><span class="wl-n">' + watchlists[name].length + '</span></div>';
+          + '<span class="wl-name" data-list="' + name + '" title="Double-click to rename">' + name + '</span>'
+          + '<span class="wl-n">' + watchlists[name].length + '</span></div>';
       }).join("");
       document.querySelectorAll("#wl-picker .wl-row").forEach(function (row) {
         row.addEventListener("click", function () { activeList = row.dataset.list; drawRail(); drawMain(); });
+      });
+      document.querySelectorAll("#wl-picker .wl-name").forEach(function (span) {
+        span.addEventListener("dblclick", function (e) {
+          e.stopPropagation();
+          const oldName = span.dataset.list;
+          const newName = (prompt("Rename this watchlist:", oldName) || "").trim();
+          if (!newName || newName === oldName) return;
+          if (watchlists[newName]) { alert("A watchlist called \"" + newName + "\" already exists."); return; }
+          watchlists[newName] = watchlists[oldName];
+          delete watchlists[oldName];
+          if (activeList === oldName) activeList = newName;
+          saveWatchlists(watchlists);
+          drawRail(); drawMain();
+        });
       });
       document.getElementById("wl-new-btn").onclick = function () {
         const name = (prompt("Name this watchlist:") || "").trim();
@@ -2037,6 +2190,92 @@
 
     drawRail();
     drawMain();
+  }
+
+  // ---------- Feedback Log: its own panel, not buried under Signals ----------
+  // Reads/writes the same /api/signal-feedback the Signals page rates
+  // against. Purely local-hub: on the published static site the one probe
+  // fetch fails and this shows "not available here" instead of an empty
+  // table, same as every other panel that degrades when TMLE/a broker/etc.
+  // isn't reachable.
+  const FEEDBACK_TYPE_LABEL = {
+    breakout: "Stage 2 breakout", earnings: "Earnings / gap turnaround", cup: "Cup formation",
+  };
+  function renderFeedbackLog() {
+    const shell = document.getElementById("fb-shell");
+    if (!shell) return;
+    feedbackAvailable().then(function (ok) {
+      document.getElementById("fb-unavailable").style.display = ok ? "none" : "block";
+      document.getElementById("fb-available").style.display = ok ? "block" : "none";
+      if (ok) draw();
+    });
+
+    function draw() {
+      const rows = (feedbackCache || []).slice();
+      document.getElementById("fb-count").textContent = rows.length
+        ? rows.length + " rated signal" + (rows.length === 1 ? "" : "s")
+        : "Nothing rated yet — rate a signal from the Signals page and it shows up here.";
+      const body = document.getElementById("fb-body");
+      if (!rows.length) {
+        body.innerHTML = '<tr><td colspan="7" class="fb-note-cell empty" style="text-align:center;padding:18px">'
+          + "Nothing logged yet." + '</td></tr>';
+        return;
+      }
+      body.innerHTML = rows.map(function (r) {
+        return '<tr>'
+          + '<td><b>' + r.sym + '</b></td>'
+          + '<td>' + r.country + '</td>'
+          + '<td>' + (FEEDBACK_TYPE_LABEL[r.signalType] || r.signalType) + '</td>'
+          + '<td>' + r.date + '</td>'
+          + '<td><span class="fb-verdict ' + (r.good ? 'good' : 'bad') + '">'
+            + (r.good ? '\u{1F44D} Good' : '\u{1F44E} Bad') + '</span></td>'
+          + '<td class="fb-note-cell' + (r.note ? '' : ' empty') + '">' + (r.note ? r.note : 'No note added') + '</td>'
+          + '<td><button class="log-edit-btn" data-fblog-edit="' + r.sym + '|' + r.date + '|' + r.signalType + '">Edit</button></td>'
+        + '</tr>';
+      }).join("");
+      body.querySelectorAll("[data-fblog-edit]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          const parts = btn.dataset.fblogEdit.split("|");
+          const row = feedbackCache.find(function (r) {
+            return r.sym === parts[0] && r.date === parts[1] && r.signalType === parts[2];
+          });
+          if (!row) return;
+          const good = confirm(
+            (row.good ? "Currently rated GOOD. " : "Currently rated BAD. ")
+            + "OK = mark good, Cancel = mark bad.");
+          const note = prompt("Note (blank to clear):", row.note || "");
+          if (note === null) return;
+          rateSignal({ country: row.country, sym: row.sym, date: row.date,
+                       signalType: row.signalType, good: good, note: note.trim() })
+            .then(draw);
+        });
+      });
+    }
+
+    function download(filename, text, mime) {
+      const blob = new Blob([text], { type: mime });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url; a.download = filename;
+      document.body.appendChild(a); a.click(); document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }
+    function csvEscape(v) {
+      v = String(v == null ? "" : v);
+      return /[",\n]/.test(v) ? '"' + v.replace(/"/g, '""') + '"' : v;
+    }
+    document.getElementById("fb-export-csv").addEventListener("click", function () {
+      const rows = feedbackCache || [];
+      const header = "date,sym,country,signal_type,verdict,note,rated_at,edited_at";
+      const body = rows.map(function (r) {
+        return [r.date, r.sym, r.country, r.signalType, r.good ? "good" : "bad",
+                r.note || "", r.ratedAt || "", r.editedAt || ""].map(csvEscape).join(",");
+      }).join("\n");
+      download("signal_feedback.csv", header + "\n" + body, "text/csv");
+    });
+    document.getElementById("fb-export-json").addEventListener("click", function () {
+      download("signal_feedback.json", JSON.stringify(feedbackCache || [], null, 2), "application/json");
+    });
   }
 
   // ---------- Breadth Internals: a regime read, not just two raw counts ----------
@@ -4466,6 +4705,7 @@
   renderSectorLookup();
   renderSignals();
   renderWatchlist();
+  renderFeedbackLog();
 
   // Each grid container's data-keys attribute lists which series to render
   // there (comma-separated). This lets the same script serve both the full
