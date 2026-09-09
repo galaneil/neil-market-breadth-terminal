@@ -786,3 +786,37 @@ header h1 { display: flex; align-items: center; }
   padding:3px 8px; font-size:11px; cursor:pointer;
 }
 .log-edit-btn:hover{border-color:var(--accent); color:var(--text);}
+
+/* ---- Data Freshness (System Architecture) ---- */
+.fr-dot{
+  display:inline-block; width:8px; height:8px; border-radius:50%; margin:0 3px; vertical-align:middle;
+}
+.fr-dot.green{background:var(--up);}
+.fr-dot.yellow{background:var(--warn);}
+.fr-dot.red{background:var(--down);}
+.fr-table{
+  width:100%; border-collapse:collapse; background:var(--panel-bg); border:1px solid var(--border);
+  border-radius:10px; overflow:hidden; font-size:12.5px; margin-top:14px;
+}
+.fr-table th{
+  text-align:left; font-size:10.5px; text-transform:uppercase; letter-spacing:.03em; color:var(--text-dim);
+  padding:9px 12px; border-bottom:1px solid var(--border); font-weight:600;
+}
+.fr-table td{padding:9px 12px; border-bottom:1px solid var(--border); vertical-align:middle;}
+.fr-table tr:last-child td{border-bottom:none;}
+.fr-status{display:flex; align-items:center; gap:6px; font-weight:600; font-size:12px;}
+.fr-status.green{color:var(--up);}
+.fr-status.yellow{color:var(--warn);}
+.fr-status.red{color:var(--down);}
+.fr-feeds{color:var(--text-dim); font-size:11px;}
+.fr-sync-btn{
+  font-size:11.5px; font-weight:600; border:1px solid var(--border); background:var(--panel-bg);
+  color:var(--text); border-radius:6px; padding:5px 10px; cursor:pointer;
+}
+.fr-sync-btn:hover{border-color:var(--accent); color:var(--accent);}
+.fr-sync-btn:disabled{opacity:.5; cursor:default;}
+.fr-country-head td{
+  background:var(--bg); font-weight:700; font-size:11px; text-transform:uppercase; letter-spacing:.04em;
+  color:var(--text-dim); padding:8px 12px;
+}
+.fr-sync-msg{font-size:11.5px; color:var(--text-dim); margin-top:10px;}

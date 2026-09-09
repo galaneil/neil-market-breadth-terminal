@@ -998,6 +998,30 @@ def _screener_payload(country):
     }
 
 
+def _freshness_body():
+    # Local-hub only, same as Feedback Log: /api/freshness and
+    # /api/freshness/sync only exist on the server behind this page, not on
+    # the published static site. One row per data FILE (not per tab -- most
+    # tabs share a handful of upstream funnels), both countries in one
+    # table since this is an operational view, not a market view.
+    return """
+<div class="empty-note" id="fr-unavailable" style="display:none">
+  This table reads live from the local hub's server, so it isn't reachable from a page served
+  without one — including the published link. Open the local hub to see it.
+</div>
+<div id="fr-available">
+  <div class="empty-note">
+    One row per underlying data file, not per tab — most tabs share a handful of these, so a
+    stale file here explains staleness across several tabs at once (see each row's "Feeds").
+    <span class="fr-dot green"></span> synced to the last completed session ·
+    <span class="fr-dot yellow"></span> a refresh is running right now ·
+    <span class="fr-dot red"></span> behind, with the day count shown.
+  </div>
+  <div id="fr-table-wrap"></div>
+</div>
+""".strip()
+
+
 def _architecture_body(country):
     """A plain-language map of where every number on this site actually comes
     from, so a stale or surprising figure can be traced back to its source
@@ -1595,6 +1619,11 @@ def render_all_panels(country):
     paths.append(render_panel(
         country, "panel-architecture.html", "System Architecture",
         _architecture_body(country), [], series, generated_at,
+    ))
+
+    paths.append(_write_panel(
+        country, "panel-freshness.html", "Data Freshness",
+        _freshness_body(), {"country": country}, generated_at,
     ))
 
     return paths

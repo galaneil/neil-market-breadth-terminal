@@ -2278,6 +2278,82 @@
     });
   }
 
+  // ---------- Data Freshness: one row per data file, both countries ----------
+  // Local-hub only -- same feature-detect-and-degrade pattern as Feedback
+  // Log. Polls while anything is syncing so a triggered refresh visibly
+  // lands without a manual reload.
+  const FRESHNESS_API = "/api/freshness";
+  const FRESHNESS_SYNC_API = "/api/freshness/sync";
+  function renderFreshnessPanel() {
+    const wrap = document.getElementById("fr-table-wrap");
+    if (!wrap) return;
+    let pollTimer = null;
+
+    function load() {
+      fetch(FRESHNESS_API).then(function (r) {
+        if (!r.ok) throw new Error("unavailable");
+        return r.json();
+      }).then(function (report) {
+        document.getElementById("fr-unavailable").style.display = "none";
+        document.getElementById("fr-available").style.display = "block";
+        draw(report);
+        const anySyncing = Object.values(report).some(function (c) { return c.syncing; });
+        clearTimeout(pollTimer);
+        if (anySyncing) pollTimer = setTimeout(load, 15000);
+      }).catch(function () {
+        document.getElementById("fr-unavailable").style.display = "block";
+        document.getElementById("fr-available").style.display = "none";
+      });
+    }
+
+    function draw(report) {
+      const countryLabel = { US: "United States", IN: "India" };
+      let html = '<table class="fr-table"><thead><tr>'
+        + '<th>Data file</th><th>Feeds</th><th>Status</th><th>As of</th><th></th>'
+        + '</tr></thead><tbody>';
+      Object.keys(report).forEach(function (code) {
+        const c = report[code];
+        html += '<tr class="fr-country-head"><td colspan="5">' + (countryLabel[code] || code)
+          + (c.syncing ? ' <span class="fr-dot yellow"></span> refresh in progress' : '') + '</td></tr>';
+        html += c.rows.map(function (row) {
+          const dotClass = row.level === "green" ? "green" : row.level === "yellow" || c.syncing ? "yellow" : "red";
+          const statusText = c.syncing ? "Syncing…"
+            : row.level === "green" ? "Synced"
+            : (row.staleDays == null ? "No data" : row.staleDays + " day" + (row.staleDays === 1 ? "" : "s") + " behind");
+          return '<tr>'
+            + '<td><b>' + row.label + '</b></td>'
+            + '<td class="fr-feeds">' + row.feeds.join(", ") + '</td>'
+            + '<td><span class="fr-status ' + dotClass + '"><span class="fr-dot ' + dotClass + '"></span>' + statusText + '</span></td>'
+            + '<td>' + (row.asOf || "—") + '</td>'
+            + '<td>' + (row.level === "red" && !c.syncing
+                ? '<button class="fr-sync-btn" data-sync="' + code + '">Sync now</button>' : '') + '</td>'
+          + '</tr>';
+        }).join("");
+      });
+      html += '</tbody></table><div class="fr-sync-msg" id="fr-sync-msg"></div>';
+      wrap.innerHTML = html;
+
+      wrap.querySelectorAll("[data-sync]").forEach(function (btn) {
+        btn.addEventListener("click", function () {
+          const code = btn.dataset.sync;
+          wrap.querySelectorAll("[data-sync]").forEach(function (b) { b.disabled = true; b.textContent = "Syncing…"; });
+          fetch(FRESHNESS_SYNC_API, {
+            method: "POST", headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ country: code }),
+          }).then(function (r) { return r.json(); }).then(function (result) {
+            document.getElementById("fr-sync-msg").textContent = result.message || result.error || "";
+            load();
+          }).catch(function () {
+            document.getElementById("fr-sync-msg").textContent = "Sync request failed — try again.";
+            load();
+          });
+        });
+      });
+    }
+
+    load();
+  }
+
   // ---------- Breadth Internals: a regime read, not just two raw counts ----------
   // Same badge/verdict language Market Environment already uses (bullish/
   // bearish/choppy), computed over a window you pick client-side from the
@@ -4706,6 +4782,7 @@
   renderSignals();
   renderWatchlist();
   renderFeedbackLog();
+  renderFreshnessPanel();
 
   // Each grid container's data-keys attribute lists which series to render
   // there (comma-separated). This lets the same script serve both the full

@@ -125,6 +125,7 @@ ALGORITHMS_PANELS = [
 # about the system itself, not a data panel someone browses day to day.
 SYSTEM_PANELS = [
     {"label": "System Architecture", "path": "panel-architecture.html"},
+    {"label": "Data Freshness", "path": "panel-freshness.html"},
 ]
 
 OUTPUT_DIR = os.path.join(os.path.dirname(config.ROOT_DIR), "Portfolio Local")
@@ -197,6 +198,179 @@ def _country_data_status(code):
         "updatedAt": updated_at.strftime("%Y-%m-%d %H:%M UTC"),
         "staleDays": stale_days,
     }
+
+
+# ── Data Freshness tab ───────────────────────────────────────────────────
+#
+# One row per data FILE, not per tab -- most tabs share a small number of
+# upstream funnels (see each row's own "feeds" list below), so a per-tab
+# table would just show the same staleness repeated under 5 different
+# names. This groups by what would actually need re-fetching to fix it.
+#
+# Every funnel here traces back to one of three real fetches (price data,
+# index data, TradingView classification) -- nothing is independently
+# fetchable at finer granularity than "run this country's pipeline", so the
+# one-click action is the same for every red row in a country: sync first
+# (cheap, catches up if origin already has it), full refresh if that's not
+# enough (slow, actually re-fetches).
+
+def _jsonl_status(country, filename):
+    """Same read _country_data_status does, generalized to any jsonl."""
+    path = os.path.join(config.data_dir(country), filename)
+    if not os.path.exists(path):
+        return {"asOf": None, "staleDays": None}
+    as_of = None
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            if line.strip():
+                as_of = json.loads(line).get("date")
+    stale_days = None
+    if as_of:
+        as_of_date = datetime.strptime(as_of, "%Y-%m-%d").date()
+        stale_days = (datetime.now(timezone.utc).date() - as_of_date).days
+    return {"asOf": as_of, "staleDays": stale_days}
+
+
+def _ticker_canary_status(country, canary_ticker):
+    """Per-ticker files have no single date to check (there are ~1,000-3,500
+    of them) -- one well-known, always-priced name stands in as a canary.
+    Not a full picture (a handful of thin names lagging behind everything
+    else, the actual shape of most incidents this week, wouldn't show up
+    here) but catches the case that matters most: the whole file set never
+    got refreshed at all."""
+    path = os.path.join(config.ticker_dir(country), canary_ticker + ".json")
+    if not os.path.exists(path):
+        return {"asOf": None, "staleDays": None}
+    try:
+        with open(path, encoding="utf-8") as f:
+            dates = json.load(f).get("dates") or []
+    except (OSError, ValueError):
+        return {"asOf": None, "staleDays": None}
+    if not dates:
+        return {"asOf": None, "staleDays": None}
+    as_of = dates[-1]
+    as_of_date = datetime.strptime(as_of, "%Y-%m-%d").date()
+    stale_days = (datetime.now(timezone.utc).date() - as_of_date).days
+    return {"asOf": as_of, "staleDays": stale_days}
+
+
+def _mtime_status(country, filename):
+    """classification.json and similar have no per-row date at all -- file
+    mtime against the same DATA_STALE_DAYS tolerance is the best available
+    signal, coarser than the jsonl checks (a same-day re-render bumps mtime
+    even if the content underneath didn't actually change) but still catches
+    the case of "this hasn't been touched in over a week"."""
+    path = os.path.join(config.data_dir(country), filename)
+    if not os.path.exists(path):
+        return {"asOf": None, "staleDays": None}
+    mtime = datetime.fromtimestamp(os.path.getmtime(path), tz=timezone.utc)
+    stale_days = (datetime.now(timezone.utc) - mtime).days
+    return {"asOf": mtime.strftime("%Y-%m-%d"), "staleDays": stale_days}
+
+
+# {label, check(country) -> {asOf, staleDays}, feeds, tmleOnly}
+FUNNELS = [
+    {"label": "Market Environment", "feeds": ["Market Environment", "Signals"],
+     "check": lambda c: _jsonl_status(c, "environment.jsonl")},
+    {"label": "Indices", "feeds": ["Indices", "Market Environment"],
+     "check": lambda c: _jsonl_status(c, "index_" + list(config.COUNTRIES[c]["index_tickers"])[0] + ".jsonl")},
+    {"label": "Sector & Industry Ranks", "feeds": ["Sector & Industry", "Money Flows", "Signals"],
+     "check": lambda c: _jsonl_status(c, "sector_ranks.jsonl")},
+    {"label": "Screener / Money Flows bundle", "feeds": ["Screener", "Money Flows", "Signals", "Watchlist"],
+     "check": lambda c: _jsonl_status(c, "hilo_counts.jsonl")},
+    {"label": "Breadth", "feeds": ["Breadth Internals", "6 breadth panels"],
+     "check": lambda c: _jsonl_status(c, "breadth_adv_decl.jsonl")},
+    {"label": "TMLE Leaders", "feeds": ["TMLE Leaders", "TMLE Emerging", "Signals (breakout)"], "tmleOnly": True,
+     "check": lambda c: _jsonl_status(c, "tmle_leaders.jsonl")},
+    {"label": "TradingView Classification", "feeds": ["nearly every tab — sector/industry/logo/mkt cap"],
+     "check": lambda c: _mtime_status(c, "classification.json")},
+    {"label": "Per-ticker prices", "feeds": ["Stock Lookup", "Screener rows", "Signals (earnings/cup)", "TMLE"],
+     "check": lambda c: _ticker_canary_status(c, "AAPL" if c == "US" else "RELIANCE")},
+]
+
+
+def _pipeline_running(country):
+    """Best-effort: is a local refresh for this country active right now.
+    Reads the tail of the same log run_daily_refresh.py already writes --
+    a "starting" line with no later "done"/"FAILED" line for that country
+    means it's still going."""
+    log_path = os.path.join(OUTPUT_DIR, "daily-refresh.log")
+    if not os.path.exists(log_path):
+        return False
+    started = finished = False
+    with open(log_path, encoding="utf-8", errors="ignore") as f:
+        for line in f:
+            if f"{country}: starting pipeline" in line:
+                started, finished = True, False
+            elif f"{country}: pipeline done" in line or f"{country}: pipeline FAILED" in line:
+                finished = True
+    return started and not finished
+
+
+def freshness_report():
+    report = {}
+    for code in config.COUNTRIES:
+        rows = []
+        running = _pipeline_running(code)
+        for funnel in FUNNELS:
+            if funnel.get("tmleOnly") and not config.COUNTRIES[code].get("run_tmle"):
+                continue
+            try:
+                status = funnel["check"](code)
+            except Exception as error:
+                status = {"asOf": None, "staleDays": None, "error": str(error)}
+            stale_days = status.get("staleDays")
+            if running:
+                level = "syncing"
+            elif stale_days is None:
+                level = "red"
+            elif stale_days <= DATA_STALE_DAYS:
+                level = "green"
+            else:
+                level = "red"
+            rows.append({
+                "label": funnel["label"], "feeds": funnel["feeds"],
+                "asOf": status.get("asOf"), "staleDays": stale_days, "level": level,
+            })
+        report[code] = {"rows": rows, "syncing": running}
+    return report
+
+
+def trigger_sync_and_backfill(country, log=print):
+    """The one-click action behind every red row: try the cheap fix first
+    (pull whatever origin already has), and only fall back to an actual
+    re-fetch if that alone doesn't close the gap. A full pipeline run takes
+    anywhere from ~25 minutes (India) to ~50+ (US) -- far too long to hold
+    an HTTP request open for, so that half runs detached and the caller
+    polls /api/freshness afterward to watch it land, same as the page
+    already does for the "syncing" (yellow) state.
+    """
+    origin_result = sync_from_origin(log=log)
+    try:
+        sync_tickers_from_ghpages(log=log)
+    except Exception as error:
+        log(f"  ticker sync failed: {error}")
+
+    report = freshness_report()
+    still_red = [r["label"] for r in report.get(country, {}).get("rows", []) if r["level"] == "red"]
+    if not still_red:
+        return {"action": "synced", "message": "Caught up from what was already published — no full refresh needed."}
+
+    if _pipeline_running(country):
+        return {"action": "already_running",
+                "message": f"A {country} refresh is already in progress."}
+
+    log(f"  sync alone didn't close the gap for {country} ({', '.join(still_red)}) — "
+        f"starting a full refresh in the background")
+    script = os.path.join(config.ROOT_DIR, "scripts", "run_daily_refresh.py")
+    subprocess.Popen(
+        [sys.executable, script, country],
+        cwd=config.ROOT_DIR,
+        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+    )
+    return {"action": "triggered_full_refresh",
+            "message": f"Sync alone wasn't enough — a full {country} refresh just started in the "
+                       "background. This can take 25-50+ minutes; the table above will update once it lands."}
 
 
 # A weekend alone puts asOf 2-3 calendar days behind "today" with nothing
@@ -806,6 +980,9 @@ class Handler(BaseHTTPRequestHandler):
         if route.path == "/api/signal-feedback":
             self._send(200, json.dumps(_load_feedback_all()), "application/json")
             return
+        if route.path == "/api/freshness":
+            self._send(200, json.dumps(freshness_report()), "application/json")
+            return
         if route.path == "/api/brokers":
             self._send(200, json.dumps(available()), "application/json")
             return
@@ -902,6 +1079,19 @@ class Handler(BaseHTTPRequestHandler):
                 # replaced with something generic.
                 self._send(200, json.dumps({"ok": False, "error": str(error)}),
                            "application/json")
+            return
+
+        if route.path == "/api/freshness/sync":
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                body = json.loads(self.rfile.read(length) or b"{}")
+                country = (body.get("country") or "").upper()
+                if country not in config.COUNTRIES:
+                    raise ValueError(f"unknown country {country!r}")
+                result = trigger_sync_and_backfill(country, log=log)
+                self._send(200, json.dumps(result), "application/json")
+            except Exception as error:
+                self._send(400, json.dumps({"error": str(error)}), "application/json")
             return
 
         if route.path == "/api/signal-feedback":
@@ -2025,6 +2215,7 @@ HUB_PAGE = r"""<!doctype html>
     <div class="group-label">Data freshness</div>
     <div id="freshness-rows">Loading&hellip;</div>
     <div id="freshness-note" class="dim"></div>
+    <div style="margin-top:6px"><a href="#" id="freshness-detail-link" style="font-size:11px">Full breakdown, file by file &rarr;</a></div>
   </div>
   <div id="sidebar-foot">
     Breadth data also published at
@@ -2097,6 +2288,7 @@ const ICONS = {
     + '<path d="M7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/>'),
   "System Architecture": icon('<circle cx="12" cy="12" r="3"/>'
     + '<path d="M12 2v3M12 19v3M4.2 4.2l2.1 2.1M17.7 17.7l2.1 2.1M2 12h3M19 12h3M4.2 19.8l2.1-2.1M17.7 6.3l2.1-2.1"/>'),
+  "Data Freshness": icon('<path d="M21 12a9 9 0 1 1-3.5-7.1"/><polyline points="21 3 21 9 15 9"/>'),
   "Live Portfolio": icon('<rect x="2" y="7" width="20" height="14" rx="2"/>'
     + '<path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>'),
 };
@@ -2373,6 +2565,12 @@ document.getElementById("reload-btn").onclick = () => {
     rowsEl.textContent = "Could not check.";
   }
 })();
+
+document.getElementById("freshness-detail-link").onclick = (e) => {
+  e.preventDefault();
+  const item = (country.systemPanels || []).find(p => p.label === "Data Freshness");
+  if (item) { go(item.url, item.label, undefined, item.label); refreshNav(); }
+};
 
 document.getElementById("sync-now").onclick = async (e) => {
   e.preventDefault();
