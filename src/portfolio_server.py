@@ -283,7 +283,7 @@ FUNNELS = [
     {"label": "TMLE Leaders", "feeds": ["TMLE Leaders", "TMLE Emerging", "Signals (breakout)"], "tmleOnly": True,
      "check": lambda c: _jsonl_status(c, "tmle_leaders.jsonl")},
     {"label": "TradingView Classification", "feeds": ["nearly every tab — sector/industry/logo/mkt cap"],
-     "check": lambda c: _mtime_status(c, "classification.json")},
+     "mtimeBased": True, "check": lambda c: _mtime_status(c, "classification.json")},
     {"label": "Per-ticker prices", "feeds": ["Stock Lookup", "Screener rows", "Signals (earnings/cup)", "TMLE"],
      "check": lambda c: _ticker_canary_status(c, "AAPL" if c == "US" else "RELIANCE")},
 ]
@@ -312,6 +312,16 @@ def freshness_report():
     for code in config.COUNTRIES:
         rows = []
         running = _pipeline_running(code)
+        # The country's own environment.jsonl is the authoritative "what
+        # session should everything reflect by now" -- it already accounts
+        # for weekends and holidays correctly, because it only ever advances
+        # when a real session actually closed. Comparing every OTHER
+        # funnel against calendar "today" (with a blanket few-day cushion
+        # to paper over weekends) is what let a genuinely two-day-stale
+        # per-ticker file read as green: the cushion was hiding exactly the
+        # gap it was supposed to only excuse on weekends. Comparing against
+        # this instead catches a real lag on any day, weekend or not.
+        expected = _jsonl_status(code, "environment.jsonl").get("asOf")
         for funnel in FUNNELS:
             if funnel.get("tmleOnly") and not config.COUNTRIES[code].get("run_tmle"):
                 continue
@@ -319,20 +329,29 @@ def freshness_report():
                 status = funnel["check"](code)
             except Exception as error:
                 status = {"asOf": None, "staleDays": None, "error": str(error)}
+            as_of = status.get("asOf")
             stale_days = status.get("staleDays")
+
             if running:
                 level = "syncing"
-            elif stale_days is None:
+            elif funnel.get("mtimeBased"):
+                # No real session date to compare (classification.json has
+                # no per-row date) -- fall back to the coarser day-count
+                # tolerance, same as before.
+                level = "red" if stale_days is None or stale_days > DATA_STALE_DAYS else "green"
+            elif as_of is None or expected is None:
                 level = "red"
-            elif stale_days <= DATA_STALE_DAYS:
-                level = "green"
             else:
-                level = "red"
+                level = "green" if as_of >= expected else "red"
+                if level == "red" and as_of:
+                    stale_days = (datetime.strptime(expected, "%Y-%m-%d")
+                                  - datetime.strptime(as_of, "%Y-%m-%d")).days
+
             rows.append({
                 "label": funnel["label"], "feeds": funnel["feeds"],
-                "asOf": status.get("asOf"), "staleDays": stale_days, "level": level,
+                "asOf": as_of, "staleDays": stale_days, "level": level,
             })
-        report[code] = {"rows": rows, "syncing": running}
+        report[code] = {"rows": rows, "syncing": running, "expectedAsOf": expected}
     return report
 
 
@@ -2087,10 +2106,15 @@ HUB_PAGE = r"""<!doctype html>
 <style>
   :root { --bg:#0d0f14; --panel:#171b24; --line:#262b36; --text:#e7e9ee;
     --dim:#9096a3; --accent:#3b82f6; --accent-dim:#1d4ed8;
+    --mb:#5b9dff; --sig:#e0a94e; --algo:#a78bfa; --port:#4ade80; --sys:#a1a1aa;
+    --icon-glow:rgba(91,157,255,.5);
   }
   @media (prefers-color-scheme: light) {
     :root { --bg:#f5f6f8; --panel:#fff; --line:#e2e5ea; --text:#1a1d24;
-      --dim:#6b7280; --accent:#2563eb; --accent-dim:#dbeafe; }
+      --dim:#6b7280; --accent:#2563eb; --accent-dim:#dbeafe;
+      --mb:#2563eb; --sig:#b45309; --algo:#7c3aed; --port:#15803d; --sys:#52525b;
+      --icon-glow:rgba(37,99,235,.45);
+    }
   }
   * { box-sizing:border-box; }
   html, body { height:100%; margin:0; overflow:hidden; }
@@ -2112,24 +2136,49 @@ HUB_PAGE = r"""<!doctype html>
   #country-switch button.active { background:var(--accent); border-color:var(--accent);
     color:#fff; }
 
-  .group-label { padding:14px 16px 6px; font-size:10.5px; text-transform:uppercase;
-    letter-spacing:.06em; color:color-mix(in srgb, var(--dim) 55%, var(--text));
-    font-weight:800; }
+  /* Each group carries its own accent (--row-c, set per #<x>-nav below) so
+     the sidebar's 6 sections are tellable apart at a glance instead of all
+     six looking identical but for their text label — a colored dot plus a
+     colored label, a matching icon tint, and a matching active-row rail. */
+  .group-label { display:flex; align-items:center; gap:7px; padding:14px 16px 6px;
+    margin-top:2px; position:relative; font-size:11px; text-transform:uppercase;
+    letter-spacing:.07em; color:var(--row-c, var(--dim)); font-weight:800; cursor:pointer;
+    user-select:none; }
+  .group-label::before { content:""; position:absolute; left:16px; right:16px; top:0;
+    height:1px; background:var(--line); }
+  #pinned-section .group-label::before, #sidebar > .group-label:first-of-type::before { display:none; }
+  .group-label .label-dot { width:6px; height:6px; border-radius:50%; flex:none;
+    background:var(--row-c, var(--dim)); }
+  .group-label .label-text { flex:1; }
+  .group-label .label-fresh { width:6px; height:6px; border-radius:50%; flex:none;
+    background:var(--down); box-shadow:0 0 0 2px color-mix(in srgb, var(--down) 25%, transparent); }
+  .group-label .label-chevron { flex:none; color:var(--dim); font-size:10px;
+    display:inline-block; transition:transform .15s; }
+  .group-label.collapsed .label-chevron { transform:rotate(-90deg); }
   #pinned-section[hidden], .group-label[hidden] { display:none; }
+  nav.collapsed { display:none; }
 
   nav a { display:flex; align-items:center; gap:9px; padding:8px 16px;
     color:var(--dim); text-decoration:none; font-size:13px; font-weight:500;
-    border-left:3px solid transparent; cursor:pointer; }
+    border-left:4px solid transparent; cursor:pointer; transition:background .12s, border-color .12s; }
   nav a .nav-label { flex:1; overflow:hidden; text-overflow:ellipsis;
     white-space:nowrap; }
-  /* Icons use stroke="currentColor" and no explicit color of their own, so
-     they inherit whatever state color the row is in (dim / hover / active)
-     automatically — one icon definition, correct in every state and theme. */
-  .nav-icon { flex:none; display:flex; opacity:.85; }
-  nav a.active .nav-icon, nav a:hover .nav-icon { opacity:1; }
-  nav a:hover { color:var(--text); background:color-mix(in srgb, var(--accent) 6%, transparent); }
-  nav a.active { color:var(--text); border-left-color:var(--accent);
-    background:color-mix(in srgb, var(--accent) 10%, transparent); font-weight:600; }
+  /* Icons use stroke="currentColor", but .nav-icon sets its OWN color here
+     (the group's --row-c) rather than inheriting the row's dim/active text
+     color the way it used to — that decouples icon tint from row state, so
+     every icon carries its section's color whether or not that row is
+     currently selected. A black drop-shadow gives constant depth; the
+     row's own color joins it as a glow once active. */
+  .nav-icon { flex:none; display:flex; opacity:.7; color:var(--row-c, var(--dim));
+    filter:drop-shadow(0 1px 1.5px rgba(0,0,0,.5)); transition:opacity .15s, filter .15s; }
+  nav a:hover .nav-icon { opacity:.95; }
+  nav a.active .nav-icon { opacity:1;
+    filter:drop-shadow(0 1px 1.5px rgba(0,0,0,.5)) drop-shadow(0 0 4px var(--icon-glow)); }
+  nav a:hover { color:var(--text); background:color-mix(in srgb, var(--row-c, var(--accent)) 7%, transparent); }
+  nav a.active { color:var(--text); border-left-color:var(--row-c, var(--accent));
+    background:color-mix(in srgb, var(--row-c, var(--accent)) 20%, transparent); font-weight:700;
+    box-shadow:inset 0 0 0 1px color-mix(in srgb, var(--row-c, var(--accent)) 25%, transparent); }
+
 
   .pin-btn { background:none; border:none; color:var(--dim); opacity:0;
     font-size:13px; cursor:pointer; line-height:1; padding:2px; flex:none; }
@@ -2190,16 +2239,31 @@ HUB_PAGE = r"""<!doctype html>
     <div class="group-label">Pinned</div>
     <nav id="pinned-nav"></nav>
   </div>
-  <div class="group-label">Market Breadth</div>
-  <nav id="panel-nav"></nav>
-  <div class="group-label">Signals</div>
-  <nav id="signals-nav"></nav>
-  <div class="group-label">Algorithms</div>
-  <nav id="algorithms-nav"></nav>
-  <div class="group-label">Portfolio</div>
-  <nav id="portfolio-nav"></nav>
-  <div class="group-label">System</div>
-  <nav id="system-nav"></nav>
+  <div class="group-label" style="--row-c:var(--mb)" data-group="panel-nav">
+    <span class="label-chevron">&#9662;</span><span class="label-dot"></span>
+    <span class="label-text">Market Breadth</span><span class="label-fresh" id="fresh-panel-nav" hidden></span>
+  </div>
+  <nav id="panel-nav" style="--row-c:var(--mb)"></nav>
+  <div class="group-label" style="--row-c:var(--sig)" data-group="signals-nav">
+    <span class="label-chevron">&#9662;</span><span class="label-dot"></span>
+    <span class="label-text">Signals</span><span class="label-fresh" id="fresh-signals-nav" hidden></span>
+  </div>
+  <nav id="signals-nav" style="--row-c:var(--sig)"></nav>
+  <div class="group-label" style="--row-c:var(--algo)" data-group="algorithms-nav">
+    <span class="label-chevron">&#9662;</span><span class="label-dot"></span>
+    <span class="label-text">Algorithms</span><span class="label-fresh" id="fresh-algorithms-nav" hidden></span>
+  </div>
+  <nav id="algorithms-nav" style="--row-c:var(--algo)"></nav>
+  <div class="group-label" style="--row-c:var(--port)" data-group="portfolio-nav">
+    <span class="label-chevron">&#9662;</span><span class="label-dot"></span>
+    <span class="label-text">Portfolio</span>
+  </div>
+  <nav id="portfolio-nav" style="--row-c:var(--port)"></nav>
+  <div class="group-label" style="--row-c:var(--sys)" data-group="system-nav">
+    <span class="label-chevron">&#9662;</span><span class="label-dot"></span>
+    <span class="label-text">System</span>
+  </div>
+  <nav id="system-nav" style="--row-c:var(--sys)"></nav>
   <div id="sidebar-foot">
     <div id="sync-warning" hidden style="padding:8px; border-radius:6px;
          background:color-mix(in srgb, var(--warn) 15%, transparent);
@@ -2229,26 +2293,33 @@ function icon(d) {
     + 'stroke-linejoin="round">' + d + '</svg></span>';
 }
 const ICONS = {
-  "Market Environment": icon('<polyline points="3 12 8 12 10 18 14 6 16 12 21 12"/>'),
-  "Indices": icon('<rect x="3" y="12" width="4" height="8"/>'
-    + '<rect x="10" y="7" width="4" height="13"/><rect x="17" y="3" width="4" height="17"/>'),
-  "Sector & Industry": icon('<polygon points="12 2 2 7 12 12 22 7 12 2"/>'
-    + '<polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>'),
-  "Money Flows": icon('<polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/>'
-    + '<polyline points="17 6 23 6 23 12"/>'),
-  "Breadth Internals": icon('<line x1="12" y1="20" x2="12" y2="10"/>'
-    + '<line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/>'),
+  "Market Environment": icon('<path d="M2 17l4-1.2 3-8.8 4 7 3-4 3 2"/>'
+    + '<circle cx="19" cy="12" r="1.3" fill="currentColor" stroke="none"/>'),
+  "Indices": icon('<rect x="3" y="14" width="3.6" height="7" rx="1"/>'
+    + '<rect x="10.2" y="9" width="3.6" height="12" rx="1"/><rect x="17.4" y="4" width="3.6" height="17" rx="1"/>'),
+  "Sector & Industry": icon('<rect x="3" y="3" width="7.5" height="7.5" rx="1.6"/>'
+    + '<rect x="13.5" y="3" width="7.5" height="7.5" rx="1.6"/><rect x="3" y="13.5" width="7.5" height="7.5" rx="1.6"/>'
+    + '<rect x="13.5" y="13.5" width="7.5" height="7.5" rx="1.6"/>'),
+  "Money Flows": icon('<path d="M3 12h4"/><path d="M7 12l5-6"/><path d="M7 12l5 6"/>'
+    + '<path d="M12 6h7"/><path d="M12 18h7"/>'),
+  "Breadth Internals": icon('<path d="M3 21V3"/><path d="M3 21h18"/>'
+    + '<path d="M7 17v-6"/><path d="M12 17v-10"/><path d="M17 17v-3"/>'),
   "Hi/Lo Counts & Screener": icon('<polyline points="17 11 12 6 7 11"/>'
     + '<polyline points="7 13 12 18 17 13"/>'),
-  "Screener": icon('<polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/>'),
-  "Market Replay": icon('<circle cx="12" cy="12" r="9"/><polyline points="12 7 12 12 15 15"/>'),
-  "Stock Lookup": icon('<circle cx="11" cy="11" r="7"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>'),
-  "TMLE Leaders": icon('<circle cx="12" cy="8" r="6"/>'
-    + '<polyline points="8.5 13.5 7 22 12 19 17 22 15.5 13.5"/>'),
-  "TMLE Emerging": icon('<line x1="12" y1="19" x2="12" y2="5"/><polyline points="5 12 12 5 19 12"/>'),
-  "Signals": icon('<path d="M12 12m-1 0a1 1 0 1 0 2 0a1 1 0 1 0 -2 0"/>'
+  "Screener": icon('<path d="M3 5h18l-7 8v6l-4 2v-8z"/>'
+    + '<circle cx="12" cy="2.2" r="1.1" fill="currentColor" stroke="none"/>'),
+  "Market Replay": icon('<circle cx="12" cy="12" r="9"/>'
+    + '<path d="M10 8.3l5.2 3.7-5.2 3.7z" fill="currentColor" stroke="none"/>'),
+  "Stock Lookup": icon('<circle cx="10.5" cy="10.5" r="6.5"/><path d="M20 20l-4.35-4.35"/>'
+    + '<path d="M7.3 12.2l1.6-3.2 1.6 2 2.2-4.3"/>'),
+  "TMLE Leaders": icon('<path d="M3 8l4 3 5-7 5 7 4-3-2 10H5z"/><path d="M5 21h14"/>'),
+  "TMLE Emerging": icon('<path d="M12 21V10"/>'
+    + '<path d="M12 10c0-4.2-3.1-6.3-7.3-6.3.3 4.2 3.1 6.3 7.3 6.3z"/>'
+    + '<path d="M12 14.5c0-3.1 3-5.2 6.3-5.2-.3 3.1-3.2 5.2-6.3 5.2z"/>'),
+  "Signals": icon('<circle cx="12" cy="12" r="1.3" fill="currentColor" stroke="none"/>'
     + '<path d="M8.5 8.5a5 5 0 0 1 7 0"/><path d="M5.5 5.5a9 9 0 0 1 13 0"/>'),
-  "Watchlist": icon('<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>'),
+  "Watchlist": icon('<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>'
+    + '<circle cx="12" cy="12" r="3" fill="currentColor" stroke="none"/>'),
   "Feedback Log": icon('<path d="M14 9V5a3 3 0 0 0-3-3l-4 9v11h11.28a2 2 0 0 0 2-1.7l1.38-9a2 2 0 0 0-2-2.3H14z"/>'
     + '<path d="M7 22H4a2 2 0 0 1-2-2v-7a2 2 0 0 1 2-2h3"/>'),
   "System Architecture": icon('<circle cx="12" cy="12" r="3"/>'
@@ -2449,11 +2520,18 @@ function renderCountrySwitch() {
     + c.code + '">' + c.flag + ' ' + c.label + '</button>').join("");
   document.querySelectorAll("#country-switch button").forEach(b =>
     b.onclick = () => {
+      // Stay on whatever tab was open (Money Flows -> Money Flows, not back
+      // to Market Environment) -- activeTop is set by setChrome() on every
+      // navigation, so it already names exactly the row to look up again in
+      // the country being switched to. Falls back to the first panel only
+      // for the rare case that row doesn't exist there (e.g. TMLE, US-only).
+      const wantedLabel = activeTop;
       country = COUNTRIES.find(c => c.code === b.dataset.c);
       renderCountrySwitch(); refreshNav();
-      const first = country.panels[0];
-      if (first.children) openGroup(first);
-      else go(first.url, first.label, undefined, first.label);
+      const match = topLevelItems().find(p => p.label === wantedLabel);
+      const target = match || country.panels[0];
+      if (target.children) openGroup(target);
+      else go(target.url, target.label, target.scoped, target.label);
       refreshNav();
     });
 }
@@ -2492,6 +2570,51 @@ document.getElementById("reload-btn").onclick = () => {
     }
   } catch (err) { /* status endpoint unreachable — say nothing, not worth alarming over */ }
 })();
+
+// Click a group's own label to collapse/expand it in place -- state isn't
+// persisted on purpose: it's for temporarily getting a long section (Market
+// Breadth) out of the way, not a standing preference to remember.
+document.querySelectorAll(".group-label[data-group]").forEach((label) => {
+  label.onclick = () => {
+    label.classList.toggle("collapsed");
+    document.getElementById(label.dataset.group).classList.toggle("collapsed");
+  };
+});
+
+// Only ever shown when a group actually has something stale -- a synced
+// group shows no dot at all, so the dot appearing is itself the signal
+// instead of a permanent row of reassurance dots next to every label.
+// Best-effort mapping from a Data Freshness funnel's own label to which
+// sidebar group it belongs to; a funnel not listed here (Screener/Money
+// Flows bundle spans two groups, so it's counted for both) just doesn't
+// contribute to any dot rather than guessing.
+const FRESHNESS_GROUP_MAP = {
+  "panel-nav": ["Market Environment", "Indices", "Sector & Industry Ranks",
+               "Screener / Money Flows bundle", "Breadth", "TradingView Classification",
+               "Per-ticker prices"],
+  "signals-nav": ["Screener / Money Flows bundle"],
+  "algorithms-nav": ["TMLE Leaders"],
+};
+async function refreshSidebarFreshness() {
+  try {
+    const report = await (await fetch("/api/freshness")).json();
+    const staleByGroup = {};
+    Object.values(report).forEach((c) => {
+      (c.rows || []).forEach((row) => {
+        if (row.level !== "red") return;
+        Object.entries(FRESHNESS_GROUP_MAP).forEach(([group, labels]) => {
+          if (labels.includes(row.label)) staleByGroup[group] = true;
+        });
+      });
+    });
+    Object.keys(FRESHNESS_GROUP_MAP).forEach((group) => {
+      const el = document.getElementById("fresh-" + group);
+      if (el) el.hidden = !staleByGroup[group];
+    });
+  } catch (err) { /* local-hub-only endpoint -- say nothing if unreachable */ }
+}
+refreshSidebarFreshness();
+setInterval(refreshSidebarFreshness, 60000);
 
 // Remembers the last panel across a restart or reload, rather than always
 // dumping back to Market Environment — this is meant to stay open and be
