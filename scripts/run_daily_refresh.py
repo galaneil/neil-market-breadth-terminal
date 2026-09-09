@@ -35,12 +35,26 @@ one-time setup that registers both tasks.
 """
 
 import os
+import re
 import shutil
 import subprocess
 import sys
 import tempfile
 import time
 from datetime import datetime
+
+# Same pattern portfolio_server.py's sync_tickers_from_ghpages already uses:
+# a handful of real ticker symbols (CON among them) collide with Windows'
+# reserved device names, so a file by that exact name can never exist on
+# this disk no matter the source. Cloning a branch that legitimately has
+# one (committed from Linux, where it's a perfectly normal filename) leaves
+# git's index referencing a file its own checkout couldn't write -- and
+# `git add -A` then fails outright on that mismatch, not just for that one
+# file but for the whole command. The fix is the same in both places:
+# untrack the reserved name from the index right after cloning, before
+# anything else touches it.
+_RESERVED_WINDOWS_NAME = re.compile(
+    r"^(CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9])(\.[^.]*)?$", re.IGNORECASE)
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 LOG_DIR = os.path.join(os.path.dirname(ROOT), "Portfolio Local")
@@ -64,7 +78,8 @@ def log(msg):
 
 
 def run(cmd, **kw):
-    return subprocess.run(cmd, cwd=ROOT, capture_output=True, text=True, **kw)
+    kw.setdefault("cwd", ROOT)
+    return subprocess.run(cmd, capture_output=True, text=True, **kw)
 
 
 def git(*args):
@@ -96,6 +111,14 @@ def publish_tickers(country):
         if clone.returncode != 0:
             run(["git", "init", "-q"], cwd=tmp)
             run(["git", "checkout", "-qb", "data-tickers"], cwd=tmp)
+        else:
+            ls = run(["git", "ls-files"], cwd=tmp)
+            reserved = [p for p in ls.stdout.splitlines()
+                       if _RESERVED_WINDOWS_NAME.match(os.path.basename(p))]
+            if reserved:
+                log(f"{country}: untracking {len(reserved)} Windows-reserved filename(s) "
+                    f"the checkout couldn't write: {', '.join(reserved)}")
+                run(["git", "rm", "-r", "--cached", "-q", "--ignore-unmatch", *reserved], cwd=tmp)
 
         dest = os.path.join(tmp, branch_path)
         if os.path.isdir(dest):
@@ -103,8 +126,24 @@ def publish_tickers(country):
         os.makedirs(os.path.dirname(dest) or tmp, exist_ok=True)
         shutil.copytree(local_dir, dest)
 
+        # A reserved name can exist right here on local disk (shutil/Python
+        # can create one via an extended-length path even though a plain
+        # Win32 CreateFile call can't) while still being something git's own
+        # internals refuse to open -- untracking it from a clone's index
+        # (above) doesn't help when it arrives this way instead, from a
+        # local copy rather than a checkout. Same regex, different removal:
+        # this one has to come off disk, not just out of the index.
+        for name in os.listdir(dest):
+            if _RESERVED_WINDOWS_NAME.match(name):
+                log(f"{country}: dropping {branch_path}/{name} -- Windows-reserved "
+                    f"name, git-for-windows cannot track it regardless of source")
+                os.remove(os.path.join(dest, name))
+
         run(["git", "checkout", "--orphan", "data-tickers-fresh"], cwd=tmp)
-        run(["git", "add", "-A"], cwd=tmp)
+        add = run(["git", "add", "-A"], cwd=tmp)
+        if add.returncode != 0:
+            log(f"{country}: git add failed, not publishing:\n{add.stdout}\n{add.stderr}")
+            return
         run(["git", "config", "user.name", "Neil (local refresh)"], cwd=tmp)
         run(["git", "config", "user.email", "neilgala04@gmail.com"], cwd=tmp)
         commit = run(["git", "commit", "-qm",
@@ -112,6 +151,18 @@ def publish_tickers(country):
         if commit.returncode != 0:
             log(f"{country}: nothing new to publish on data-tickers")
             return
+
+        # Verify the commit actually contains what this run means to publish
+        # before pushing it anywhere -- the exact failure that motivated this
+        # check (git add aborting partway, silently leaving branch_path out
+        # of the tree while the commit still "succeeded") is cheap to catch
+        # here and expensive to notice later.
+        verify = run(["git", "ls-tree", "HEAD", "--name-only"], cwd=tmp)
+        if branch_path.split("/")[0] not in verify.stdout.split():
+            log(f"{country}: refusing to push -- {branch_path} is missing from "
+                f"the commit that was just made ({verify.stdout.split()!r})")
+            return
+
         run(["git", "branch", "-M", "data-tickers"], cwd=tmp)
         push = run(["git", "push", "-qf", REPO_URL, "data-tickers"], cwd=tmp)
         if push.returncode != 0:
