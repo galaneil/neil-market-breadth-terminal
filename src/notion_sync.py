@@ -54,6 +54,23 @@ NAV_DB = "fb99ad0c-c723-45d5-b92b-a35770f512c2"         # IBKR NAV History
 
 STOP_FIELD = "Initial Stop $"
 
+# Every trading-log database the Trade Journal panel reads, one account per
+# entry. Deliberately a list rather than one hardcoded ID -- (NG-IBKR) is the
+# only one confirmed shared with the integration so far; adding the two
+# Angel One logs later is appending a row here, nothing else changes.
+TRADE_DATABASES = [
+    {"label": "IBKR (NG)", "id": TRADES_DB},
+]
+
+# Read (and, for the four below, written back) per trade. Formula fields are
+# deliberately excluded -- Cost Value, PnL, PnL%, Hold Days, Win, Outcome,
+# and Initial Stop % all compute themselves in Notion from these, so there
+# is nothing to sync for them, only to read for display.
+TRADE_TEXT_FIELD = "Entry Thesis"
+TRADE_SELECT_FIELDS = ["Entry Setup", "Exit Setup", "Buy Quality", "Sell Quality"]
+TRADE_FORMULA_FIELDS = ["Cost Value", "PnL", "PnL%", "Hold Days", "Win",
+                        "Outcome", "Initial Stop %"]
+
 
 class NotionError(RuntimeError):
     pass
@@ -136,6 +153,33 @@ def _number_of(prop):
     return prop.get("number") if prop else None
 
 
+def _select_of(prop):
+    if not prop:
+        return None
+    value = prop.get("select")
+    return value.get("name") if value else None
+
+
+def _date_of(prop):
+    if not prop:
+        return None
+    value = prop.get("date")
+    return value.get("start") if value else None
+
+
+def _formula_of(prop):
+    """Formula properties nest the actual value one level deeper, under
+    whichever type the formula happens to resolve to -- Cost Value resolves
+    to a number, Outcome to a string, etc. Read whichever is present."""
+    if not prop:
+        return None
+    value = prop.get("formula") or {}
+    for kind in ("number", "string", "boolean", "date"):
+        if kind in value and value[kind] is not None:
+            return value[kind].get("start") if kind == "date" else value[kind]
+    return None
+
+
 # --- writing Notion property values ----------------------------------------
 
 def title(value):
@@ -187,6 +231,83 @@ def fetch_stops(log=print):
     if missing:
         log(f"  no {STOP_FIELD} recorded for {', '.join(sorted(missing))}")
     return stops
+
+
+# --- Trade Journal: full read/write, both directions -----------------------
+
+def fetch_database_schema(database_id):
+    """{property_name: [option names]} for every select/multi_select property
+    -- read live off the database itself, never hand-typed, so a preset you
+    add in Notion (or here) shows up the moment either side reloads."""
+    db = _call("GET", f"/databases/{database_id}")
+    options = {}
+    for name, spec in db.get("properties", {}).items():
+        ptype = spec.get("type")
+        if ptype in ("select", "multi_select"):
+            options[name] = [o["name"] for o in spec.get(ptype, {}).get("options", [])]
+    return options
+
+
+def _trade_from_page(page, account_label):
+    p = page.get("properties", {})
+    return {
+        "pageId": page["id"],
+        "notionUrl": page.get("url"),
+        "account": account_label,
+        "ticker": _text_of(p.get("Ticker")),
+        "dateOpened": _date_of(p.get("Date Opened")),
+        "dateClosed": _date_of(p.get("Date Closed")),
+        "entryPrice": _number_of(p.get("Entry Price")),
+        "exitPrice": _number_of(p.get("Exit Price")),
+        "shares": _number_of(p.get("Shares")),
+        "initialStop": _number_of(p.get(STOP_FIELD)),
+        "entrySetup": _select_of(p.get("Entry Setup")),
+        "exitSetup": _select_of(p.get("Exit Setup")),
+        "buyQuality": _select_of(p.get("Buy Quality")),
+        "sellQuality": _select_of(p.get("Sell Quality")),
+        "entryThesis": _text_of(p.get(TRADE_TEXT_FIELD)),
+        "costValue": _formula_of(p.get("Cost Value")),
+        "initialStopPct": _formula_of(p.get("Initial Stop %")),
+        "pnl": _formula_of(p.get("PnL")),
+        "pnlPct": _formula_of(p.get("PnL%")),
+        "holdDays": _formula_of(p.get("Hold Days")),
+        "outcome": _formula_of(p.get("Outcome")),
+    }
+
+
+def fetch_trades(log=print):
+    """Every trade, every configured account, open and closed -- no filter.
+    This is the one-time-per-load read that seeds the whole Trade Journal
+    panel; unlike fetch_stops() it does not narrow to open positions, because
+    closed trades are exactly what the completeness filters and any future
+    backtest need to see."""
+    all_trades = []
+    for entry in TRADE_DATABASES:
+        try:
+            pages = query(entry["id"])
+        except NotionError as error:
+            log(f"  {entry['label']}: {error}")
+            continue
+        for page in pages:
+            all_trades.append(_trade_from_page(page, entry["label"]))
+        log(f"  {entry['label']}: {len(pages)} trades")
+    return all_trades
+
+
+def update_trade(page_id, fields, log=print):
+    """Write one or more editable properties back onto a single trade page.
+    `fields` is {property_name: raw_value} -- select/text distinguished by
+    which property name it targets, since that's already fixed per field."""
+    properties = {}
+    for name, value in fields.items():
+        if name in TRADE_SELECT_FIELDS:
+            properties[name] = select(value)
+        elif name == TRADE_TEXT_FIELD:
+            properties[name] = text(value)
+        else:
+            raise NotionError(f"{name!r} is not an editable trade field")
+    _call("PATCH", f"/pages/{page_id}", {"properties": properties})
+    log(f"  updated {', '.join(fields)} on {page_id}")
 
 
 # --- positions and NAV: here -> Notion -------------------------------------

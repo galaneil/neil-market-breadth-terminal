@@ -970,6 +970,9 @@ class Handler(BaseHTTPRequestHandler):
         if route.path == "/portfolio":
             self._send(200, PORTFOLIO_PAGE, "text/html; charset=utf-8")
             return
+        if route.path == "/journal":
+            self._send(200, JOURNAL_PAGE, "text/html; charset=utf-8")
+            return
 
         # Everything under /docs/... is the market breadth terminal, served
         # from the exact files GitHub Pages publishes. Never edited here —
@@ -1001,6 +1004,21 @@ class Handler(BaseHTTPRequestHandler):
             return
         if route.path == "/api/freshness":
             self._send(200, json.dumps(freshness_report()), "application/json")
+            return
+        if route.path == "/api/journal/trades":
+            try:
+                import notion_sync
+                self._send(200, json.dumps(notion_sync.fetch_trades(log=log)), "application/json")
+            except Exception as error:
+                self._send(500, json.dumps({"error": str(error)}), "application/json")
+            return
+        if route.path == "/api/journal/schema":
+            try:
+                import notion_sync
+                self._send(200, json.dumps(notion_sync.fetch_database_schema(notion_sync.TRADES_DB)),
+                          "application/json")
+            except Exception as error:
+                self._send(500, json.dumps({"error": str(error)}), "application/json")
             return
         if route.path == "/api/brokers":
             self._send(200, json.dumps(available()), "application/json")
@@ -1113,6 +1131,21 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(400, json.dumps({"error": str(error)}), "application/json")
             return
 
+        if route.path == "/api/journal/update":
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                body = json.loads(self.rfile.read(length) or b"{}")
+                page_id = body.get("pageId")
+                fields = body.get("fields") or {}
+                if not page_id or not fields:
+                    raise ValueError("pageId and fields are both required")
+                import notion_sync
+                notion_sync.update_trade(page_id, fields, log=log)
+                self._send(200, json.dumps({"ok": True}), "application/json")
+            except Exception as error:
+                self._send(400, json.dumps({"error": str(error)}), "application/json")
+            return
+
         if route.path == "/api/signal-feedback":
             length = int(self.headers.get("Content-Length") or 0)
             try:
@@ -1151,6 +1184,288 @@ class Handler(BaseHTTPRequestHandler):
                            "application/json")
             return
         self._send(404, "not found", "text/plain")
+
+
+JOURNAL_PAGE = r"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Trade Journal</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root { --bg:#f5f6f8; --panel:#fff; --text:#1a1d24; --dim:#6b7280;
+    --line:#e2e5ea; --up:#16a34a; --down:#dc2626; --warn:#ca8a04; --violet:#7c3aed;
+    --accent:#2563eb; }
+  @media (prefers-color-scheme: dark) {
+    :root { --bg:#10131a; --panel:#171b24; --text:#e7e9ee; --dim:#9096a3;
+      --line:#262b36; --up:#2ecc71; --down:#f0554b; --warn:#facc15; --violet:#a78bfa;
+      --accent:#60a5fa; }
+  }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font-size:14px;
+    font-family:"IBM Plex Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
+    font-variant-numeric:tabular-nums; }
+  main { padding:18px; max-width:1300px; margin:0 auto; }
+  h1 { font-size:17px; margin:0 0 4px; }
+  .sub { font-size:12px; color:var(--dim); margin:0 0 16px; max-width:680px; line-height:1.5; }
+
+  .kpi-strip{display:grid; grid-template-columns:repeat(6,1fr); gap:10px; margin-bottom:16px;}
+  @media (max-width:900px){.kpi-strip{grid-template-columns:repeat(3,1fr);}}
+  .kpi-tile{background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:11px 13px;}
+  .kpi-k{font-size:10px; text-transform:uppercase; letter-spacing:.04em; color:var(--dim); margin-bottom:4px;}
+  .kpi-v{font-size:18px; font-weight:800;}
+  .kpi-v.up{color:var(--up);} .kpi-v.down{color:var(--down);}
+
+  .filter-pills{display:flex; gap:7px; margin-bottom:14px; flex-wrap:wrap;}
+  .filter-pill{font-size:12px; font-weight:600; border:1px solid var(--line); background:var(--panel); color:var(--dim);
+    border-radius:20px; padding:6px 12px; cursor:pointer;}
+  .filter-pill.active{background:var(--accent); border-color:var(--accent); color:#fff;}
+  .filter-pill .n{font-size:10.5px; opacity:.8;}
+  .filter-pill.gap{border-color:color-mix(in srgb, var(--warn) 50%, var(--line)); color:var(--warn);}
+  .filter-pill.gap.active{background:var(--warn); border-color:var(--warn); color:#1a1d24;}
+
+  #search{padding:7px 10px; font-size:13px; font-family:inherit; width:200px; margin-bottom:12px;
+    background:var(--panel); border:1px solid var(--line); border-radius:7px; color:var(--text);}
+  #search:focus{outline:none; border-color:var(--accent);}
+
+  table{width:100%; border-collapse:collapse; font-size:12.5px; background:var(--panel);
+    border:1px solid var(--line); border-radius:10px; overflow:hidden;}
+  th{text-align:left; font-size:10.5px; text-transform:uppercase; letter-spacing:.03em; color:var(--dim);
+    padding:8px 10px; border-bottom:1px solid var(--line); font-weight:600; cursor:pointer;}
+  td{padding:9px 10px; border-bottom:1px solid var(--line); vertical-align:middle;}
+  tr:last-child td{border-bottom:none;}
+  tr.clickable{cursor:pointer;} tr.clickable:hover{background:color-mix(in srgb, var(--accent) 6%, transparent);}
+  .sym{font-weight:700;}
+  .acct{font-size:10px; font-weight:700; padding:2px 6px; border-radius:4px; background:var(--line); color:var(--dim);}
+  .setup-chip{font-size:10.5px; font-weight:700; padding:2px 8px; border-radius:5px; background:rgba(124,58,237,.14); color:var(--violet);}
+  .gap-badge{font-size:10px; font-weight:700; padding:2px 7px; border-radius:5px; background:rgba(240,85,75,.14); color:var(--down);}
+  .ok-badge{font-size:10px; color:var(--dim);}
+  .pnl.up{color:var(--up); font-weight:700;} .pnl.down{color:var(--down); font-weight:700;}
+  #empty{padding:30px; text-align:center; color:var(--dim); font-size:12.5px;}
+  #load-err{padding:12px 14px; background:color-mix(in srgb, var(--down) 10%, transparent);
+    border:1px solid color-mix(in srgb, var(--down) 30%, transparent); border-radius:9px; color:var(--down);
+    font-size:12.5px; margin-bottom:14px;}
+  #load-err[hidden]{display:none;}
+
+  .overlay{position:fixed; inset:0; background:rgba(0,0,0,.5); display:flex; align-items:flex-start; justify-content:center;
+    padding:40px 20px; z-index:50; overflow-y:auto;}
+  .overlay[hidden]{display:none;}
+  .detail-page{background:var(--panel); border:1px solid var(--line); border-radius:14px; max-width:620px; width:100%;}
+  .detail-head{padding:18px 22px; border-bottom:1px solid var(--line); display:flex; align-items:center; justify-content:space-between;}
+  .detail-head b{font-size:16px;}
+  .detail-close{background:none; border:none; font-size:20px; color:var(--dim); cursor:pointer;}
+  .detail-body{padding:18px 22px;}
+  .detail-grid{display:grid; grid-template-columns:1fr 1fr; gap:10px 20px; margin-bottom:16px; font-size:12.5px;}
+  .detail-grid .k{color:var(--dim); font-size:11px;}
+  .detail-grid .v{font-weight:600; margin-top:1px;}
+  .edit-select, .edit-text{width:100%; font-size:12.5px; font-family:inherit; padding:6px 8px; border-radius:6px;
+    border:1px solid var(--line); background:var(--bg); color:var(--text); margin-top:2px;}
+  .edit-text{min-height:70px; resize:vertical;}
+  .field-label{font-size:10.5px; text-transform:uppercase; letter-spacing:.03em; color:var(--dim); margin:14px 0 4px;}
+  .save-status{font-size:11px; color:var(--up); margin-top:4px; height:14px;}
+  .notion-link{font-size:12px; color:var(--accent); text-decoration:none;}
+</style></head><body>
+<main>
+  <h1>Trade Journal</h1>
+  <p class="sub">Reads your Notion trade log directly — the full record, open and closed. Editing a chip or the thesis writes straight back to that same Notion page. Chart screenshots still open in Notion itself (Notion's paste is already the best tool for that); everything else edits right here.</p>
+  <div id="load-err" hidden></div>
+
+  <div class="kpi-strip">
+    <div class="kpi-tile"><div class="kpi-k">Open positions</div><div class="kpi-v" id="kpi-open">&mdash;</div></div>
+    <div class="kpi-tile"><div class="kpi-k">Win rate (closed)</div><div class="kpi-v" id="kpi-winrate">&mdash;</div></div>
+    <div class="kpi-tile"><div class="kpi-k">Avg gain</div><div class="kpi-v up" id="kpi-avggain">&mdash;</div></div>
+    <div class="kpi-tile"><div class="kpi-k">Avg loss</div><div class="kpi-v down" id="kpi-avgloss">&mdash;</div></div>
+    <div class="kpi-tile"><div class="kpi-k">Total logged</div><div class="kpi-v" id="kpi-total">&mdash;</div></div>
+    <div class="kpi-tile"><div class="kpi-k">No entry setup</div><div class="kpi-v" id="kpi-nosetup" style="color:var(--warn)">&mdash;</div></div>
+  </div>
+
+  <div class="filter-pills" id="filter-pills">
+    <button class="filter-pill active" data-filter="all">All</button>
+    <button class="filter-pill" data-filter="open">Open</button>
+    <button class="filter-pill" data-filter="closed">Closed</button>
+    <button class="filter-pill gap" data-filter="nosetup">&#9888; No entry setup</button>
+    <button class="filter-pill gap" data-filter="noexit">&#9888; Closed, no exit setup</button>
+  </div>
+  <input id="search" placeholder="Filter by ticker&hellip;">
+
+  <table>
+    <thead><tr><th>Ticker</th><th>Account</th><th>Opened</th><th>Setup</th><th>P&amp;L%</th><th>Completeness</th></tr></thead>
+    <tbody id="rows"></tbody>
+  </table>
+  <div id="empty" hidden>No trades match this filter.</div>
+</main>
+
+<div class="overlay" id="overlay" hidden>
+  <div class="detail-page">
+    <div class="detail-head"><b id="d-ticker"></b><button class="detail-close" id="d-close">&times;</button></div>
+    <div class="detail-body">
+      <div class="detail-grid">
+        <div><div class="k">Account</div><div class="v" id="d-account"></div></div>
+        <div><div class="k">Date Opened / Closed</div><div class="v" id="d-dates"></div></div>
+        <div><div class="k">Entry / Exit Price</div><div class="v" id="d-prices"></div></div>
+        <div><div class="k">Shares</div><div class="v" id="d-shares"></div></div>
+        <div><div class="k">Cost Value <i style="color:var(--violet);font-style:normal;font-size:10px">&fnof;</i></div><div class="v" id="d-cost"></div></div>
+        <div><div class="k">Initial Stop $ / % <i style="color:var(--violet);font-style:normal;font-size:10px">&fnof;</i></div><div class="v" id="d-stop"></div></div>
+        <div><div class="k">PnL% / Hold Days <i style="color:var(--violet);font-style:normal;font-size:10px">&fnof;</i></div><div class="v" id="d-pnl"></div></div>
+        <div><a class="notion-link" id="d-notion-link" href="#" target="_blank" rel="noopener">Open / edit chart in Notion &rarr;</a></div>
+      </div>
+
+      <div class="field-label">Entry Setup</div>
+      <select class="edit-select" id="d-entrysetup"></select>
+      <div class="field-label">Exit Setup</div>
+      <select class="edit-select" id="d-exitsetup"></select>
+      <div class="field-label">Buy Quality</div>
+      <select class="edit-select" id="d-buyquality"></select>
+      <div class="field-label">Sell Quality</div>
+      <select class="edit-select" id="d-sellquality"></select>
+      <div class="field-label">Entry Thesis</div>
+      <textarea class="edit-text" id="d-thesis"></textarea>
+      <div class="save-status" id="d-save-status"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+let ALL_TRADES = [];
+let SCHEMA = {};
+let activeFilter = "all";
+let searchTerm = "";
+
+function fmtDate(d) { return d || "&mdash;"; }
+function fmtMoney(n) { return n == null ? "&mdash;" : "$" + Number(n).toLocaleString(undefined, {maximumFractionDigits: 2}); }
+function fmtPct(n) { return n == null ? "&mdash;" : (n >= 0 ? "+" : "") + (Number(n) * 100).toFixed(1) + "%"; }
+
+function computeKpis(trades) {
+  const open = trades.filter(t => !t.dateClosed);
+  const closed = trades.filter(t => t.dateClosed);
+  const withPnl = closed.filter(t => t.pnlPct != null);
+  const wins = withPnl.filter(t => t.pnlPct > 0);
+  const losses = withPnl.filter(t => t.pnlPct <= 0);
+  const avg = (arr) => arr.length ? arr.reduce((s, t) => s + t.pnlPct, 0) / arr.length : null;
+  document.getElementById("kpi-open").textContent = open.length;
+  document.getElementById("kpi-winrate").textContent = withPnl.length
+    ? Math.round(wins.length / withPnl.length * 100) + "%" : "&mdash;";
+  document.getElementById("kpi-avggain").innerHTML = fmtPct(avg(wins));
+  document.getElementById("kpi-avgloss").innerHTML = fmtPct(avg(losses));
+  document.getElementById("kpi-total").textContent = trades.length;
+  document.getElementById("kpi-nosetup").textContent = trades.filter(t => !t.entrySetup).length;
+}
+
+function passesFilter(t) {
+  if (searchTerm && !(t.ticker || "").toLowerCase().includes(searchTerm)) return false;
+  if (activeFilter === "open") return !t.dateClosed;
+  if (activeFilter === "closed") return !!t.dateClosed;
+  if (activeFilter === "nosetup") return !t.entrySetup;
+  if (activeFilter === "noexit") return !!t.dateClosed && !t.exitSetup;
+  return true;
+}
+
+function completenessBadge(t) {
+  if (!t.entrySetup) return '<span class="gap-badge">no entry setup</span>';
+  if (t.dateClosed && !t.exitSetup) return '<span class="gap-badge">no exit setup</span>';
+  return '<span class="ok-badge">&#10003; complete</span>';
+}
+
+function draw() {
+  const rows = ALL_TRADES.filter(passesFilter);
+  const tbody = document.getElementById("rows");
+  document.getElementById("empty").hidden = rows.length > 0;
+  tbody.innerHTML = rows.map((t, i) => {
+    const idx = ALL_TRADES.indexOf(t);
+    const pnlCls = t.pnlPct == null ? "" : (t.pnlPct >= 0 ? "up" : "down");
+    return '<tr class="clickable" data-idx="' + idx + '">'
+      + '<td class="sym">' + (t.ticker || "&mdash;") + '</td>'
+      + '<td><span class="acct">' + t.account + '</span></td>'
+      + '<td>' + fmtDate(t.dateOpened) + '</td>'
+      + '<td>' + (t.entrySetup ? '<span class="setup-chip">' + t.entrySetup + '</span>' : '<span style="color:var(--dim);font-size:11.5px">&mdash;</span>') + '</td>'
+      + '<td class="pnl ' + pnlCls + '">' + fmtPct(t.pnlPct) + '</td>'
+      + '<td>' + completenessBadge(t) + '</td>'
+    + '</tr>';
+  }).join("");
+  tbody.querySelectorAll("tr").forEach(row => row.onclick = () => openDetail(ALL_TRADES[Number(row.dataset.idx)]));
+}
+
+function fillSelect(id, options, current) {
+  const el = document.getElementById(id);
+  el.innerHTML = '<option value="">&mdash;</option>' + options.map(o =>
+    '<option value="' + o + '"' + (o === current ? " selected" : "") + '>' + o + '</option>').join("");
+}
+
+let currentTrade = null;
+function openDetail(t) {
+  currentTrade = t;
+  document.getElementById("overlay").hidden = false;
+  document.getElementById("d-ticker").textContent = t.ticker;
+  document.getElementById("d-account").textContent = t.account;
+  document.getElementById("d-dates").innerHTML = fmtDate(t.dateOpened) + " &rarr; " + fmtDate(t.dateClosed);
+  document.getElementById("d-prices").innerHTML = fmtMoney(t.entryPrice) + " &rarr; " + fmtMoney(t.exitPrice);
+  document.getElementById("d-shares").innerHTML = t.shares ?? "&mdash;";
+  document.getElementById("d-cost").innerHTML = fmtMoney(t.costValue);
+  document.getElementById("d-stop").innerHTML = fmtMoney(t.initialStop) + " / " + fmtPct(t.initialStopPct);
+  document.getElementById("d-pnl").innerHTML = fmtPct(t.pnlPct) + " / " + (t.holdDays ?? "&mdash;") + "d";
+  document.getElementById("d-notion-link").href = t.notionUrl || "#";
+  fillSelect("d-entrysetup", SCHEMA["Entry Setup"] || [], t.entrySetup);
+  fillSelect("d-exitsetup", SCHEMA["Exit Setup"] || [], t.exitSetup);
+  fillSelect("d-buyquality", SCHEMA["Buy Quality"] || [], t.buyQuality);
+  fillSelect("d-sellquality", SCHEMA["Sell Quality"] || [], t.sellQuality);
+  document.getElementById("d-thesis").value = t.entryThesis || "";
+  document.getElementById("d-save-status").textContent = "";
+}
+
+function saveField(propName, value, elId) {
+  if (!currentTrade) return;
+  const status = document.getElementById("d-save-status");
+  status.textContent = "Saving...";
+  status.style.color = "var(--dim)";
+  fetch("/api/journal/update", {
+    method: "POST", headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({pageId: currentTrade.pageId, fields: {[propName]: value}}),
+  }).then(r => r.json()).then(r => {
+    if (r.ok) {
+      currentTrade[elId] = value;
+      status.textContent = "Saved.";
+      status.style.color = "var(--up)";
+      draw();
+    } else {
+      status.textContent = "Failed: " + (r.error || "unknown error");
+      status.style.color = "var(--down)";
+    }
+  }).catch(() => { status.textContent = "Server not reachable."; status.style.color = "var(--down)"; });
+}
+
+document.getElementById("d-entrysetup").addEventListener("change", e => saveField("Entry Setup", e.target.value, "entrySetup"));
+document.getElementById("d-exitsetup").addEventListener("change", e => saveField("Exit Setup", e.target.value, "exitSetup"));
+document.getElementById("d-buyquality").addEventListener("change", e => saveField("Buy Quality", e.target.value, "buyQuality"));
+document.getElementById("d-sellquality").addEventListener("change", e => saveField("Sell Quality", e.target.value, "sellQuality"));
+document.getElementById("d-thesis").addEventListener("blur", e => saveField("Entry Thesis", e.target.value, "entryThesis"));
+document.getElementById("d-close").addEventListener("click", () => document.getElementById("overlay").hidden = true);
+document.getElementById("overlay").addEventListener("click", e => { if (e.target.id === "overlay") e.target.hidden = true; });
+
+document.querySelectorAll(".filter-pill").forEach(p => p.addEventListener("click", () => {
+  document.querySelectorAll(".filter-pill").forEach(x => x.classList.remove("active"));
+  p.classList.add("active");
+  activeFilter = p.dataset.filter;
+  draw();
+}));
+document.getElementById("search").addEventListener("input", e => { searchTerm = e.target.value.trim().toLowerCase(); draw(); });
+
+Promise.all([
+  fetch("/api/journal/trades").then(r => r.json()),
+  fetch("/api/journal/schema").then(r => r.json()),
+]).then(([trades, schema]) => {
+  if (trades && trades.error) throw new Error(trades.error);
+  ALL_TRADES = trades;
+  SCHEMA = schema;
+  computeKpis(trades);
+  draw();
+}).catch(err => {
+  const el = document.getElementById("load-err");
+  el.hidden = false;
+  el.textContent = "Could not load the trade journal: " + err.message;
+});
+</script>
+</body></html>"""
 
 
 PORTFOLIO_PAGE = r"""<!doctype html>
@@ -2327,6 +2642,7 @@ const ICONS = {
   "Data Freshness": icon('<path d="M21 12a9 9 0 1 1-3.5-7.1"/><polyline points="21 3 21 9 15 9"/>'),
   "Live Portfolio": icon('<rect x="2" y="7" width="20" height="14" rx="2"/>'
     + '<path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>'),
+  "Trade Journal": icon('<path d="M4 4h13l3 3v13H4z"/><path d="M8 9h9M8 13h9M8 17h5"/>'),
 };
 
 const COUNTRIES = %%NAV_JSON%%;
@@ -2342,7 +2658,7 @@ function topLevelItems() {
   return country.panels
     .concat(country.signalsPanels || [])
     .concat(country.algorithmsPanels || [])
-    .concat([portfolioItem])
+    .concat([portfolioItem, journalItem])
     .concat(country.systemPanels || []);
 }
 
@@ -2495,7 +2811,7 @@ function renderPinned() {
 }
 
 function renderPortfolioNav() {
-  renderGroup(document.getElementById("portfolio-nav"), [portfolioItem]);
+  renderGroup(document.getElementById("portfolio-nav"), [portfolioItem, journalItem]);
 }
 
 function renderSystemNav() {
@@ -2537,6 +2853,7 @@ function renderCountrySwitch() {
 }
 
 const portfolioItem = {label: "Live Portfolio", url: "/portfolio", scoped: false};
+const journalItem = {label: "Trade Journal", url: "/journal", scoped: false};
 
 document.getElementById("reload-btn").onclick = () => {
   if (!document.getElementById("stack-wrap").hidden) {
@@ -2627,6 +2944,8 @@ let restored = false;
 if (last) {
   if (last.top === "Live Portfolio") {
     go("/portfolio", "Live Portfolio", false); restored = true;
+  } else if (last.top === "Trade Journal") {
+    go("/journal", "Trade Journal", false); restored = true;
   } else if (COUNTRIES.some(c => c.code === last.country)) {
     country = COUNTRIES.find(c => c.code === last.country);
     renderCountrySwitch(); refreshNav();
