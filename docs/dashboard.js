@@ -2289,7 +2289,45 @@
     if (!wrap) return;
     let pollTimer = null;
 
+    // The summary strip (US/IN as-of + explanatory note) used to live in
+    // the sidebar on every page; moved here so it's read once, in one
+    // place, instead of repeated chrome on every single panel.
+    function loadSummary() {
+      fetch("/api/data-status").then(function (r) { return r.json(); }).then(function (status) {
+        const labels = { US: "United States", IN: "India" };
+        let anyStale = false;
+        document.getElementById("fr-summary-row").innerHTML = Object.keys(status).map(function (code) {
+          const s = status[code];
+          if (!s.asOf) {
+            return '<span class="fr-summary-item"><span class="fr-summary-dot stale"></span>'
+              + '<span class="fr-summary-country">' + (labels[code] || code) + '</span>'
+              + '<span class="fr-summary-detail">no data yet</span></span>';
+          }
+          const stale = s.staleDays !== null && s.staleDays > 4;
+          if (stale) anyStale = true;
+          return '<span class="fr-summary-item"><span class="fr-summary-dot ' + (stale ? "stale" : "ok") + '"></span>'
+            + '<span class="fr-summary-country">' + (labels[code] || code) + '</span>'
+            + '<span class="fr-summary-detail">as of ' + s.asOf + (stale ? " (" + s.staleDays + "d old)" : "") + '</span></span>';
+        }).join("");
+        document.getElementById("fr-summary-note").textContent = anyStale
+          ? 'One market looks behind schedule — use "Sync data now" below, or a row\'s own "Sync now" further down.'
+          : "US refreshes after its own close (~7pm ET); India refreshes separately after its own close (~5pm IST). A date a session or two behind is normal right after a weekend.";
+      }).catch(function () {
+        document.getElementById("fr-summary-row").textContent = "Could not check.";
+      });
+    }
+    document.getElementById("fr-sync-now").addEventListener("click", function () {
+      const status = document.getElementById("fr-sync-status");
+      status.textContent = " — syncing (up to ~1 min)…";
+      fetch("/api/sync", { method: "POST" }).then(function (r) { return r.json(); }).then(function (r) {
+        status.textContent = r.ok ? " — done" : " — failed: " + (r.error || "unknown error");
+        loadSummary();
+        load();
+      }).catch(function () { status.textContent = " — server not reachable"; });
+    });
+
     function load() {
+      loadSummary();
       fetch(FRESHNESS_API).then(function (r) {
         if (!r.ok) throw new Error("unavailable");
         return r.json();

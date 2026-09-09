@@ -2147,18 +2147,7 @@ HUB_PAGE = r"""<!doctype html>
   .sub-dot { width:4px; height:4px; border-radius:50%; background:currentColor;
     opacity:.6; flex:none; }
 
-  #data-freshness { margin-top:auto; padding:12px 16px 0; }
-  #data-freshness .group-label { padding:0 0 6px; }
-  .freshness-row { display:flex; align-items:baseline; gap:7px; font-size:12px;
-    padding:3px 0; }
-  .freshness-dot { width:7px; height:7px; border-radius:50%; flex:none; }
-  .freshness-dot.ok { background:var(--up); }
-  .freshness-dot.stale { background:var(--warn); }
-  .freshness-country { font-weight:600; min-width:26px; }
-  .freshness-detail { color:var(--dim); }
-  #freshness-note { font-size:11px; padding:4px 0 2px; line-height:1.4; }
-
-  #sidebar-foot { padding:12px 16px; font-size:11px; color:var(--dim);
+  #sidebar-foot { margin-top:auto; padding:12px 16px; font-size:11px; color:var(--dim);
     border-top:1px solid var(--line); }
   #sidebar-foot a { color:var(--accent); text-decoration:none; }
 
@@ -2211,32 +2200,8 @@ HUB_PAGE = r"""<!doctype html>
   <nav id="portfolio-nav"></nav>
   <div class="group-label">System</div>
   <nav id="system-nav"></nav>
-  <div id="data-freshness">
-    <div class="group-label">Data freshness</div>
-    <div id="freshness-rows">Loading&hellip;</div>
-    <div id="freshness-note" class="dim"></div>
-    <div style="margin-top:6px"><a href="#" id="freshness-detail-link" style="font-size:11px">Full breakdown, file by file &rarr;</a></div>
-  </div>
   <div id="sidebar-foot">
-    Breadth data also published at
-    <a href="https://galaneil.github.io/neil-market-breadth-terminal/" target="_blank" rel="noopener">GitHub Pages</a>
-    for Notion embeds — this hub reads the same files locally.
-    <div style="margin-top:8px">
-      <a id="sync-now" href="#">Sync data now</a>
-      <span id="sync-status" class="dim"></span>
-    </div>
-    <div style="margin-top:6px">
-      Manual refresh on GitHub:
-      <a href="https://github.com/galaneil/neil-market-breadth-terminal/actions/workflows/daily-us.yml"
-         target="_blank" rel="noopener">US</a>
-      &middot;
-      <a href="https://github.com/galaneil/neil-market-breadth-terminal/actions/workflows/daily-in.yml"
-         target="_blank" rel="noopener">India</a>
-      <span class="dim" style="display:block;font-size:10.5px;margin-top:2px">
-        Opens the Action's page — click "Run workflow" there. Runs on GitHub's servers, not this machine.
-      </span>
-    </div>
-    <div id="sync-warning" hidden style="margin-top:8px; padding:8px; border-radius:6px;
+    <div id="sync-warning" hidden style="padding:8px; border-radius:6px;
          background:color-mix(in srgb, var(--warn) 15%, transparent);
          border:1px solid var(--warn); color:var(--warn); font-size:11px; line-height:1.4;"></div>
   </div>
@@ -2523,70 +2488,10 @@ document.getElementById("reload-btn").onclick = () => {
       const el = document.getElementById("sync-warning");
       el.hidden = false;
       el.textContent = "Auto-sync is blocked, so data may be stale: " + origin.message +
-        '. Click "Sync data now" once the conflict is resolved.';
+        '. See System → Data Freshness once the conflict is resolved.';
     }
   } catch (err) { /* status endpoint unreachable — say nothing, not worth alarming over */ }
 })();
-
-// "Why does this panel say a different date than that one" was the single
-// most repeated complaint about this hub — the honest answer was always
-// buried in a data file nobody but Claude ever opened. This reads the exact
-// same environment.jsonl each published page renders from and puts the
-// answer where the question actually gets asked: right in the sidebar,
-// every time the hub is open, not just when something is visibly wrong.
-(async () => {
-  const rowsEl = document.getElementById("freshness-rows");
-  const noteEl = document.getElementById("freshness-note");
-  if (!rowsEl) return;
-  try {
-    const status = await (await fetch("/api/data-status")).json();
-    const labels = { US: "US", IN: "IN" };
-    let anyStale = false;
-    rowsEl.innerHTML = Object.keys(status).map((code) => {
-      const s = status[code];
-      if (!s.asOf) {
-        return '<div class="freshness-row"><span class="freshness-dot stale"></span>' +
-          '<span class="freshness-country">' + (labels[code] || code) + '</span>' +
-          '<span class="freshness-detail">no data yet</span></div>';
-      }
-      const stale = s.staleDays !== null && s.staleDays > 4;
-      if (stale) anyStale = true;
-      return '<div class="freshness-row">' +
-        '<span class="freshness-dot ' + (stale ? "stale" : "ok") + '"></span>' +
-        '<span class="freshness-country">' + (labels[code] || code) + '</span>' +
-        '<span class="freshness-detail">as of ' + s.asOf +
-          (stale ? " (" + s.staleDays + "d old)" : "") + '</span></div>';
-    }).join("");
-    noteEl.innerHTML = anyStale
-      ? 'One market looks behind schedule &mdash; try "Sync data now" below, or trigger a '
-        + '<a href="https://github.com/galaneil/neil-market-breadth-terminal/actions" target="_blank" rel="noopener">manual refresh on GitHub</a> directly.'
-      : "US refreshes after its own close (~7pm ET); India refreshes separately after its own close (~5pm IST). A date a session or two behind is normal right after a weekend.";
-  } catch (err) {
-    rowsEl.textContent = "Could not check.";
-  }
-})();
-
-document.getElementById("freshness-detail-link").onclick = (e) => {
-  e.preventDefault();
-  const item = (country.systemPanels || []).find(p => p.label === "Data Freshness");
-  if (item) { go(item.url, item.label, undefined, item.label); refreshNav(); }
-};
-
-document.getElementById("sync-now").onclick = async (e) => {
-  e.preventDefault();
-  const status = document.getElementById("sync-status");
-  status.textContent = " — syncing (up to ~1 min)…";
-  try {
-    const r = await (await fetch("/api/sync", {method: "POST"})).json();
-    status.textContent = r.ok
-      ? " — done, reloading…" : " — failed: " + (r.error || "unknown error");
-    // A reload re-fetches /api/sync/status too, so the warning banner clears
-    // itself the moment a sync actually goes through.
-    if (r.ok) setTimeout(() => location.reload(), 600);
-  } catch (err) {
-    status.textContent = " — server not reachable";
-  }
-};
 
 // Remembers the last panel across a restart or reload, rather than always
 // dumping back to Market Environment — this is meant to stay open and be

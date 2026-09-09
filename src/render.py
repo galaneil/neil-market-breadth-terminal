@@ -1006,11 +1006,31 @@ def _freshness_body():
     # table since this is an operational view, not a market view.
     return """
 <div class="empty-note" id="fr-unavailable" style="display:none">
-  This table reads live from the local hub's server, so it isn't reachable from a page served
+  This page reads live from the local hub's server, so it isn't reachable from a page served
   without one — including the published link. Open the local hub to see it.
 </div>
 <div id="fr-available">
-  <div class="empty-note">
+  <div class="fr-summary-row" id="fr-summary-row">Loading&hellip;</div>
+  <div class="fr-summary-note dim" id="fr-summary-note"></div>
+  <div class="fr-actions-row">
+    <button class="icon-btn" id="fr-sync-now">Sync data now</button>
+    <span class="dim" id="fr-sync-status"></span>
+  </div>
+  <div class="fr-actions-row dim" style="font-size:11.5px">
+    Breadth data also published at
+    <a href="https://galaneil.github.io/neil-market-breadth-terminal/" target="_blank" rel="noopener">GitHub Pages</a>
+    for Notion embeds — this hub reads the same files locally.
+  </div>
+  <div class="fr-actions-row dim" style="font-size:11.5px">
+    Manual refresh on GitHub:
+    <a href="https://github.com/galaneil/neil-market-breadth-terminal/actions/workflows/daily-us.yml"
+       target="_blank" rel="noopener">US</a> &middot;
+    <a href="https://github.com/galaneil/neil-market-breadth-terminal/actions/workflows/daily-in.yml"
+       target="_blank" rel="noopener">India</a>
+    — opens the Action's page, click "Run workflow" there. Runs on GitHub's servers, not this machine.
+  </div>
+
+  <div class="empty-note" style="margin-top:20px">
     One row per underlying data file, not per tab — most tabs share a handful of these, so a
     stale file here explains staleness across several tabs at once (see each row's "Feeds").
     <span class="fr-dot green"></span> synced to the last completed session ·
