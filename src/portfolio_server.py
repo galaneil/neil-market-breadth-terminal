@@ -1625,8 +1625,8 @@ SETUPS_PAGE = r"""<!doctype html>
   .fcard .art { height:50px; display:flex; align-items:center; justify-content:center; font-size:20px;
     background:linear-gradient(135deg,rgba(124,58,237,.16),rgba(37,99,235,.10)); }
   .fcard .body { padding:7px 9px; }
-  .fcard .nm { font-weight:700; font-size:12px; }
-  .fcard .ct { font-size:10.5px; color:var(--dim); }
+  .fcard .nm { display:block; font-weight:700; font-size:12px; line-height:1.25; }
+  .fcard .ct { display:block; font-size:10.5px; color:var(--dim); margin-top:2px; }
   .fcard.active { border-color:var(--violet); box-shadow:inset 0 0 0 1px var(--violet); }
 
   .step { display:flex; gap:13px; margin-bottom:16px; }
