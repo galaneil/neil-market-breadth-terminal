@@ -973,6 +973,9 @@ class Handler(BaseHTTPRequestHandler):
         if route.path == "/journal":
             self._send(200, JOURNAL_PAGE, "text/html; charset=utf-8")
             return
+        if route.path == "/setups":
+            self._send(200, SETUPS_PAGE, "text/html; charset=utf-8")
+            return
 
         # Everything under /docs/... is the market breadth terminal, served
         # from the exact files GitHub Pages publishes. Never edited here —
@@ -1019,6 +1022,59 @@ class Handler(BaseHTTPRequestHandler):
                           "application/json")
             except Exception as error:
                 self._send(500, json.dumps({"error": str(error)}), "application/json")
+            return
+        if route.path == "/api/setups/data":
+            try:
+                import notion_sync
+                import setup_context
+                payload = notion_sync.fetch_setup_entries(log=log)
+                payload["envNow"] = {c: setup_context.market_env(c)
+                                     for c in config.COUNTRIES}
+                self._send(200, json.dumps(payload), "application/json")
+            except Exception as error:
+                self._send(500, json.dumps({"error": str(error)}), "application/json")
+            return
+        if route.path == "/api/setups/schema":
+            try:
+                import notion_sync
+                self._send(200, json.dumps(notion_sync.fetch_database_schema(
+                    notion_sync.SETUP_ENTRIES_DB)), "application/json")
+            except Exception as error:
+                self._send(500, json.dumps({"error": str(error)}), "application/json")
+            return
+        if route.path == "/api/setups/lookup":
+            try:
+                import setup_context
+                q = parse_qs(route.query)
+                country = (q.get("country") or ["US"])[0].upper()
+                term = (q.get("q") or [""])[0].strip().upper()
+                hits = []
+                if country in config.COUNTRIES and term:
+                    for sym, row in setup_context._classification(country).items():
+                        if term in sym:
+                            hits.append({"ticker": sym, "sector": row[0] if row else None,
+                                         "industry": row[1] if len(row) > 1 else None,
+                                         "logoid": row[2] if len(row) > 2 else None})
+                    hits.sort(key=lambda h: (not h["ticker"].startswith(term), h["ticker"]))
+                    hits = hits[:20]
+                self._send(200, json.dumps(hits), "application/json")
+            except Exception as error:
+                self._send(500, json.dumps({"error": str(error)}), "application/json")
+            return
+        if route.path == "/api/setups/context":
+            try:
+                import setup_context
+                q = parse_qs(route.query)
+                country = (q.get("country") or ["US"])[0].upper()
+                ticker = (q.get("ticker") or [""])[0]
+                buy_date = (q.get("date") or [""])[0]
+                if country not in config.COUNTRIES or not ticker or not buy_date:
+                    raise ValueError("country, ticker and date are all required")
+                self._send(200, json.dumps(
+                    setup_context.context_at(country, ticker, buy_date)),
+                    "application/json")
+            except Exception as error:
+                self._send(400, json.dumps({"error": str(error)}), "application/json")
             return
         if route.path == "/api/brokers":
             self._send(200, json.dumps(available()), "application/json")
@@ -1142,6 +1198,56 @@ class Handler(BaseHTTPRequestHandler):
                 import notion_sync
                 notion_sync.update_trade(page_id, fields, log=log)
                 self._send(200, json.dumps({"ok": True}), "application/json")
+            except Exception as error:
+                self._send(400, json.dumps({"error": str(error)}), "application/json")
+            return
+
+        if route.path == "/api/setups/create":
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                body = json.loads(self.rfile.read(length) or b"{}")
+                country = (body.get("country") or "").upper()
+                ticker = (body.get("ticker") or "").upper()
+                buy_date = body.get("buyDate")
+                if (country not in config.COUNTRIES or not ticker
+                        or not buy_date or not body.get("setupId")):
+                    raise ValueError("country, ticker, buyDate and setupId are all required")
+                import setup_context
+                import notion_sync
+                ctx = setup_context.context_at(country, ticker, buy_date)
+                result = notion_sync.create_setup_entry({
+                    "setupId": body.get("setupId"),
+                    "ticker": ticker,
+                    "country": "US" if country == "US" else "India",
+                    "buyDate": buy_date,
+                    "entryThesis": body.get("entryThesis"),
+                    "exitRule": body.get("exitRule"),
+                    "baseLengthDays": body.get("baseLengthDays"),
+                }, ctx, log=log)
+                result["context"] = ctx
+                self._send(200, json.dumps(result), "application/json")
+            except Exception as error:
+                self._send(400, json.dumps({"error": str(error)}), "application/json")
+            return
+
+        if route.path == "/api/setups/update":
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                body = json.loads(self.rfile.read(length) or b"{}")
+                page_id = body.get("pageId")
+                fields = body.get("fields") or {}
+                if not page_id or not fields:
+                    raise ValueError("pageId and fields are both required")
+                context = None
+                if body.get("resync"):
+                    entry = body.get("entry") or {}
+                    if entry.get("country") and entry.get("ticker") and entry.get("buyDate"):
+                        import setup_context
+                        code = "US" if entry["country"] == "US" else "IN"
+                        context = setup_context.context_at(code, entry["ticker"], entry["buyDate"])
+                import notion_sync
+                notion_sync.update_setup_entry(page_id, fields, context=context, log=log)
+                self._send(200, json.dumps({"ok": True, "context": context}), "application/json")
             except Exception as error:
                 self._send(400, json.dumps({"error": str(error)}), "application/json")
             return
@@ -1464,6 +1570,691 @@ Promise.all([
   el.hidden = false;
   el.textContent = "Could not load the trade journal: " + err.message;
 });
+</script>
+</body></html>"""
+
+
+SETUPS_PAGE = r"""<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Setups Database</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root { --bg:#f5f6f8; --panel:#fff; --text:#1a1d24; --dim:#6b7280;
+    --line:#e2e5ea; --up:#16a34a; --down:#dc2626; --warn:#ca8a04; --violet:#7c3aed;
+    --accent:#2563eb; }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+    --bg:#10131a; --panel:#171b24; --text:#e7e9ee; --dim:#9096a3; --line:#262b36;
+    --up:#2ecc71; --down:#f0554b; --warn:#facc15; --violet:#a78bfa; --accent:#5b9dff; } }
+  * { box-sizing:border-box; }
+  body { margin:0; padding:26px; background:var(--bg); color:var(--text);
+    font-family:"IBM Plex Sans",-apple-system,system-ui,sans-serif; font-size:13.5px;
+    font-variant-numeric:tabular-nums; }
+  .wrap { max-width:1120px; margin:0 auto; }
+  h1 { font-size:19px; margin:0 0 3px; }
+  .sub { color:var(--dim); margin:0 0 14px; max-width:760px; line-height:1.5; }
+  .flow { font-size:11px; color:var(--dim); display:flex; gap:6px; align-items:center; margin-bottom:16px; }
+  .flow .d { width:6px; height:6px; border-radius:50%; background:var(--violet); flex:none; }
+  .err { background:rgba(240,85,75,.12); color:var(--down); border-radius:8px;
+    padding:10px 13px; margin-bottom:14px; line-height:1.5; }
+  .err b { display:block; margin-bottom:3px; }
+  code { font-family:"IBM Plex Mono",monospace; font-size:11.5px; background:var(--bg);
+    padding:1px 4px; border-radius:4px; }
+
+  .toprow { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:16px; }
+  .seg { display:flex; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
+  .seg button { font:inherit; font-size:12px; font-weight:600; padding:6px 14px; border:none;
+    background:var(--panel); color:var(--dim); cursor:pointer; }
+  .seg button.active { background:var(--violet); color:#fff; }
+
+  .tabs { display:flex; gap:4px; border-bottom:1px solid var(--line); margin-bottom:18px; flex-wrap:wrap; }
+  .tab { font:inherit; font-size:13px; font-weight:600; color:var(--dim); background:none; border:none;
+    padding:9px 4px 11px; cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px; }
+  .tab.active { color:var(--accent); border-bottom-color:var(--accent); }
+  .page { display:none; } .page.active { display:block; }
+
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:11px; padding:17px; margin-bottom:15px; }
+  .card-title { font-weight:700; font-size:14px; margin:0 0 3px; }
+  .card-desc { font-size:12px; color:var(--dim); line-height:1.5; margin-bottom:13px; max-width:720px; }
+
+  .gallery { display:grid; grid-template-columns:repeat(auto-fill,minmax(122px,1fr)); gap:9px; margin-bottom:15px; }
+  .fcard { font:inherit; text-align:left; border:1.5px solid var(--line); background:var(--panel); color:var(--text);
+    border-radius:10px; padding:0; overflow:hidden; cursor:pointer; }
+  .fcard .art { height:50px; display:flex; align-items:center; justify-content:center; font-size:20px;
+    background:linear-gradient(135deg,rgba(124,58,237,.16),rgba(37,99,235,.10)); }
+  .fcard .body { padding:7px 9px; }
+  .fcard .nm { font-weight:700; font-size:12px; }
+  .fcard .ct { font-size:10.5px; color:var(--dim); }
+  .fcard.active { border-color:var(--violet); box-shadow:inset 0 0 0 1px var(--violet); }
+
+  .step { display:flex; gap:13px; margin-bottom:16px; }
+  .snum { width:24px; height:24px; border-radius:50%; background:var(--line); color:var(--dim);
+    font-weight:700; font-size:11px; display:flex; align-items:center; justify-content:center; flex:none; }
+  .step.done .snum { background:var(--up); color:#fff; }
+  .slabel { font-weight:700; font-size:12.5px; margin-bottom:6px; }
+  .lookup { position:relative; max-width:340px; }
+  input, select, textarea { font:inherit; color:var(--text); background:var(--bg);
+    border:1px solid var(--line); border-radius:7px; padding:8px 11px; }
+  input:focus, select:focus, textarea:focus { outline:none; border-color:var(--accent); }
+  .lookup input { width:100%; }
+  .drop { position:absolute; top:100%; left:0; right:0; background:var(--panel); border:1px solid var(--line);
+    border-radius:8px; margin-top:4px; z-index:9; max-height:260px; overflow-y:auto; display:none; }
+  .drop.show { display:block; }
+  .hit { padding:7px 11px; cursor:pointer; display:flex; gap:9px; align-items:center; border-bottom:1px solid var(--line); }
+  .hit:last-child { border-bottom:none; }
+  .hit:hover { background:var(--bg); }
+  .hit .lg { width:20px; height:20px; border-radius:5px; flex:none; display:flex; align-items:center;
+    justify-content:center; font-size:8px; font-weight:800; color:#fff; overflow:hidden; }
+  .hit .lg img { width:100%; height:100%; object-fit:cover; }
+  .hit .sy { font-weight:700; font-size:12px; }
+  .hit .mt { font-size:10.5px; color:var(--dim); }
+  .picked { display:flex; gap:10px; align-items:center; padding:9px 11px; background:var(--bg);
+    border:1px solid var(--line); border-radius:9px; max-width:340px; margin-top:5px; }
+  .picked .lg { width:26px; height:26px; border-radius:6px; flex:none; display:flex; align-items:center;
+    justify-content:center; font-weight:800; font-size:10px; color:#fff; overflow:hidden; }
+  .picked .lg img { width:100%; height:100%; object-fit:cover; }
+  .picked .nm { font-weight:700; } .picked .mt { font-size:11px; color:var(--dim); }
+
+  .presets { display:grid; grid-template-columns:repeat(auto-fill,minmax(140px,1fr)); gap:9px; max-width:660px; margin-top:4px; }
+  .ptile { background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:8px 10px; }
+  .pk { font-size:9.5px; text-transform:uppercase; letter-spacing:.03em; color:var(--dim); margin-bottom:3px; }
+  .pv { font-size:13px; font-weight:700; }
+  .pv.na { color:var(--dim); font-weight:500; }
+  .thesis { width:100%; max-width:660px; min-height:76px; resize:vertical; }
+  .exit-rules { display:flex; gap:8px; flex-wrap:wrap; max-width:660px; }
+  .erule { flex:1; min-width:190px; border:1px solid var(--line); background:var(--bg); border-radius:9px;
+    padding:9px 11px; cursor:pointer; }
+  .erule.active { border-color:var(--violet); background:rgba(124,58,237,.08); }
+  .erule .en { font-weight:700; font-size:12px; }
+  .erule-add { flex:1; min-width:150px; border:1px dashed var(--line); background:none; border-radius:9px;
+    padding:9px 11px; color:var(--dim); font-size:11.5px; cursor:pointer; display:flex; align-items:center; justify-content:center; }
+  .newrule { display:none; gap:7px; flex-wrap:wrap; max-width:660px; margin-top:8px; }
+  .newrule.show { display:flex; }
+  .btn { font:inherit; font-size:12.5px; font-weight:700; border:none; border-radius:8px; padding:8px 16px;
+    cursor:pointer; background:var(--up); color:#fff; }
+  .btn.sec { background:var(--panel); border:1px solid var(--line); color:var(--text); }
+  .btn:disabled { opacity:.45; cursor:not-allowed; }
+  .save-msg { font-size:12px; margin-top:8px; }
+  .save-msg.ok { color:var(--up); } .save-msg.bad { color:var(--down); }
+
+  .filters { display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; margin-bottom:12px; }
+  .ff { display:flex; flex-direction:column; gap:4px; }
+  .ff label { font-size:9.5px; text-transform:uppercase; letter-spacing:.03em; color:var(--dim); }
+  .ff select, .ff input { font-size:12px; padding:6px 9px; background:var(--panel); }
+  table { width:100%; border-collapse:collapse; font-size:12px; }
+  th { text-align:left; font-size:9.5px; text-transform:uppercase; letter-spacing:.03em; color:var(--dim);
+    font-weight:600; padding:7px 9px; border-bottom:1px solid var(--line); }
+  td { padding:8px 9px; border-bottom:1px solid var(--line); }
+  tbody tr { cursor:pointer; } tbody tr:hover { background:var(--bg); }
+  .chip { font-size:10.5px; font-weight:700; padding:2px 6px; border-radius:5px; }
+  .chip.bullish { background:rgba(46,204,113,.15); color:var(--up); }
+  .chip.bearish { background:rgba(240,85,75,.15); color:var(--down); }
+  .chip.choppy { background:rgba(250,204,21,.16); color:var(--warn); }
+  .up { color:var(--up); } .down { color:var(--down); }
+  .count-line { font-size:11.5px; color:var(--dim); margin-bottom:6px; }
+
+  .cond-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+  @media (max-width:820px) { .cond-grid { grid-template-columns:1fr; } }
+  .cond { background:var(--panel); border:1px solid var(--line); border-radius:11px; padding:15px 17px; }
+  .cond.wide { grid-column:1/-1; }
+  .cq { font-weight:700; font-size:12.5px; margin-bottom:2px; }
+  .cs { font-size:11px; color:var(--dim); margin-bottom:11px; line-height:1.45; }
+  .cf { font-size:11.5px; font-weight:600; color:var(--violet); background:rgba(124,58,237,.1);
+    border-radius:7px; padding:6px 9px; margin-bottom:11px; line-height:1.4; }
+  .brow { display:flex; align-items:center; gap:9px; margin-bottom:7px; }
+  .blabel { width:120px; flex:none; font-size:11px; color:var(--dim); }
+  .btrack { flex:1; height:15px; border-radius:5px; background:var(--bg); border:1px solid var(--line); overflow:hidden; }
+  .bfill { height:100%; background:var(--violet); border-radius:5px 0 0 5px; }
+  .bstat { width:104px; flex:none; text-align:right; font-size:11px; color:var(--dim); }
+  .bstat b { color:var(--text); }
+  .today-tag { font-size:9px; font-weight:800; color:var(--violet); border:1px solid var(--violet);
+    border-radius:4px; padding:0 4px; margin-left:5px; }
+
+  .lr { border-color:var(--violet); }
+  .lr-head { display:flex; justify-content:space-between; gap:14px; flex-wrap:wrap; margin-bottom:12px; }
+  .lr-thr label { font-size:9.5px; text-transform:uppercase; letter-spacing:.03em; color:var(--dim); display:block; margin-bottom:4px; text-align:right; }
+  .lr-thr input { width:52px; text-align:right; font-weight:700; }
+  .lr-prog { display:flex; align-items:center; gap:9px; margin-bottom:7px; }
+  .lr-prog span { width:104px; flex:none; font-size:11.5px; font-weight:700; color:var(--dim); }
+  .lr-ptrack { flex:1; height:9px; border-radius:5px; background:var(--bg); border:1px solid var(--line); overflow:hidden; }
+  .lr-pfill { height:100%; background:var(--violet); }
+  .lr-note { font-size:11px; color:var(--dim); line-height:1.5; }
+  .lr-pill { display:inline-block; font-size:14px; font-weight:800; padding:6px 15px; border-radius:8px; margin-bottom:9px; }
+  .lr-pill.probable { background:rgba(46,204,113,.16); color:var(--up); }
+  .lr-pill.marginal { background:rgba(250,204,21,.18); color:var(--warn); }
+  .lr-pill.improbable { background:rgba(240,85,75,.16); color:var(--down); }
+  .lr-detail { font-size:12px; color:var(--dim); line-height:1.55; }
+  .lr-detail b { color:var(--text); }
+
+  .overlay { position:fixed; inset:0; background:rgba(0,0,0,.5); display:flex; align-items:center;
+    justify-content:center; padding:24px; z-index:50; }
+  .overlay[hidden] { display:none; }
+  .sheet { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:20px;
+    max-width:460px; width:100%; max-height:88vh; overflow-y:auto; }
+  .sheet h3 { margin:0 0 2px; font-size:15px; }
+  .sheet .meta { font-size:11.5px; color:var(--dim); margin-bottom:14px; }
+  .frow { display:flex; flex-direction:column; gap:4px; margin-bottom:11px; }
+  .frow label { font-size:10px; text-transform:uppercase; letter-spacing:.03em; color:var(--dim); }
+  .frow select, .frow input, .frow textarea { width:100%; }
+  .ctx-grid { display:grid; grid-template-columns:1fr 1fr; gap:7px; margin-bottom:13px; }
+  .sheet-actions { display:flex; gap:8px; justify-content:space-between; align-items:center; flex-wrap:wrap; }
+  a.nlink { color:var(--accent); font-size:11.5px; text-decoration:none; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="toprow">
+    <div>
+      <h1>Setups Database</h1>
+      <p class="sub">A curated pattern library: one deliberate entry at a time. Pick a setup, look up the name, set the buy date &mdash; the objective context for that date fills itself in.</p>
+    </div>
+    <div class="seg" id="country-seg">
+      <button class="active" data-c="US">&#127482;&#127480; US</button>
+      <button data-c="IN">&#127470;&#127475; India</button>
+    </div>
+  </div>
+  <div class="flow"><span class="d"></span>Setup folders &amp; entries live in Notion &mdash; TMLE score, market-environment score, sector/industry rank and % from 52-week high are read from the terminal's own history at the buy date, nothing typed.</div>
+
+  <div id="load-err" class="err" hidden></div>
+
+  <div class="tabs">
+    <button class="tab active" data-tab="log">Log a Setup</button>
+    <button class="tab" data-tab="browse">Browse &amp; Filter</button>
+    <button class="tab" data-tab="kpi">When It Works</button>
+  </div>
+
+  <!-- LOG -->
+  <div class="page active" id="page-log">
+    <div class="card">
+      <div class="card-desc">Folder first &mdash; same gallery as your Notion Setups Database.</div>
+      <div class="gallery" id="log-gallery"></div>
+      <div id="log-steps" hidden>
+        <div class="step done" id="ls1"><div class="snum">1</div><div style="flex:1">
+          <div class="slabel">Look up the ticker</div>
+          <div class="lookup"><input id="lookup-input" placeholder="Search a ticker&hellip;" autocomplete="off">
+            <div class="drop" id="lookup-drop"></div></div>
+          <div id="picked-wrap"></div>
+        </div></div>
+        <div class="step" id="ls2"><div class="snum">2</div><div style="flex:1">
+          <div class="slabel">Buy date &mdash; from the chart you're studying</div>
+          <input type="date" id="buy-date">
+        </div></div>
+        <div class="step" id="ls3"><div class="snum">3</div><div style="flex:1">
+          <div class="slabel">Context at that date &mdash; auto</div>
+          <div class="presets" id="presets"><div class="pv na">Pick a ticker and date&hellip;</div></div>
+        </div></div>
+        <div class="step" id="ls4"><div class="snum">4</div><div style="flex:1">
+          <div class="slabel">Exit rule</div>
+          <div class="exit-rules" id="exit-rules"></div>
+          <div class="newrule" id="newrule">
+            <input id="nr-name" placeholder="Rule name" style="flex:1;min-width:150px">
+            <button class="btn" id="nr-save" style="background:var(--violet)">Add</button>
+          </div>
+        </div></div>
+        <div class="step" id="ls5"><div class="snum">5</div><div style="flex:1">
+          <div class="slabel">Base length &amp; entry thesis</div>
+          <div style="margin-bottom:8px"><input type="number" id="base-len" placeholder="Base length (trading days)" style="max-width:230px"></div>
+          <textarea class="thesis" id="thesis" placeholder="Why is this a clean example?"></textarea>
+          <div style="margin-top:8px"><button class="btn" id="save-btn" disabled>Save to folder</button></div>
+          <div class="save-msg" id="save-msg" hidden></div>
+        </div></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- BROWSE -->
+  <div class="page" id="page-browse">
+    <div class="card">
+      <div class="card-desc">Pick a folder, then filter on any field. A name logged several times shows one row per entry.</div>
+      <div class="gallery" id="browse-gallery"></div>
+      <div id="browse-body" hidden>
+        <div class="lookup" style="max-width:380px;margin-bottom:12px">
+          <input id="browse-search" placeholder="Search a stock in this folder&hellip;" autocomplete="off">
+          <div class="drop" id="browse-drop"></div>
+        </div>
+        <div class="filters" id="browse-filters"></div>
+        <div class="count-line" id="browse-count"></div>
+        <table><thead><tr>
+          <th>Ticker</th><th>Sector</th><th>Industry</th><th>Buy Date</th><th>TMLE</th>
+          <th>Mkt Env</th><th>Sec Rank</th><th>Ind Rank</th><th>Exit Rule</th>
+        </tr></thead><tbody id="browse-rows"></tbody></table>
+      </div>
+    </div>
+  </div>
+
+  <!-- KPI -->
+  <div class="page" id="page-kpi">
+    <div class="card">
+      <div class="card-title">Not "how did it do" &mdash; "when does it work"</div>
+      <div class="card-desc">Every entry is a name that already worked &mdash; you only log winners. So there's no win rate; what matters is where the winners <b>cluster</b>, and whether today's tape matches.</div>
+      <div class="gallery" id="kpi-gallery"></div>
+    </div>
+    <div id="kpi-body" hidden>
+      <div class="card lr">
+        <div class="lr-head">
+          <div><div class="card-title" style="margin-bottom:2px">Live read: probable to work right now?</div>
+            <div class="card-desc" style="margin-bottom:0">Auto-syncs to live market data once a folder crosses 50 logged winners.</div></div>
+          <div class="lr-thr"><label>Majority threshold</label><input type="number" id="lr-thr" value="50" min="1" max="99"></div>
+        </div>
+        <div id="lr-gate"><div class="lr-prog"><span id="lr-prog-lbl">0 / 50</span>
+          <div class="lr-ptrack"><div class="lr-pfill" id="lr-pfill"></div></div></div>
+          <div class="lr-note" id="lr-gate-note"></div></div>
+        <div id="lr-verdict" hidden>
+          <div class="lr-pill" id="lr-pill"></div>
+          <div class="lr-detail" id="lr-detail"></div>
+        </div>
+      </div>
+      <div class="cond-grid" id="cond-grid"></div>
+    </div>
+  </div>
+</div>
+
+<div class="overlay" id="overlay" hidden><div class="sheet" id="sheet"></div></div>
+
+<script>
+var STATE = { country:"US", types:[], entries:[], envNow:{}, schema:{},
+  logSetup:null, browseSetup:null, kpiSetup:null, pick:null, exitRule:null };
+var EMOJI = { "VCP":0x1F4C9, "Cup Handle":0x2615, "Base Breakout":0x1F4C8,
+  "New High Breakout":0x1F680, "Launchpad + VCP":0x1F6F0, "Launchpad + Base":0x1F6F0,
+  "Basing":0x1F9F1, "MA Bounce":0x1F3D3, "Pyramid Add":0x1F53C, "New IPO":0x1F514 };
+function emoji(n){ return String.fromCodePoint(EMOJI[n] || 0x2728); }
+function esc(s){ var d=document.createElement("div"); d.textContent=(s==null?"":String(s)); return d.innerHTML; }
+function envFav(scoreStr){ if(!scoreStr) return null; var m=String(scoreStr).match(/(\d+)/); return m?+m[1]:null; }
+function fmtDate(d){ return d || "—"; }
+
+// ---- country + tabs ----
+document.querySelectorAll("#country-seg button").forEach(function(b){
+  b.onclick=function(){
+    document.querySelectorAll("#country-seg button").forEach(function(x){x.classList.remove("active");});
+    b.classList.add("active"); STATE.country=b.dataset.c;
+    STATE.logSetup=STATE.browseSetup=STATE.kpiSetup=STATE.pick=null;
+    renderAll();
+  };
+});
+document.querySelectorAll(".tab").forEach(function(t){
+  t.onclick=function(){
+    document.querySelectorAll(".tab").forEach(function(x){x.classList.remove("active");});
+    document.querySelectorAll(".page").forEach(function(x){x.classList.remove("active");});
+    t.classList.add("active"); document.getElementById("page-"+t.dataset.tab).classList.add("active");
+  };
+});
+
+// ---- gallery ----
+function countFor(name){
+  return STATE.entries.filter(function(e){ return e.setup===name && e.country===cc(); }).length;
+}
+function cc(){ return STATE.country==="US" ? "US" : "India"; }
+function renderGallery(elId, activeKey, onPick){
+  var el=document.getElementById(elId);
+  el.innerHTML = STATE.types.map(function(t){
+    var n=countFor(t.name);
+    return '<button class="fcard'+(STATE[activeKey]&&STATE[activeKey].name===t.name?' active':'')+'" data-id="'+esc(t.id)+'" data-nm="'+esc(t.name)+'">'
+      +'<span class="art">'+emoji(t.name)+'</span><span class="body"><span class="nm">'+esc(t.name)+'</span>'
+      +'<span class="ct">'+n+' logged</span></span></button>';
+  }).join("");
+  el.querySelectorAll(".fcard").forEach(function(c){
+    c.onclick=function(){ onPick({ id:c.dataset.id, name:c.dataset.nm }); };
+  });
+}
+
+function pickLog(s){ STATE.logSetup=s; document.getElementById("log-steps").hidden=false;
+  renderGallery("log-gallery","logSetup",pickLog); }
+function pickBrowse(s){ STATE.browseSetup=s; document.getElementById("browse-body").hidden=false;
+  renderGallery("browse-gallery","browseSetup",pickBrowse);
+  document.getElementById("browse-filters").dataset.built=""; renderBrowse(); }
+function pickKpi(s){ STATE.kpiSetup=s; document.getElementById("kpi-body").hidden=false;
+  renderGallery("kpi-gallery","kpiSetup",pickKpi); renderKpi(); }
+function renderAll(){
+  document.querySelectorAll("#country-seg button").forEach(function(x){
+    x.classList.toggle("active", x.dataset.c===STATE.country); });
+  renderGallery("log-gallery","logSetup",pickLog);
+  renderGallery("browse-gallery","browseSetup",pickBrowse);
+  renderGallery("kpi-gallery","kpiSetup",pickKpi);
+  renderExitRules();
+  document.getElementById("log-steps").hidden = !STATE.logSetup;
+  if (STATE.browseSetup) { document.getElementById("browse-body").hidden=false;
+    document.getElementById("browse-filters").dataset.built=""; renderBrowse(); }
+  else document.getElementById("browse-body").hidden=true;
+  if (STATE.kpiSetup) { document.getElementById("kpi-body").hidden=false; renderKpi(); }
+  else document.getElementById("kpi-body").hidden=true;
+}
+
+// ---- LOG: ticker lookup ----
+var lookT=null;
+document.getElementById("lookup-input").addEventListener("input", function(e){
+  var q=e.target.value.trim(); clearTimeout(lookT);
+  if(q.length<1){ document.getElementById("lookup-drop").classList.remove("show"); return; }
+  lookT=setTimeout(function(){
+    fetch("/api/setups/lookup?country="+STATE.country+"&q="+encodeURIComponent(q))
+    .then(function(r){return r.json();}).then(function(hits){
+      var d=document.getElementById("lookup-drop");
+      if(!hits.length){ d.classList.remove("show"); return; }
+      d.innerHTML = hits.map(function(h){
+        return '<div class="hit" data-sy="'+esc(h.ticker)+'" data-se="'+esc(h.sector||"")+'" data-in="'+esc(h.industry||"")+'" data-lo="'+esc(h.logoid||"")+'">'
+          +'<span class="lg" style="background:'+barColor(h.ticker)+'">'+(h.logoid?'<img src="https://s3-symbol-logo.tradingview.com/'+esc(h.logoid)+'.svg">':esc(h.ticker.slice(0,2)))+'</span>'
+          +'<span style="flex:1"><span class="sy">'+esc(h.ticker)+'</span><br><span class="mt">'+esc(h.sector||"")+(h.industry?' · '+esc(h.industry):'')+'</span></span></div>';
+      }).join("");
+      d.classList.add("show");
+      d.querySelectorAll(".hit").forEach(function(row){
+        row.onclick=function(){
+          STATE.pick={ ticker:row.dataset.sy, sector:row.dataset.se, industry:row.dataset.in, logoid:row.dataset.lo };
+          document.getElementById("lookup-input").value=row.dataset.sy;
+          d.classList.remove("show");
+          document.getElementById("picked-wrap").innerHTML=
+            '<div class="picked"><span class="lg" style="background:'+barColor(row.dataset.sy)+'">'
+            +(row.dataset.lo?'<img src="https://s3-symbol-logo.tradingview.com/'+esc(row.dataset.lo)+'.svg">':esc(row.dataset.sy.slice(0,2)))
+            +'</span><span><span class="nm">'+esc(row.dataset.sy)+'</span><br><span class="mt">'+esc(row.dataset.se||"")+(row.dataset.in?' · '+esc(row.dataset.in):'')+'</span></span></div>';
+          document.getElementById("ls2").classList.add("done");
+          maybeContext();
+        };
+      });
+    });
+  }, 200);
+});
+function barColor(s){ var h=0; for(var i=0;i<s.length;i++) h=(h*31+s.charCodeAt(i))%360; return "hsl("+h+",42%,45%)"; }
+
+document.getElementById("buy-date").addEventListener("change", function(){
+  document.getElementById("ls2").classList.toggle("done", !!this.value);
+  maybeContext();
+});
+
+function maybeContext(){
+  var t=STATE.pick && STATE.pick.ticker, d=document.getElementById("buy-date").value;
+  if(!t||!d){ return; }
+  var box=document.getElementById("presets");
+  box.innerHTML='<div class="pv na">Reading history…</div>';
+  fetch("/api/setups/context?country="+STATE.country+"&ticker="+encodeURIComponent(t)+"&date="+d)
+  .then(function(r){return r.json();}).then(function(ctx){
+    if(ctx.error){ box.innerHTML='<div class="pv na">'+esc(ctx.error)+'</div>'; return; }
+    STATE.ctx=ctx;
+    function tile(k,v,na){ return '<div class="ptile"><div class="pk">'+k+'</div><div class="pv'+(na?' na':'')+'">'+v+'</div></div>'; }
+    var rows=[
+      tile("TMLE Score", ctx.tmleScore!=null?ctx.tmleScore:"n/a", ctx.tmleScore==null),
+      tile("Market Env", ctx.marketEnvScore||"n/a", !ctx.marketEnvScore),
+      tile("Env Label", ctx.marketEnvLabel||"n/a", !ctx.marketEnvLabel),
+      tile("Sector Rank", ctx.sectorRank!=null?(ctx.sectorRank+(ctx.sectorRankDelta1w!=null?' ('+(ctx.sectorRankDelta1w>=0?'+':'')+ctx.sectorRankDelta1w+' 1w)':'')):"n/a", ctx.sectorRank==null),
+      tile("Industry Rank", ctx.industryRank!=null?(ctx.industryRank+(ctx.industryRankDelta1w!=null?' ('+(ctx.industryRankDelta1w>=0?'+':'')+ctx.industryRankDelta1w+' 1w)':'')):"n/a", ctx.industryRank==null),
+      tile("% From 52w High", ctx.pctFrom52wHigh!=null?('-'+ctx.pctFrom52wHigh+'%'):"n/a", ctx.pctFrom52wHigh==null),
+      tile("Price history", ctx.daysSinceIpo!=null?(ctx.daysSinceIpo+" sessions"):"n/a", ctx.daysSinceIpo==null)
+    ];
+    box.innerHTML=rows.join("");
+    document.getElementById("ls3").classList.add("done");
+    document.getElementById("save-btn").disabled=false;
+  });
+}
+
+// ---- exit rules ----
+function exitRuleOptions(){
+  var o=(STATE.schema && STATE.schema["Exit Rule"]) || [];
+  return o.length ? o : ["2 closes below 20 EMA","3x ATR from 50 EMA"];
+}
+function renderExitRules(){
+  var el=document.getElementById("exit-rules"); if(!el) return;
+  var opts=exitRuleOptions();
+  el.innerHTML = opts.map(function(o){
+    return '<div class="erule'+(STATE.exitRule===o?' active':'')+'" data-r="'+esc(o)+'"><div class="en">'+esc(o)+'</div></div>';
+  }).join("") + '<button class="erule-add" id="erule-add">+ Define a new rule…</button>';
+  el.querySelectorAll(".erule").forEach(function(c){
+    c.onclick=function(){ STATE.exitRule=c.dataset.r; renderExitRules(); };
+  });
+  document.getElementById("erule-add").onclick=function(){ document.getElementById("newrule").classList.toggle("show"); };
+}
+document.getElementById("nr-save").onclick=function(){
+  var v=document.getElementById("nr-name").value.trim(); if(!v) return;
+  STATE.schema["Exit Rule"]=exitRuleOptions().concat([v]); STATE.exitRule=v;
+  document.getElementById("nr-name").value=""; document.getElementById("newrule").classList.remove("show");
+  renderExitRules();
+};
+
+// ---- save ----
+document.getElementById("save-btn").onclick=function(){
+  var btn=this, msg=document.getElementById("save-msg");
+  if(!STATE.logSetup||!STATE.pick){ return; }
+  btn.disabled=true; msg.hidden=false; msg.className="save-msg"; msg.textContent="Saving…";
+  fetch("/api/setups/create",{ method:"POST", headers:{"Content-Type":"application/json"},
+    body:JSON.stringify({ setupId:STATE.logSetup.id, country:STATE.country, ticker:STATE.pick.ticker,
+      buyDate:document.getElementById("buy-date").value, exitRule:STATE.exitRule,
+      entryThesis:document.getElementById("thesis").value||null,
+      baseLengthDays:document.getElementById("base-len").value?+document.getElementById("base-len").value:null })
+  }).then(function(r){return r.json();}).then(function(res){
+    if(res.error){ msg.className="save-msg bad"; msg.textContent=res.error; btn.disabled=false; return; }
+    msg.className="save-msg ok"; msg.textContent=STATE.pick.ticker+" added to "+STATE.logSetup.name+". Paste the chart in Notion when ready.";
+    document.getElementById("thesis").value=""; document.getElementById("base-len").value="";
+    document.getElementById("lookup-input").value=""; document.getElementById("picked-wrap").innerHTML="";
+    document.getElementById("buy-date").value=""; document.getElementById("presets").innerHTML='<div class="pv na">Pick a ticker and date…</div>';
+    STATE.pick=null;
+    loadData();
+  }).catch(function(e){ msg.className="save-msg bad"; msg.textContent=String(e); btn.disabled=false; });
+};
+
+// ---- BROWSE ----
+function browseEntries(){
+  return STATE.entries.filter(function(e){
+    return e.country===cc() && STATE.browseSetup && e.setup===STATE.browseSetup.name;
+  });
+}
+function uniqueVals(rows,key){ var s={}; rows.forEach(function(r){ if(r[key]) s[r[key]]=1; }); return Object.keys(s).sort(); }
+function renderBrowse(){
+  if(!STATE.browseSetup) return;
+  var rows=browseEntries();
+  var f=document.getElementById("browse-filters");
+  if(!f.dataset.built || f.dataset.setup!==STATE.browseSetup.name){
+    f.dataset.built="1"; f.dataset.setup=STATE.browseSetup.name;
+    f.innerHTML =
+      ffSel("f-sector","Sector",uniqueVals(rows,"sector")) +
+      ffSel("f-industry","Industry",uniqueVals(rows,"industry")) +
+      ffSel("f-env","Market Env",["bullish","choppy","bearish"]) +
+      ffSel("f-exit","Exit Rule",uniqueVals(rows,"exitRule")) +
+      '<div class="ff"><label>Min TMLE</label><input type="number" id="f-tmle" style="width:80px"></div>' +
+      '<div class="ff"><label>Sector rank rising</label><select id="f-trend"><option value="">Any</option><option value="up">Rising</option><option value="down">Falling</option></select></div>';
+    f.querySelectorAll("select,input").forEach(function(x){ x.oninput=drawBrowseRows; });
+  }
+  drawBrowseRows();
+}
+function ffSel(id,label,vals){
+  return '<div class="ff"><label>'+label+'</label><select id="'+id+'"><option value="">Any</option>'
+    + vals.map(function(v){ return '<option>'+esc(v)+'</option>'; }).join("") + '</select></div>';
+}
+function gv(id){ var e=document.getElementById(id); return e?e.value:""; }
+function drawBrowseRows(){
+  var rows=browseEntries();
+  var se=gv("f-sector"), ind=gv("f-industry"), env=gv("f-env"), ex=gv("f-exit"),
+      tmle=gv("f-tmle"), trend=gv("f-trend"), q=(gv("browse-search")||"").trim().toUpperCase();
+  rows=rows.filter(function(r){
+    if(se && r.sector!==se) return false;
+    if(ind && r.industry!==ind) return false;
+    if(env && r.marketEnvLabel!==env) return false;
+    if(ex && r.exitRule!==ex) return false;
+    if(tmle && (r.tmleScore==null || r.tmleScore<+tmle)) return false;
+    if(trend==="up" && !(r.sectorRankDelta1w>0)) return false;
+    if(trend==="down" && !(r.sectorRankDelta1w<0)) return false;
+    if(q && (r.ticker||"").toUpperCase().indexOf(q)<0) return false;
+    return true;
+  });
+  rows.sort(function(a,b){ return (b.buyDate||"").localeCompare(a.buyDate||""); });
+  document.getElementById("browse-count").textContent = rows.length+" "+(rows.length===1?"entry":"entries");
+  document.getElementById("browse-rows").innerHTML = rows.map(function(r,i){
+    return '<tr data-i="'+i+'"><td style="font-weight:700">'+esc(r.ticker)+'</td>'
+      +'<td>'+esc(r.sector||"—")+'</td><td>'+esc(r.industry||"—")+'</td>'
+      +'<td>'+fmtDate(r.buyDate)+'</td><td>'+(r.tmleScore!=null?r.tmleScore:"—")+'</td>'
+      +'<td>'+(r.marketEnvScore||"—")+(r.marketEnvLabel?' <span class="chip '+r.marketEnvLabel+'">'+r.marketEnvLabel[0].toUpperCase()+'</span>':'')+'</td>'
+      +'<td class="'+(r.sectorRankDelta1w>0?'up':(r.sectorRankDelta1w<0?'down':''))+'">'+(r.sectorRank!=null?r.sectorRank:"—")+'</td>'
+      +'<td>'+(r.industryRank!=null?r.industryRank:"—")+'</td><td style="color:var(--dim);font-size:11px">'+esc(r.exitRule||"—")+'</td></tr>';
+  }).join("") || '<tr><td colspan="9" style="text-align:center;color:var(--dim);padding:18px">No entries match.</td></tr>';
+  document.getElementById("browse-rows").querySelectorAll("tr[data-i]").forEach(function(tr){
+    tr.onclick=function(){ openSheet(rows[+tr.dataset.i]); };
+  });
+}
+var bsT=null;
+document.getElementById("browse-search").addEventListener("input", function(e){
+  var q=e.target.value.trim().toUpperCase(); clearTimeout(bsT);
+  var d=document.getElementById("browse-drop");
+  if(q.length<1){ d.classList.remove("show"); drawBrowseRows(); return; }
+  var matches=browseEntries().filter(function(r){ return (r.ticker||"").toUpperCase().indexOf(q)>=0; });
+  if(matches.length){
+    d.innerHTML=matches.slice(0,12).map(function(m){
+      return '<div class="hit"><span style="flex:1"><span class="sy">'+esc(m.ticker)+'</span> <span class="mt">'+fmtDate(m.buyDate)+' · '+esc(m.marketEnvScore||"")+'</span></span></div>';
+    }).join(""); d.classList.add("show");
+  } else d.classList.remove("show");
+  drawBrowseRows();
+});
+
+// ---- detail sheet ----
+function openSheet(e){
+  var opts=exitRuleOptions();
+  document.getElementById("sheet").innerHTML =
+    '<h3>'+esc(e.ticker)+'</h3><div class="meta">'+esc(e.setup||"")+' · bought '+fmtDate(e.buyDate)+' · '+esc(e.country||"")+'</div>'
+    +'<div class="ctx-grid">'
+      +ctxTile("TMLE",e.tmleScore) + ctxTile("Mkt Env",e.marketEnvScore) + ctxTile("Env label",e.marketEnvLabel)
+      +ctxTile("Sector rank",e.sectorRank) + ctxTile("Industry rank",e.industryRank)
+      +ctxTile("% from 52w high", e.pctFrom52wHigh!=null?('-'+e.pctFrom52wHigh+'%'):null)
+    +'</div>'
+    +'<div class="frow"><label>Setup folder</label><select id="s-setup">'
+      + STATE.types.map(function(t){ return '<option value="'+esc(t.id)+'"'+(t.name===e.setup?' selected':'')+'>'+esc(t.name)+'</option>'; }).join("")
+      +'</select></div>'
+    +'<div class="frow"><label>Exit rule</label><select id="s-exit"><option value="">—</option>'
+      + opts.map(function(o){ return '<option'+(o===e.exitRule?' selected':'')+'>'+esc(o)+'</option>'; }).join("")+'</select></div>'
+    +'<div class="frow"><label>Base length (days)</label><input type="number" id="s-base" value="'+(e.baseLengthDays!=null?e.baseLengthDays:'')+'"></div>'
+    +'<div class="frow"><label>Entry thesis</label><textarea id="s-thesis" style="min-height:70px">'+esc(e.entryThesis||"")+'</textarea></div>'
+    +'<div class="sheet-actions">'
+      +'<a class="nlink" href="'+esc(e.notionUrl||"#")+'" target="_blank">Open in Notion ↗</a>'
+      +'<span><button class="btn sec" id="s-resync">Re-sync context</button> <button class="btn" id="s-close">Done</button></span>'
+    +'</div><div class="save-msg" id="s-msg" hidden></div>';
+  document.getElementById("overlay").hidden=false;
+  function patch(fields, resync){
+    var msg=document.getElementById("s-msg"); msg.hidden=false; msg.className="save-msg"; msg.textContent="Saving…";
+    var body={ pageId:e.pageId, fields:fields };
+    if(resync){ body.resync=true; body.entry={ country:e.country==="India"?"India":"US", ticker:e.ticker, buyDate:e.buyDate }; }
+    fetch("/api/setups/update",{ method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body) })
+    .then(function(r){return r.json();}).then(function(res){
+      if(res.error){ msg.className="save-msg bad"; msg.textContent=res.error; return; }
+      msg.className="save-msg ok"; msg.textContent="Saved."; loadData();
+    });
+  }
+  document.getElementById("s-setup").onchange=function(){ patch({ setupId:this.value }); };
+  document.getElementById("s-exit").onchange=function(){ patch({ exitRule:this.value||null }); };
+  document.getElementById("s-base").onblur=function(){ patch({ baseLengthDays:this.value?+this.value:null }); };
+  document.getElementById("s-thesis").onblur=function(){ patch({ entryThesis:this.value||null }); };
+  document.getElementById("s-resync").onclick=function(){ patch({ entryThesis:document.getElementById("s-thesis").value||null }, true); };
+  document.getElementById("s-close").onclick=function(){ document.getElementById("overlay").hidden=true; };
+}
+function ctxTile(k,v){ return '<div class="ptile"><div class="pk">'+k+'</div><div class="pv'+(v==null||v===""?' na':'')+'">'+esc(v==null||v===""?"n/a":v)+'</div></div>'; }
+document.getElementById("overlay").onclick=function(e){ if(e.target.id==="overlay") e.target.hidden=true; };
+
+// ---- KPI ----
+function kpiEntries(){
+  return STATE.entries.filter(function(e){
+    return e.country===cc() && STATE.kpiSetup && e.setup===STATE.kpiSetup.name;
+  });
+}
+function bucketRows(elBuckets){
+  var total=elBuckets.reduce(function(s,b){ return s+b.n; },0)||1;
+  return elBuckets.map(function(b){
+    var pct=Math.round(b.n/total*100);
+    return '<div class="brow"><div class="blabel">'+esc(b.label)+(b.today?'<span class="today-tag">TODAY</span>':'')+'</div>'
+      +'<div class="btrack"><div class="bfill" style="width:'+pct+'%"></div></div>'
+      +'<div class="bstat"><b>'+pct+'%</b> · n='+b.n+'</div></div>';
+  }).join("");
+}
+function groupBy(rows, fn, order){
+  var m={}; rows.forEach(function(r){ var k=fn(r); if(k==null) return; m[k]=(m[k]||0)+1; });
+  var keys = order || Object.keys(m).sort(function(a,b){ return m[b]-m[a]; });
+  return keys.filter(function(k){ return m[k]; }).map(function(k){ return { label:k, n:m[k] }; });
+}
+function renderKpi(){
+  if(!STATE.kpiSetup) return;
+  var rows=kpiEntries(), n=rows.length;
+  var env=STATE.envNow[STATE.country]||{}, todayFav=env.favourable, todayTotal=env.total;
+  var thr=+document.getElementById("lr-thr").value||50;
+
+  // live read
+  var gate=document.getElementById("lr-gate"), verdict=document.getElementById("lr-verdict");
+  if(n<50){
+    gate.hidden=false; verdict.hidden=true;
+    document.getElementById("lr-prog-lbl").textContent=n+" / 50";
+    document.getElementById("lr-pfill").style.width=Math.round(n/50*100)+"%";
+    document.getElementById("lr-gate-note").textContent=
+      "Not enough sample yet — auto-sync to live market data arms at 50 logged winners in this folder.";
+  } else {
+    gate.hidden=true; verdict.hidden=false;
+    var atOr = rows.filter(function(r){ var f=envFav(r.marketEnvScore); return f!=null && todayFav!=null && f>=todayFav; }).length;
+    var pct=Math.round(atOr/n*100);
+    var cls = pct>=thr ? "probable" : (pct>=thr-10 ? "marginal" : "improbable");
+    var lbl = pct>=thr ? "Probable to work now" : (pct>=thr-10 ? "Marginal" : "Improbable right now");
+    document.getElementById("lr-pill").className="lr-pill "+cls;
+    document.getElementById("lr-pill").textContent=lbl;
+    document.getElementById("lr-detail").innerHTML =
+      "Today's Market Environment score is <b>"+(todayFav!=null?todayFav+" / "+todayTotal:"n/a")
+      +"</b>. <b>"+pct+"%</b> of this folder's <b>"+n+"</b> logged winners entered at that score or higher — "
+      +(pct>=thr?"above":"below")+" the "+thr+"% majority threshold.";
+  }
+
+  // condition cards
+  var envBuckets = groupBy(rows, function(r){ return envFav(r.marketEnvScore); },
+    (todayTotal? Array.from({length:todayTotal+1},function(_,i){return String(i);}) : null))
+    .map(function(b){ b.today = todayFav!=null && +b.label===todayFav; return b; });
+  var regime = groupBy(rows, function(r){ return r.marketEnvLabel; }, ["bullish","choppy","bearish"]);
+  var sectors = groupBy(rows, function(r){ return r.sector; }).slice(0,6);
+  var industries = groupBy(rows, function(r){ return r.industry; }).slice(0,6);
+  var ipo = groupBy(rows, function(r){
+    var d=r.daysSinceIpo; if(d==null) return null;
+    return d<126?"< 6 months":(d<252?"6–12 months":(d<756?"1–3 years":"3+ years"));
+  }, ["< 6 months","6–12 months","1–3 years","3+ years"]);
+  var base = groupBy(rows, function(r){
+    var d=r.baseLengthDays; if(d==null) return null;
+    return d<15?"< 3 weeks":(d<30?"3–6 weeks":(d<50?"6–10 weeks":"10+ weeks"));
+  }, ["< 3 weeks","3–6 weeks","6–10 weeks","10+ weeks"]);
+  var w52 = groupBy(rows, function(r){
+    var p=r.pctFrom52wHigh; if(p==null) return null;
+    return p<10?"0–10%":(p<20?"10–20%":(p<35?"20–35%":"35%+"));
+  }, ["0–10%","10–20%","20–35%","35%+"]);
+  var srank = groupBy(rows, function(r){
+    var d=r.sectorRankDelta1w; if(d==null) return null;
+    return d<=0?"flat / fell":(d<5?"rose 1–4":(d<10?"rose 5–9":"rose 10+"));
+  }, ["flat / fell","rose 1–4","rose 5–9","rose 10+"]);
+
+  var cards=[
+    condCard("wide","Market Environment score at entry",
+      "Where this folder's winners sat on the "+ (todayTotal||9) +"-factor environment score — the reading the live verdict checks.",
+      envBuckets.length?bucketRows(envBuckets):empty()),
+    condCard("","Index regime at entry","Overall environment label on the buy date.", regime.length?bucketRows(regime):empty()),
+    condCard("","Sector concentration","Which sectors these winners came from.", sectors.length?bucketRows(sectors):empty()),
+    condCard("","Industry concentration","Which industries these winners came from.", industries.length?bucketRows(industries):empty()),
+    condCard("","Sector rank move into entry","Places the sector climbed over the trailing week.", srank.length?bucketRows(srank):empty()),
+    condCard("","Time since first price","Sessions of history before the buy date (proxy for listing age).", ipo.length?bucketRows(ipo):empty()),
+    condCard("","Base length","Manual field — fill it in the detail view to populate this.", base.length?bucketRows(base):empty()),
+    condCard("","Distance from 52-week high","How far below the high the name sat when bought.", w52.length?bucketRows(w52):empty())
+  ];
+  document.getElementById("cond-grid").innerHTML=cards.join("");
+}
+function empty(){ return '<div class="cs" style="margin:0">No entries with this field yet.</div>'; }
+function condCard(cls,q,s,body){
+  return '<div class="cond '+cls+'"><div class="cq">'+esc(q)+'</div><div class="cs">'+esc(s)+'</div>'+body+'</div>';
+}
+document.getElementById("lr-thr").addEventListener("input", function(){ if(STATE.kpiSetup) renderKpi(); });
+
+// ---- load ----
+function loadData(){
+  return Promise.all([
+    fetch("/api/setups/data").then(function(r){return r.json();}),
+    fetch("/api/setups/schema").then(function(r){return r.json();}).catch(function(){return {};})
+  ]).then(function(res){
+    var data=res[0], schema=res[1];
+    if(data.error) throw new Error(data.error);
+    STATE.types = (data.types||[]).slice().sort(function(a,b){ return a.name.localeCompare(b.name); });
+    STATE.entries = data.entries||[];
+    STATE.envNow = data.envNow||{};
+    STATE.schema = (schema && !schema.error) ? schema : {};
+    renderAll();
+  }).catch(function(err){
+    var el=document.getElementById("load-err"); el.hidden=false;
+    el.innerHTML="<b>Could not load the Setups Database.</b> "+esc(err.message)
+      +'<br>If this is the first run, connect the Notion integration to the <code>Setups Database</code> page (••• &rarr; Connections), same step as the Trade Journal.';
+  });
+}
+loadData();
 </script>
 </body></html>"""
 
@@ -2643,6 +3434,9 @@ const ICONS = {
   "Live Portfolio": icon('<rect x="2" y="7" width="20" height="14" rx="2"/>'
     + '<path d="M16 21V5a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"/>'),
   "Trade Journal": icon('<path d="M4 4h13l3 3v13H4z"/><path d="M8 9h9M8 13h9M8 17h5"/>'),
+  "Setups": icon('<rect x="3" y="4" width="7" height="7" rx="1"/>'
+    + '<rect x="14" y="4" width="7" height="7" rx="1"/><rect x="3" y="15" width="7" height="5" rx="1"/>'
+    + '<path d="M17.5 15v5M15 17.5h5"/>'),
 };
 
 const COUNTRIES = %%NAV_JSON%%;
@@ -2658,7 +3452,7 @@ function topLevelItems() {
   return country.panels
     .concat(country.signalsPanels || [])
     .concat(country.algorithmsPanels || [])
-    .concat([portfolioItem, journalItem])
+    .concat([portfolioItem, journalItem, setupsItem])
     .concat(country.systemPanels || []);
 }
 
@@ -2811,7 +3605,7 @@ function renderPinned() {
 }
 
 function renderPortfolioNav() {
-  renderGroup(document.getElementById("portfolio-nav"), [portfolioItem, journalItem]);
+  renderGroup(document.getElementById("portfolio-nav"), [portfolioItem, journalItem, setupsItem]);
 }
 
 function renderSystemNav() {
@@ -2854,6 +3648,7 @@ function renderCountrySwitch() {
 
 const portfolioItem = {label: "Live Portfolio", url: "/portfolio", scoped: false};
 const journalItem = {label: "Trade Journal", url: "/journal", scoped: false};
+const setupsItem = {label: "Setups", url: "/setups", scoped: false};
 
 document.getElementById("reload-btn").onclick = () => {
   if (!document.getElementById("stack-wrap").hidden) {
@@ -2946,6 +3741,8 @@ if (last) {
     go("/portfolio", "Live Portfolio", false); restored = true;
   } else if (last.top === "Trade Journal") {
     go("/journal", "Trade Journal", false); restored = true;
+  } else if (last.top === "Setups") {
+    go("/setups", "Setups", false); restored = true;
   } else if (COUNTRIES.some(c => c.code === last.country)) {
     country = COUNTRIES.find(c => c.code === last.country);
     renderCountrySwitch(); refreshNav();

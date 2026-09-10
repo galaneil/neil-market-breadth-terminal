@@ -167,6 +167,16 @@ def _date_of(prop):
     return value.get("start") if value else None
 
 
+def _created_of(prop):
+    return prop.get("created_time") if prop else None
+
+
+def _relation_ids(prop):
+    if not prop:
+        return []
+    return [r.get("id") for r in prop.get("relation", []) if r.get("id")]
+
+
 def _formula_of(prop):
     """Formula properties nest the actual value one level deeper, under
     whichever type the formula happens to resolve to -- Cost Value resolves
@@ -202,6 +212,10 @@ def date(value):
 
 def select(value):
     return {"select": {"name": str(value)} if value else None}
+
+
+def relation(page_ids):
+    return {"relation": [{"id": pid} for pid in (page_ids or []) if pid]}
 
 
 # --- stops: Notion -> here -------------------------------------------------
@@ -308,6 +322,182 @@ def update_trade(page_id, fields, log=print):
             raise NotionError(f"{name!r} is not an editable trade field")
     _call("PATCH", f"/pages/{page_id}", {"properties": properties})
     log(f"  updated {', '.join(fields)} on {page_id}")
+
+
+# --- Setups Database: setup types + logged entries ------------------------
+#
+# Two Notion databases, one page apart:
+#   Setups Database   the gallery of setup TYPES (VCP, Cup Handle, ...). One
+#                     row per pattern, each with its own page. Neil curates
+#                     this by hand; here it is read-only.
+#   Setup Entries     one row per logged stock example, related back to its
+#                     setup type. The objective context columns (sector rank,
+#                     market-env score, % from 52w high, ...) are stamped from
+#                     the pipeline's own history at the buy date by
+#                     setup_context.py, never typed. Entry Thesis, Exit Rule,
+#                     Base Length and the pasted Chart are Neil's.
+
+SETUP_TYPES_DB = "3ac4788c-7a99-800b-ab8e-e5a95a1f4e74"
+SETUP_ENTRIES_DB = "62131813-c486-4674-9271-d67bf1461497"
+
+# Written on every re-sync — the terminal is authoritative for these, so they
+# are overwritten to match whatever the history says for the buy date now.
+SETUP_CONTEXT_FIELDS = {
+    "sector": ("Sector", text),
+    "industry": ("Industry", text),
+    "tmleScore": ("TMLE Score", number),
+    "marketEnvScore": ("Market Env Score", text),
+    "marketEnvLabel": ("Market Env Label", select),
+    "sectorRank": ("Sector Rank", number),
+    "industryRank": ("Industry Rank", number),
+    "sectorRankDelta1w": ("Sector Rank 1w Delta", number),
+    "industryRankDelta1w": ("Industry Rank 1w Delta", number),
+    "daysSinceIpo": ("Days Since IPO", number),
+    "pctFrom52wHigh": ("Pct From 52w High", number),
+}
+
+# Neil's, hand-entered, never touched by a re-sync.
+SETUP_ENTRY_EDITABLE = {
+    "entryThesis": ("Entry Thesis", text),
+    "exitRule": ("Exit Rule", select),
+    "baseLengthDays": ("Base Length Days", number),
+}
+
+
+def fetch_setup_types(log=print):
+    """The setup-type gallery — {id, name} per row of the Setups Database,
+    sorted by name. This is what the folder picker is built from."""
+    try:
+        pages = query(SETUP_TYPES_DB)
+    except NotionError as error:
+        log(f"  setup types: {error}")
+        return []
+    types = []
+    for page in pages:
+        name = None
+        for prop in page.get("properties", {}).values():
+            if prop.get("type") == "title":
+                name = _text_of(prop)
+                break
+        if name:
+            types.append({"id": page["id"], "name": name})
+    types.sort(key=lambda t: t["name"].lower())
+    log(f"  setup types: {len(types)}")
+    return types
+
+
+def _setup_entry_from_page(page, types_by_id):
+    p = page.get("properties", {})
+    setup_ids = _relation_ids(p.get("Setup"))
+    setup_name = next((types_by_id.get(i) for i in setup_ids if types_by_id.get(i)), None)
+    return {
+        "pageId": page["id"],
+        "notionUrl": page.get("url"),
+        "setup": setup_name,
+        "setupId": setup_ids[0] if setup_ids else None,
+        "ticker": _text_of(p.get("Ticker")),
+        "country": _select_of(p.get("Country")),
+        "sector": _text_of(p.get("Sector")),
+        "industry": _text_of(p.get("Industry")),
+        "buyDate": _date_of(p.get("Buy Date")),
+        "tmleScore": _number_of(p.get("TMLE Score")),
+        "marketEnvScore": _text_of(p.get("Market Env Score")),
+        "marketEnvLabel": _select_of(p.get("Market Env Label")),
+        "sectorRank": _number_of(p.get("Sector Rank")),
+        "industryRank": _number_of(p.get("Industry Rank")),
+        "sectorRankDelta1w": _number_of(p.get("Sector Rank 1w Delta")),
+        "industryRankDelta1w": _number_of(p.get("Industry Rank 1w Delta")),
+        "daysSinceIpo": _number_of(p.get("Days Since IPO")),
+        "pctFrom52wHigh": _number_of(p.get("Pct From 52w High")),
+        "baseLengthDays": _number_of(p.get("Base Length Days")),
+        "exitRule": _select_of(p.get("Exit Rule")),
+        "entryThesis": _text_of(p.get("Entry Thesis")),
+        "logged": _created_of(p.get("Logged")),
+    }
+
+
+def fetch_setup_entries(log=print):
+    """Every logged entry, flattened, with its setup type resolved from the
+    relation. One read per page load — the analytics are computed from this.
+    `types` carries {id, name} so the folder picker works for empty folders."""
+    try:
+        type_pages = query(SETUP_TYPES_DB)
+    except NotionError as error:
+        return {"entries": [], "types": [], "error": str(error)}
+    types = []
+    for page in type_pages:
+        for prop in page.get("properties", {}).values():
+            if prop.get("type") == "title":
+                name = _text_of(prop)
+                if name:
+                    types.append({"id": page["id"], "name": name})
+                break
+    types.sort(key=lambda t: t["name"].lower())
+    types_by_id = {t["id"]: t["name"] for t in types}
+    try:
+        pages = query(SETUP_ENTRIES_DB)
+    except NotionError as error:
+        return {"entries": [], "types": types, "error": str(error)}
+    entries = [_setup_entry_from_page(pg, types_by_id) for pg in pages]
+    log(f"  setup entries: {len(entries)} across {len(types)} types")
+    return {"entries": entries, "types": types}
+
+
+def _setup_properties(fields, context):
+    """Build the Notion property payload shared by create and re-sync."""
+    props = {}
+    for key, (name, builder) in SETUP_CONTEXT_FIELDS.items():
+        if key in context:
+            props[name] = builder(context.get(key))
+    for key, (name, builder) in SETUP_ENTRY_EDITABLE.items():
+        if key in fields and fields.get(key) is not None:
+            props[name] = builder(fields.get(key))
+    return props
+
+
+def create_setup_entry(fields, context, log=print):
+    """One new logged entry. `fields` carries setupId / ticker / country /
+    buyDate plus the editable ones; `context` is setup_context.context_at()."""
+    ticker = (fields.get("ticker") or "").upper()
+    buy_date = fields.get("buyDate")
+    setup_id = fields.get("setupId")
+    if not ticker or not buy_date or not setup_id:
+        raise NotionError("ticker, buyDate and setupId are all required")
+
+    props = _setup_properties(fields, context)
+    props["Name"] = title(f"{ticker} · {buy_date}")
+    props["Ticker"] = text(ticker)
+    props["Buy Date"] = date(buy_date)
+    props["Setup"] = relation([setup_id])
+    if fields.get("country"):
+        props["Country"] = select(fields["country"])
+
+    page = _call("POST", "/pages", {
+        "parent": {"database_id": SETUP_ENTRIES_DB}, "properties": props})
+    log(f"  logged {ticker} @ {buy_date}")
+    return {"pageId": page["id"], "notionUrl": page.get("url")}
+
+
+def update_setup_entry(page_id, fields, context=None, log=print):
+    """Patch one entry. Editable fields come straight through; passing a
+    `context` dict re-stamps every auto column from the pipeline history."""
+    props = {}
+    for key, value in fields.items():
+        if key == "setupId":
+            props["Setup"] = relation([value] if value else [])
+        elif key in SETUP_ENTRY_EDITABLE:
+            name, builder = SETUP_ENTRY_EDITABLE[key]
+            props[name] = builder(value)
+        else:
+            raise NotionError(f"{key!r} is not an editable setup-entry field")
+    if context is not None:
+        for key, (name, builder) in SETUP_CONTEXT_FIELDS.items():
+            if key in context:
+                props[name] = builder(context.get(key))
+    if not props:
+        return
+    _call("PATCH", f"/pages/{page_id}", {"properties": props})
+    log(f"  updated {', '.join(props)} on {page_id}")
 
 
 # --- positions and NAV: here -> Notion -------------------------------------
