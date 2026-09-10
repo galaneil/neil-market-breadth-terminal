@@ -125,6 +125,34 @@ def _call(method, path, body=None):
                           f"{detail[:300]}") from None
 
 
+def _upload_bytes(filename, content_type, blob):
+    """Notion's two-step file upload: create the slot, then send the bytes as
+    multipart to its one-time URL. Returns the file_upload id, ready to attach
+    to a page property."""
+    created = _call("POST", "/file_uploads",
+                    {"filename": filename, "content_type": content_type})
+    upload_id = created["id"]
+    boundary = "----neilSetups" + os.urandom(9).hex()
+    body = b"".join([
+        (f"--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; "
+         f"filename=\"{filename}\"\r\nContent-Type: {content_type}\r\n\r\n").encode(),
+        blob,
+        f"\r\n--{boundary}--\r\n".encode(),
+    ])
+    request = urllib.request.Request(
+        f"{API}/file_uploads/{upload_id}/send", method="POST", data=body,
+        headers={"Authorization": f"Bearer {token()}",
+                 "Notion-Version": NOTION_VERSION,
+                 "Content-Type": f"multipart/form-data; boundary={boundary}"})
+    try:
+        with urllib.request.urlopen(request, timeout=120) as response:
+            json.loads(response.read().decode())
+    except urllib.error.HTTPError as error:
+        raise NotionError("chart upload failed "
+                          f"[{error.code}]: {error.read().decode('utf-8', 'replace')[:300]}") from None
+    return upload_id
+
+
 def query(database_id, body=None):
     """Every row of a database, following pagination."""
     rows, cursor = [], None
@@ -169,6 +197,19 @@ def _date_of(prop):
 
 def _created_of(prop):
     return prop.get("created_time") if prop else None
+
+
+def _files_of(prop):
+    """[{name, url, kind}] for a files property. `url` is a short-lived signed
+    URL for Notion-hosted files, so it is only good for the current page load."""
+    out = []
+    for f in (prop or {}).get("files", []):
+        kind = f.get("type")
+        holder = f.get(kind) or {}
+        url = holder.get("url")
+        if url:
+            out.append({"name": f.get("name") or "chart", "url": url, "kind": kind})
+    return out
 
 
 def _relation_ids(prop):
@@ -413,6 +454,7 @@ def _setup_entry_from_page(page, types_by_id):
         "exitRule": _select_of(p.get("Exit Rule")),
         "entryThesis": _text_of(p.get("Entry Thesis")),
         "logged": _created_of(p.get("Logged")),
+        "chartCount": len((p.get("Chart") or {}).get("files", [])),
     }
 
 
@@ -498,6 +540,37 @@ def update_setup_entry(page_id, fields, context=None, log=print):
         return
     _call("PATCH", f"/pages/{page_id}", {"properties": props})
     log(f"  updated {', '.join(props)} on {page_id}")
+
+
+def fetch_entry_charts(page_id):
+    """Fresh signed URLs for one entry's Chart attachments — call this when the
+    detail view opens, not from the list read, since the URLs expire in ~1h."""
+    page = _call("GET", f"/pages/{page_id}")
+    return _files_of(page.get("properties", {}).get("Chart"))
+
+
+def attach_chart(page_id, filename, content_type, blob, replace=True, log=print):
+    """Upload one chart image and attach it to the entry.
+
+    Notion's file model can't re-reference an already-hosted file through a
+    property PATCH, so preserving older attachments alongside a new upload is
+    not reliable. `replace=True` (the default) sets the Chart property to just
+    this one image — the predictable behaviour for "the annotated chart for
+    this setup". Charts added directly in Notion still show read-only until the
+    next upload from here replaces them."""
+    upload_id = _upload_bytes(filename, content_type, blob)
+    entry = [{"type": "file_upload", "name": filename,
+              "file_upload": {"id": upload_id}}]
+    if not replace:
+        page = _call("GET", f"/pages/{page_id}")
+        for f in page.get("properties", {}).get("Chart", {}).get("files", []):
+            if f.get("type") == "external":
+                entry.append({"type": "external", "name": f.get("name") or "chart",
+                              "external": f["external"]})
+    _call("PATCH", f"/pages/{page_id}", {"properties": {"Chart": {"files": entry}}})
+    log(f"  chart attached to {page_id}")
+    return _files_of(_call("GET", f"/pages/{page_id}")
+                     .get("properties", {}).get("Chart"))
 
 
 # --- positions and NAV: here -> Notion -------------------------------------

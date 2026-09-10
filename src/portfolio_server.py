@@ -31,6 +31,7 @@ Usage:
     python src/portfolio_server.py --angel         # prompts for PIN + TOTP
 """
 
+import base64
 import json
 import os
 import re
@@ -1028,11 +1029,26 @@ class Handler(BaseHTTPRequestHandler):
                 import notion_sync
                 import setup_context
                 payload = notion_sync.fetch_setup_entries(log=log)
+                for entry in payload.get("entries", []):
+                    code = "IN" if entry.get("country") == "India" else "US"
+                    entry["logoid"] = setup_context.classify(code, entry.get("ticker"))[2]
                 payload["envNow"] = {c: setup_context.market_env(c)
                                      for c in config.COUNTRIES}
                 self._send(200, json.dumps(payload), "application/json")
             except Exception as error:
                 self._send(500, json.dumps({"error": str(error)}), "application/json")
+            return
+        if route.path == "/api/setups/chart":
+            try:
+                import notion_sync
+                q = parse_qs(route.query)
+                page_id = (q.get("pageId") or [""])[0]
+                if not page_id:
+                    raise ValueError("pageId is required")
+                self._send(200, json.dumps(notion_sync.fetch_entry_charts(page_id)),
+                           "application/json")
+            except Exception as error:
+                self._send(400, json.dumps({"error": str(error)}), "application/json")
             return
         if route.path == "/api/setups/schema":
             try:
@@ -1226,6 +1242,28 @@ class Handler(BaseHTTPRequestHandler):
                 }, ctx, log=log)
                 result["context"] = ctx
                 self._send(200, json.dumps(result), "application/json")
+            except Exception as error:
+                self._send(400, json.dumps({"error": str(error)}), "application/json")
+            return
+
+        if route.path == "/api/setups/chart":
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                body = json.loads(self.rfile.read(length) or b"{}")
+                page_id = body.get("pageId")
+                data_b64 = body.get("dataB64") or ""
+                if not page_id or not data_b64:
+                    raise ValueError("pageId and dataB64 are both required")
+                blob = base64.b64decode(data_b64.split(",", 1)[-1])
+                if len(blob) > 12 * 1024 * 1024:
+                    raise ValueError("image is larger than 12 MB")
+                ctype = body.get("contentType") or "image/png"
+                ext = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp",
+                       "image/gif": "gif"}.get(ctype, "png")
+                import notion_sync
+                files = notion_sync.attach_chart(
+                    page_id, body.get("filename") or f"chart.{ext}", ctype, blob, log=log)
+                self._send(200, json.dumps({"ok": True, "files": files}), "application/json")
             except Exception as error:
                 self._send(400, json.dumps({"error": str(error)}), "application/json")
             return
@@ -1656,6 +1694,17 @@ SETUPS_PAGE = r"""<!doctype html>
     justify-content:center; font-weight:800; font-size:10px; color:#fff; overflow:hidden; }
   .picked .lg img { width:100%; height:100%; object-fit:cover; }
   .picked .nm { font-weight:700; } .picked .mt { font-size:11px; color:var(--dim); }
+  .tk-cell { display:inline-flex; align-items:center; gap:6px; }
+  .tk-logo { border-radius:5px; flex:none; display:inline-flex; align-items:center; justify-content:center;
+    font-size:8px; font-weight:800; color:#fff; overflow:hidden; }
+  .tk-logo img { width:100%; height:100%; object-fit:cover; }
+  .chart-box { margin:2px 0 10px; border:1px solid var(--line); border-radius:9px; overflow:hidden;
+    background:var(--bg); min-height:44px; }
+  .chart-img { display:block; width:100%; height:auto; }
+  .chart-empty, .chart-loading { font-size:11.5px; color:var(--dim); padding:14px; text-align:center; }
+  .paste-zone { border:1px dashed var(--line); border-radius:9px; padding:11px; text-align:center;
+    font-size:11.5px; color:var(--dim); cursor:pointer; margin-bottom:13px; }
+  .paste-zone:hover, .paste-zone:focus { border-color:var(--violet); color:var(--text); outline:none; }
 
   .presets { display:grid; grid-template-columns:repeat(auto-fill,minmax(140px,1fr)); gap:9px; max-width:660px; margin-top:4px; }
   .ptile { background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:8px 10px; }
@@ -1954,6 +2003,12 @@ document.getElementById("lookup-input").addEventListener("input", function(e){
   }, 200);
 });
 function barColor(s){ var h=0; for(var i=0;i<s.length;i++) h=(h*31+s.charCodeAt(i))%360; return "hsl("+h+",42%,45%)"; }
+function logoImg(sym, logoid, px){
+  px = px||18;
+  var init = esc((sym||"").slice(0,2));
+  var inner = logoid ? '<img src="https://s3-symbol-logo.tradingview.com/'+esc(logoid)+'.svg" onerror="this.replaceWith(document.createTextNode(\''+init+'\'))">' : init;
+  return '<span class="tk-logo" style="width:'+px+'px;height:'+px+'px;background:'+barColor(sym||"")+'">'+inner+'</span>';
+}
 
 document.getElementById("buy-date").addEventListener("change", function(){
   document.getElementById("ls2").classList.toggle("done", !!this.value);
@@ -2076,7 +2131,8 @@ function drawBrowseRows(){
   rows.sort(function(a,b){ return (b.buyDate||"").localeCompare(a.buyDate||""); });
   document.getElementById("browse-count").textContent = rows.length+" "+(rows.length===1?"entry":"entries");
   document.getElementById("browse-rows").innerHTML = rows.map(function(r,i){
-    return '<tr data-i="'+i+'"><td style="font-weight:700">'+esc(r.ticker)+'</td>'
+    return '<tr data-i="'+i+'"><td style="font-weight:700"><span class="tk-cell">'+logoImg(r.ticker,r.logoid,16)+esc(r.ticker)
+      +(r.chartCount?' <span title="has a chart" style="opacity:.55">&#128206;</span>':'')+'</span></td>'
       +'<td>'+esc(r.sector||"—")+'</td><td>'+esc(r.industry||"—")+'</td>'
       +'<td>'+fmtDate(r.buyDate)+'</td><td>'+(r.tmleScore!=null?r.tmleScore:"—")+'</td>'
       +'<td>'+(r.marketEnvScore||"—")+(r.marketEnvLabel?' <span class="chip '+r.marketEnvLabel+'">'+r.marketEnvLabel[0].toUpperCase()+'</span>':'')+'</td>'
@@ -2105,7 +2161,11 @@ document.getElementById("browse-search").addEventListener("input", function(e){
 function openSheet(e){
   var opts=exitRuleOptions();
   document.getElementById("sheet").innerHTML =
-    '<h3>'+esc(e.ticker)+'</h3><div class="meta">'+esc(e.setup||"")+' · bought '+fmtDate(e.buyDate)+' · '+esc(e.country||"")+'</div>'
+    '<h3><span class="tk-cell">'+logoImg(e.ticker,e.logoid,22)+esc(e.ticker)+'</span></h3>'
+    +'<div class="meta">'+esc(e.setup||"")+' · bought '+fmtDate(e.buyDate)+' · '+esc(e.country||"")+'</div>'
+    +'<div class="chart-box" id="s-chart"><div class="chart-loading">Loading chart…</div></div>'
+    +'<div class="paste-zone" id="s-paste" tabindex="0">Paste a chart (Ctrl/Cmd+V) or click to choose an image</div>'
+    +'<input type="file" id="s-file" accept="image/*" hidden>'
     +'<div class="ctx-grid">'
       +ctxTile("TMLE",e.tmleScore) + ctxTile("Mkt Env",e.marketEnvScore) + ctxTile("Env label",e.marketEnvLabel)
       +ctxTile("Sector rank",e.sectorRank) + ctxTile("Industry rank",e.industryRank)
@@ -2139,6 +2199,43 @@ function openSheet(e){
   document.getElementById("s-thesis").onblur=function(){ patch({ entryThesis:this.value||null }); };
   document.getElementById("s-resync").onclick=function(){ patch({ entryThesis:document.getElementById("s-thesis").value||null }, true); };
   document.getElementById("s-close").onclick=function(){ document.getElementById("overlay").hidden=true; };
+
+  // ---- chart: load, then paste / pick to upload ----
+  function renderCharts(files){
+    var box=document.getElementById("s-chart");
+    if(!files || !files.length){ box.innerHTML='<div class="chart-empty">No chart yet — paste one below. It uploads to this entry in Notion.</div>'; return; }
+    box.innerHTML = files.map(function(f){ return '<a href="'+esc(f.url)+'" target="_blank"><img class="chart-img" src="'+esc(f.url)+'"></a>'; }).join("");
+  }
+  fetch("/api/setups/chart?pageId="+encodeURIComponent(e.pageId)).then(function(r){return r.json();})
+    .then(function(files){ renderCharts(files.error?[]:files); })
+    .catch(function(){ renderCharts([]); });
+
+  function uploadBlob(blob){
+    if(!blob){ return; }
+    var msg=document.getElementById("s-msg"); msg.hidden=false; msg.className="save-msg"; msg.textContent="Uploading chart…";
+    var reader=new FileReader();
+    reader.onload=function(){
+      fetch("/api/setups/chart",{ method:"POST", headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({ pageId:e.pageId, filename:(blob.name||"chart.png"),
+          contentType:blob.type||"image/png", dataB64:reader.result }) })
+      .then(function(r){return r.json();}).then(function(res){
+        if(res.error){ msg.className="save-msg bad"; msg.textContent=res.error; return; }
+        msg.className="save-msg ok"; msg.textContent="Chart uploaded."; renderCharts(res.files); loadData();
+      }).catch(function(err){ msg.className="save-msg bad"; msg.textContent=String(err); });
+    };
+    reader.readAsDataURL(blob);
+  }
+  var pz=document.getElementById("s-paste");
+  pz.onclick=function(){ document.getElementById("s-file").click(); };
+  document.getElementById("s-file").onchange=function(){ uploadBlob(this.files[0]); };
+  pz.addEventListener("paste", onPaste);
+  document.getElementById("sheet").addEventListener("paste", onPaste);
+  function onPaste(ev){
+    var items=(ev.clipboardData||{}).items||[];
+    for(var i=0;i<items.length;i++){
+      if(items[i].type && items[i].type.indexOf("image")===0){ ev.preventDefault(); uploadBlob(items[i].getAsFile()); return; }
+    }
+  }
 }
 function ctxTile(k,v){ return '<div class="ptile"><div class="pk">'+k+'</div><div class="pv'+(v==null||v===""?' na':'')+'">'+esc(v==null||v===""?"n/a":v)+'</div></div>'; }
 document.getElementById("overlay").onclick=function(e){ if(e.target.id==="overlay") e.target.hidden=true; };
