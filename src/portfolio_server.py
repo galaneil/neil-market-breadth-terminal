@@ -1012,17 +1012,48 @@ class Handler(BaseHTTPRequestHandler):
         if route.path == "/api/journal/trades":
             try:
                 import notion_sync
-                self._send(200, json.dumps(notion_sync.fetch_trades(log=log)), "application/json")
+                import setup_context
+                trades = notion_sync.fetch_trades(log=log)
+                for t in trades:
+                    t["logoid"] = (setup_context.classify("US", t.get("ticker"))[2]
+                                   or setup_context.classify("IN", t.get("ticker"))[2])
+                self._send(200, json.dumps(trades), "application/json")
             except Exception as error:
                 self._send(500, json.dumps({"error": str(error)}), "application/json")
+            return
+        if route.path == "/api/journal/chart":
+            try:
+                import notion_sync
+                q = parse_qs(route.query)
+                page_id = (q.get("pageId") or [""])[0]
+                if not page_id:
+                    raise ValueError("pageId is required")
+                self._send(200, json.dumps(notion_sync.fetch_page_images(page_id)),
+                           "application/json")
+            except Exception as error:
+                self._send(400, json.dumps({"error": str(error)}), "application/json")
             return
         if route.path == "/api/journal/schema":
             try:
                 import notion_sync
-                self._send(200, json.dumps(notion_sync.fetch_database_schema(notion_sync.TRADES_DB)),
+                self._send(200, json.dumps(notion_sync.fetch_trade_schema(log=log)),
                           "application/json")
             except Exception as error:
                 self._send(500, json.dumps({"error": str(error)}), "application/json")
+            return
+        if route.path == "/api/journal/chart":
+            try:
+                import notion_sync
+                q = parse_qs(route.query)
+                page_id = (q.get("pageId") or [""])[0]
+                mode = (q.get("mode") or ["blocks"])[0]
+                if not page_id:
+                    raise ValueError("pageId is required")
+                imgs = notion_sync.fetch_trade_charts(page_id, mode)
+                self._send(200, json.dumps([{"url": i.get("url"),
+                    "ref": i.get("blockId")} for i in imgs]), "application/json")
+            except Exception as error:
+                self._send(400, json.dumps({"error": str(error)}), "application/json")
             return
         if route.path == "/api/setups/data":
             try:
@@ -1218,6 +1249,35 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(400, json.dumps({"error": str(error)}), "application/json")
             return
 
+        if route.path == "/api/journal/chart":
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                body = json.loads(self.rfile.read(length) or b"{}")
+                page_id = body.get("pageId")
+                mode = body.get("chartMode") or "blocks"
+                if not page_id:
+                    raise ValueError("pageId is required")
+                import notion_sync
+                if body.get("action") == "delete":
+                    imgs = notion_sync.remove_trade_chart(page_id, mode, body.get("ref"), log=log)
+                else:
+                    data_b64 = body.get("dataB64") or ""
+                    if not data_b64:
+                        raise ValueError("dataB64 is required")
+                    blob = base64.b64decode(data_b64.split(",", 1)[-1])
+                    if len(blob) > 12 * 1024 * 1024:
+                        raise ValueError("image is larger than 12 MB")
+                    ctype = body.get("contentType") or "image/png"
+                    ext = {"image/png": "png", "image/jpeg": "jpg", "image/webp": "webp",
+                           "image/gif": "gif"}.get(ctype, "png")
+                    imgs = notion_sync.add_trade_chart(
+                        page_id, mode, body.get("filename") or f"chart.{ext}", ctype, blob, log=log)
+                self._send(200, json.dumps({"ok": True, "images": [
+                    {"url": i.get("url"), "ref": i.get("blockId")} for i in imgs]}), "application/json")
+            except Exception as error:
+                self._send(400, json.dumps({"error": str(error)}), "application/json")
+            return
+
         if route.path == "/api/setups/create":
             length = int(self.headers.get("Content-Length") or 0)
             try:
@@ -1251,6 +1311,11 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 body = json.loads(self.rfile.read(length) or b"{}")
                 page_id = body.get("pageId")
+                if body.get("clear"):
+                    import notion_sync
+                    notion_sync.clear_entry_chart(page_id, log=log)
+                    self._send(200, json.dumps({"ok": True, "files": []}), "application/json")
+                    return
                 data_b64 = body.get("dataB64") or ""
                 if not page_id or not data_b64:
                     raise ValueError("pageId and dataB64 are both required")
@@ -1354,12 +1419,24 @@ JOURNAL_PAGE = r"""<!doctype html>
   h1 { font-size:17px; margin:0 0 4px; }
   .sub { font-size:12px; color:var(--dim); margin:0 0 16px; max-width:680px; line-height:1.5; }
 
-  .kpi-strip{display:grid; grid-template-columns:repeat(6,1fr); gap:10px; margin-bottom:16px;}
-  @media (max-width:900px){.kpi-strip{grid-template-columns:repeat(3,1fr);}}
-  .kpi-tile{background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:11px 13px;}
-  .kpi-k{font-size:10px; text-transform:uppercase; letter-spacing:.04em; color:var(--dim); margin-bottom:4px;}
-  .kpi-v{font-size:18px; font-weight:800;}
+  .kpi-strip{display:grid; grid-template-columns:repeat(8,1fr); gap:8px; margin-bottom:10px;}
+  @media (max-width:1000px){.kpi-strip{grid-template-columns:repeat(4,1fr);}}
+  @media (max-width:560px){.kpi-strip{grid-template-columns:repeat(2,1fr);}}
+  .kpi-tile{background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:10px 12px;}
+  .kpi-k{font-size:9.5px; text-transform:uppercase; letter-spacing:.03em; color:var(--dim); margin-bottom:4px;}
+  .kpi-v{font-size:17px; font-weight:800;}
   .kpi-v.up{color:var(--up);} .kpi-v.down{color:var(--down);}
+  #breakdown{margin-bottom:16px;}
+  .bd-wrap{display:grid; grid-template-columns:1fr 1fr; gap:14px;}
+  @media (max-width:760px){.bd-wrap{grid-template-columns:1fr;}}
+  .bd-title{font-size:10px; text-transform:uppercase; letter-spacing:.03em; color:var(--dim); margin-bottom:5px;}
+  .bd-table{width:100%; border-collapse:collapse; font-size:11.5px; background:var(--panel);
+    border:1px solid var(--line); border-radius:9px; overflow:hidden;}
+  .bd-table th{font-size:9px; padding:5px 8px;}
+  .bd-table td{padding:5px 8px; border-bottom:1px solid var(--line);}
+  .bd-table tr:last-child td{border-bottom:none;}
+  .bd-table .r{text-align:right;}
+  .bd-table td.win{color:var(--up); font-weight:700;} .bd-table td.lose{color:var(--down); font-weight:700;}
 
   .filter-pills{display:flex; gap:7px; margin-bottom:14px; flex-wrap:wrap;}
   .filter-pill{font-size:12px; font-weight:600; border:1px solid var(--line); background:var(--panel); color:var(--dim);
@@ -1381,7 +1458,22 @@ JOURNAL_PAGE = r"""<!doctype html>
   tr:last-child td{border-bottom:none;}
   tr.clickable{cursor:pointer;} tr.clickable:hover{background:color-mix(in srgb, var(--accent) 6%, transparent);}
   .sym{font-weight:700;}
+  .sym-cell{display:inline-flex; align-items:center; gap:7px;}
+  .jlogo{border-radius:5px; flex:none; display:inline-flex; align-items:center; justify-content:center;
+    font-size:8px; font-weight:800; color:#fff; overflow:hidden;}
+  .jlogo img{width:100%; height:100%; object-fit:cover;}
   .acct{font-size:10px; font-weight:700; padding:2px 6px; border-radius:4px; background:var(--line); color:var(--dim);}
+  .chart-box{margin:4px 0 8px; border:1px solid var(--line); border-radius:9px; overflow:hidden; background:var(--bg); min-height:44px;}
+  .chart-box img{display:block; width:100%; height:auto; border-bottom:1px solid var(--line);}
+  .chart-box img:last-child{border-bottom:none;}
+  .chart-item{position:relative;}
+  .chart-del{position:absolute; top:6px; right:6px; width:22px; height:22px; border-radius:6px; border:none;
+    background:rgba(0,0,0,.55); color:#fff; font-size:14px; line-height:1; cursor:pointer;}
+  .chart-del:hover{background:var(--down);}
+  .chart-note{font-size:11px; color:var(--dim); padding:13px; text-align:center;}
+  .paste-zone{border:1px dashed var(--line); border-radius:9px; padding:10px; text-align:center; font-size:11px;
+    color:var(--dim); cursor:pointer; margin-bottom:6px;}
+  .paste-zone:hover, .paste-zone:focus{border-color:var(--violet); color:var(--text); outline:none;}
   .setup-chip{font-size:10.5px; font-weight:700; padding:2px 8px; border-radius:5px; background:rgba(124,58,237,.14); color:var(--violet);}
   .gap-badge{font-size:10px; font-weight:700; padding:2px 7px; border-radius:5px; background:rgba(240,85,75,.14); color:var(--down);}
   .ok-badge{font-size:10px; color:var(--dim);}
@@ -1412,18 +1504,30 @@ JOURNAL_PAGE = r"""<!doctype html>
 </style></head><body>
 <main>
   <h1>Trade Journal</h1>
-  <p class="sub">Reads your Notion trade log directly — the full record, open and closed. Editing a chip or the thesis writes straight back to that same Notion page. Chart screenshots still open in Notion itself (Notion's paste is already the best tool for that); everything else edits right here.</p>
+  <p class="sub">Reads all three trade logs (NG-IBKR, ShG-AO, SuG-AO) directly — the full record, open and closed. Editing a chip or the thesis writes straight back to that same Notion page; paste a chart (Ctrl/Cmd+V) right in the detail view and it uploads there too.</p>
   <div id="load-err" hidden></div>
 
   <div class="kpi-strip">
     <div class="kpi-tile"><div class="kpi-k">Open positions</div><div class="kpi-v" id="kpi-open">&mdash;</div></div>
-    <div class="kpi-tile"><div class="kpi-k">Win rate (closed)</div><div class="kpi-v" id="kpi-winrate">&mdash;</div></div>
-    <div class="kpi-tile"><div class="kpi-k">Avg gain</div><div class="kpi-v up" id="kpi-avggain">&mdash;</div></div>
+    <div class="kpi-tile"><div class="kpi-k">Closed trades</div><div class="kpi-v" id="kpi-closed">&mdash;</div></div>
+    <div class="kpi-tile"><div class="kpi-k">Win rate</div><div class="kpi-v" id="kpi-winrate">&mdash;</div></div>
+    <div class="kpi-tile"><div class="kpi-k">Expectancy / trade</div><div class="kpi-v" id="kpi-expectancy">&mdash;</div></div>
+    <div class="kpi-tile"><div class="kpi-k">Avg win</div><div class="kpi-v up" id="kpi-avggain">&mdash;</div></div>
     <div class="kpi-tile"><div class="kpi-k">Avg loss</div><div class="kpi-v down" id="kpi-avgloss">&mdash;</div></div>
-    <div class="kpi-tile"><div class="kpi-k">Total logged</div><div class="kpi-v" id="kpi-total">&mdash;</div></div>
-    <div class="kpi-tile"><div class="kpi-k">No entry setup</div><div class="kpi-v" id="kpi-nosetup" style="color:var(--warn)">&mdash;</div></div>
+    <div class="kpi-tile"><div class="kpi-k">Total P&amp;L</div><div class="kpi-v" id="kpi-totalpnl">&mdash;</div></div>
+    <div class="kpi-tile"><div class="kpi-k">Avg hold (days)</div><div class="kpi-v" id="kpi-hold">&mdash;</div></div>
   </div>
+  <p class="sub" style="margin:-6px 0 14px">Win / P&amp;L% / Hold Days / Outcome are Notion's own formulas, read as-is; the aggregates below are computed from those over <b>closed</b> trades only, matching how you derived them in Notion. Every tile respects the filter and search above.</p>
 
+  <details id="breakdown">
+    <summary style="font-size:12px;font-weight:700;cursor:pointer;margin-bottom:8px">Performance by setup &mdash; entry &amp; exit counts, win rate, avg P&amp;L%</summary>
+    <div class="bd-wrap">
+      <div><div class="bd-title">Entry Setup</div><table class="bd-table" id="bd-entry"></table></div>
+      <div><div class="bd-title">Exit Setup</div><table class="bd-table" id="bd-exit"></table></div>
+    </div>
+  </details>
+
+  <div class="filter-pills" id="account-pills"></div>
   <div class="filter-pills" id="filter-pills">
     <button class="filter-pill active" data-filter="all">All</button>
     <button class="filter-pill" data-filter="open">Open</button>
@@ -1442,8 +1546,11 @@ JOURNAL_PAGE = r"""<!doctype html>
 
 <div class="overlay" id="overlay" hidden>
   <div class="detail-page">
-    <div class="detail-head"><b id="d-ticker"></b><button class="detail-close" id="d-close">&times;</button></div>
+    <div class="detail-head"><b id="d-ticker" class="sym-cell"></b><button class="detail-close" id="d-close">&times;</button></div>
     <div class="detail-body">
+      <div class="chart-box" id="d-chart"><div class="chart-note">Loading chart&hellip;</div></div>
+      <div class="paste-zone" id="d-paste" tabindex="0">Paste a chart (Ctrl/Cmd+V) or click to choose an image &mdash; adds to this trade's Notion page</div>
+      <input type="file" id="d-file" accept="image/*" hidden>
       <div class="detail-grid">
         <div><div class="k">Account</div><div class="v" id="d-account"></div></div>
         <div><div class="k">Date Opened / Closed</div><div class="v" id="d-dates"></div></div>
@@ -1452,7 +1559,7 @@ JOURNAL_PAGE = r"""<!doctype html>
         <div><div class="k">Cost Value <i style="color:var(--violet);font-style:normal;font-size:10px">&fnof;</i></div><div class="v" id="d-cost"></div></div>
         <div><div class="k">Initial Stop $ / % <i style="color:var(--violet);font-style:normal;font-size:10px">&fnof;</i></div><div class="v" id="d-stop"></div></div>
         <div><div class="k">PnL% / Hold Days <i style="color:var(--violet);font-style:normal;font-size:10px">&fnof;</i></div><div class="v" id="d-pnl"></div></div>
-        <div><a class="notion-link" id="d-notion-link" href="#" target="_blank" rel="noopener">Open / edit chart in Notion &rarr;</a></div>
+        <div><a class="notion-link" id="d-notion-link" href="#" target="_blank" rel="noopener">Open this trade in Notion &rarr;</a></div>
       </div>
 
       <div class="field-label">Entry Setup</div>
@@ -1476,27 +1583,88 @@ let SCHEMA = {};
 let activeFilter = "all";
 let searchTerm = "";
 
-function fmtDate(d) { return d || "&mdash;"; }
-function fmtMoney(n) { return n == null ? "&mdash;" : "$" + Number(n).toLocaleString(undefined, {maximumFractionDigits: 2}); }
-function fmtPct(n) { return n == null ? "&mdash;" : (n >= 0 ? "+" : "") + (Number(n) * 100).toFixed(1) + "%"; }
+function esc(s){ var d=document.createElement("div"); d.textContent=(s==null?"":String(s)); return d.innerHTML; }
+function logoColor(s){ let h=0; for(let i=0;i<(s||"").length;i++) h=(h*31+s.charCodeAt(i))%360; return "hsl("+h+",42%,45%)"; }
+function jlogo(sym, logoid, px){
+  px = px || 18;
+  const init = esc((sym||"").slice(0,2));
+  const inner = logoid
+    ? '<img src="https://s3-symbol-logo.tradingview.com/' + esc(logoid) + '.svg" onerror="this.replaceWith(document.createTextNode(\'' + init + '\'))">'
+    : init;
+  return '<span class="jlogo" style="width:'+px+'px;height:'+px+'px;background:'+logoColor(sym||"")+'">'+inner+'</span>';
+}
 
+const CUR = { USD: "$", INR: "₹" };
+function fmtDate(d) { return d || "&mdash;"; }
+function fmtMoney(n, cur) { const s = CUR[cur] || "$"; return n == null ? "&mdash;" : (n < 0 ? "-" + s : s) + Math.abs(Number(n)).toLocaleString(undefined, {maximumFractionDigits: 2}); }
+function fmtPct(n) { return n == null ? "&mdash;" : (n >= 0 ? "+" : "") + (Number(n) * 100).toFixed(1) + "%"; }
+function mean(arr) { return arr.length ? arr.reduce((s, x) => s + x, 0) / arr.length : null; }
+
+// Notion's own field definitions, replicated:
+//   Win     = 1 if (Exit - Entry) > 0 else 0        (closed trades only)
+//   PnL%    = (Exit - Entry) / Entry                (a fraction; Notion rounds to 4dp)
+//   PnL     = (Exit - Entry) * Shares               (dollars)
+//   Outcome = Profit / Loss / Breakeven by sign of PnL
+// Everything here is over CLOSED trades, the way the Notion roll-ups are.
 function computeKpis(trades) {
   const open = trades.filter(t => !t.dateClosed);
   const closed = trades.filter(t => t.dateClosed);
-  const withPnl = closed.filter(t => t.pnlPct != null);
-  const wins = withPnl.filter(t => t.pnlPct > 0);
-  const losses = withPnl.filter(t => t.pnlPct <= 0);
-  const avg = (arr) => arr.length ? arr.reduce((s, t) => s + t.pnlPct, 0) / arr.length : null;
+  const rated = closed.filter(t => t.win != null);        // has both prices
+  const wins = rated.filter(t => t.win === 1);
+  const losers = closed.filter(t => t.pnl != null && t.pnl < 0);
+  const winRate = rated.length ? wins.length / rated.length : null;
+  const avgWin = mean(wins.map(t => t.pnlPct).filter(x => x != null));
+  const avgLoss = mean(losers.map(t => t.pnlPct).filter(x => x != null));
+  const expectancy = (winRate != null && avgWin != null && avgLoss != null)
+    ? winRate * avgWin + (1 - winRate) * avgLoss : null;
+  const avgHold = mean(closed.map(t => t.holdDays).filter(x => x != null && x > 0));
+  const curs = [...new Set(closed.map(t => t.currency || "USD"))];
+  const totalPnl = closed.reduce((s, t) => s + (t.pnl || 0), 0);
+
   document.getElementById("kpi-open").textContent = open.length;
-  document.getElementById("kpi-winrate").textContent = withPnl.length
-    ? Math.round(wins.length / withPnl.length * 100) + "%" : "&mdash;";
-  document.getElementById("kpi-avggain").innerHTML = fmtPct(avg(wins));
-  document.getElementById("kpi-avgloss").innerHTML = fmtPct(avg(losses));
-  document.getElementById("kpi-total").textContent = trades.length;
-  document.getElementById("kpi-nosetup").textContent = trades.filter(t => !t.entrySetup).length;
+  document.getElementById("kpi-closed").textContent = closed.length;
+  document.getElementById("kpi-winrate").textContent = winRate == null ? "—" : Math.round(winRate * 100) + "%";
+  const exp = document.getElementById("kpi-expectancy");
+  exp.innerHTML = fmtPct(expectancy);
+  exp.className = "kpi-v" + (expectancy == null ? "" : expectancy >= 0 ? " up" : " down");
+  document.getElementById("kpi-avggain").innerHTML = fmtPct(avgWin);
+  document.getElementById("kpi-avgloss").innerHTML = fmtPct(avgLoss);
+  const tp = document.getElementById("kpi-totalpnl");
+  if (!closed.length) { tp.innerHTML = "—"; tp.className = "kpi-v"; }
+  else if (curs.length > 1) { tp.innerHTML = '<span style="font-size:12px;font-weight:600">mixed &mdash; filter by account</span>'; tp.className = "kpi-v"; }
+  else { tp.innerHTML = fmtMoney(totalPnl, curs[0]); tp.className = "kpi-v" + (totalPnl >= 0 ? " up" : " down"); }
+  document.getElementById("kpi-hold").textContent = avgHold == null ? "—" : avgHold.toFixed(0);
+
+  drawBreakdown("bd-entry", trades, "entrySetup");
+  drawBreakdown("bd-exit", trades, "exitSetup");
 }
 
+function drawBreakdown(elId, trades, key) {
+  const groups = {};
+  trades.forEach(t => {
+    const g = t[key] || "— none";
+    (groups[g] = groups[g] || []).push(t);
+  });
+  const rows = Object.keys(groups).map(name => {
+    const g = groups[name];
+    const closed = g.filter(t => t.dateClosed);
+    const rated = closed.filter(t => t.win != null);
+    const wr = rated.length ? rated.filter(t => t.win === 1).length / rated.length : null;
+    const avgP = mean(closed.map(t => t.pnlPct).filter(x => x != null));
+    return { name, n: g.length, closed: closed.length, wr, avgP };
+  }).sort((a, b) => b.n - a.n);
+  document.getElementById(elId).innerHTML =
+    '<thead><tr><th>Setup</th><th class="r">Trades</th><th class="r">Closed</th><th class="r">Win %</th><th class="r">Avg P&L%</th></tr></thead><tbody>'
+    + rows.map(r =>
+      '<tr><td>' + r.name + '</td><td class="r">' + r.n + '</td><td class="r">' + r.closed + '</td>'
+      + '<td class="r">' + (r.wr == null ? "—" : Math.round(r.wr * 100) + "%") + '</td>'
+      + '<td class="r ' + (r.avgP == null ? "" : r.avgP >= 0 ? "win" : "lose") + '">' + fmtPct(r.avgP) + '</td></tr>'
+    ).join("") + '</tbody>';
+}
+
+let activeAccount = "all";
 function passesFilter(t) {
+  if (activeAccount !== "all" && t.account !== activeAccount) return false;
   if (searchTerm && !(t.ticker || "").toLowerCase().includes(searchTerm)) return false;
   if (activeFilter === "open") return !t.dateClosed;
   if (activeFilter === "closed") return !!t.dateClosed;
@@ -1513,13 +1681,14 @@ function completenessBadge(t) {
 
 function draw() {
   const rows = ALL_TRADES.filter(passesFilter);
+  computeKpis(rows);
   const tbody = document.getElementById("rows");
   document.getElementById("empty").hidden = rows.length > 0;
   tbody.innerHTML = rows.map((t, i) => {
     const idx = ALL_TRADES.indexOf(t);
     const pnlCls = t.pnlPct == null ? "" : (t.pnlPct >= 0 ? "up" : "down");
     return '<tr class="clickable" data-idx="' + idx + '">'
-      + '<td class="sym">' + (t.ticker || "&mdash;") + '</td>'
+      + '<td class="sym"><span class="sym-cell">' + jlogo(t.ticker, t.logoid, 16) + (t.ticker || "&mdash;") + '</span></td>'
       + '<td><span class="acct">' + t.account + '</span></td>'
       + '<td>' + fmtDate(t.dateOpened) + '</td>'
       + '<td>' + (t.entrySetup ? '<span class="setup-chip">' + t.entrySetup + '</span>' : '<span style="color:var(--dim);font-size:11.5px">&mdash;</span>') + '</td>'
@@ -1540,13 +1709,14 @@ let currentTrade = null;
 function openDetail(t) {
   currentTrade = t;
   document.getElementById("overlay").hidden = false;
-  document.getElementById("d-ticker").textContent = t.ticker;
+  document.getElementById("d-ticker").innerHTML = jlogo(t.ticker, t.logoid, 22) + esc(t.ticker || "");
+  loadTradeChart(t);
   document.getElementById("d-account").textContent = t.account;
   document.getElementById("d-dates").innerHTML = fmtDate(t.dateOpened) + " &rarr; " + fmtDate(t.dateClosed);
-  document.getElementById("d-prices").innerHTML = fmtMoney(t.entryPrice) + " &rarr; " + fmtMoney(t.exitPrice);
+  document.getElementById("d-prices").innerHTML = fmtMoney(t.entryPrice, t.currency) + " &rarr; " + fmtMoney(t.exitPrice, t.currency);
   document.getElementById("d-shares").innerHTML = t.shares ?? "&mdash;";
-  document.getElementById("d-cost").innerHTML = fmtMoney(t.costValue);
-  document.getElementById("d-stop").innerHTML = fmtMoney(t.initialStop) + " / " + fmtPct(t.initialStopPct);
+  document.getElementById("d-cost").innerHTML = fmtMoney(t.costValue, t.currency);
+  document.getElementById("d-stop").innerHTML = fmtMoney(t.initialStop, t.currency) + " / " + fmtPct(t.initialStopPct);
   document.getElementById("d-pnl").innerHTML = fmtPct(t.pnlPct) + " / " + (t.holdDays ?? "&mdash;") + "d";
   document.getElementById("d-notion-link").href = t.notionUrl || "#";
   fillSelect("d-entrysetup", SCHEMA["Entry Setup"] || [], t.entrySetup);
@@ -1578,6 +1748,66 @@ function saveField(propName, value, elId) {
   }).catch(() => { status.textContent = "Server not reachable."; status.style.color = "var(--down)"; });
 }
 
+function loadTradeChart(t) {
+  const box = document.getElementById("d-chart");
+  box.innerHTML = '<div class="chart-note">Loading chart&hellip;</div>';
+  fetch("/api/journal/chart?pageId=" + encodeURIComponent(t.pageId) + "&mode=" + (t.chartMode || "blocks"))
+    .then(r => r.json()).then(imgs => renderTradeChart(imgs && imgs.error ? [] : imgs))
+    .catch(() => renderTradeChart([]));
+}
+function renderTradeChart(imgs) {
+  const box = document.getElementById("d-chart");
+  if (!imgs || !imgs.length) {
+    box.innerHTML = '<div class="chart-note">No chart on this trade yet &mdash; paste one below.</div>';
+    return;
+  }
+  box.innerHTML = imgs.map(i =>
+    '<div class="chart-item"><a href="' + esc(i.url) + '" target="_blank"><img src="' + esc(i.url) + '"></a>'
+    + '<button class="chart-del" title="Delete this chart" data-r="' + esc(i.ref || "") + '">&times;</button></div>').join("");
+  box.querySelectorAll(".chart-del").forEach(b => b.onclick = () => {
+    if (!confirm("Delete this chart from the trade's Notion page?")) return;
+    const status = document.getElementById("d-save-status");
+    status.textContent = "Deleting…"; status.style.color = "var(--dim)";
+    fetch("/api/journal/chart", { method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ pageId: currentTrade.pageId, chartMode: currentTrade.chartMode, action: "delete", ref: b.dataset.r }) })
+      .then(r => r.json()).then(res => {
+        if (res.error) { status.textContent = "Failed: " + res.error; status.style.color = "var(--down)"; return; }
+        status.textContent = "Chart deleted."; status.style.color = "var(--up)"; renderTradeChart(res.images);
+      });
+  });
+}
+function uploadTradeChart(blob) {
+  if (!blob || !currentTrade) return;
+  const status = document.getElementById("d-save-status");
+  status.textContent = "Uploading chart…"; status.style.color = "var(--dim)";
+  const reader = new FileReader();
+  reader.onload = () => {
+    fetch("/api/journal/chart", {
+      method: "POST", headers: {"Content-Type": "application/json"},
+      body: JSON.stringify({ pageId: currentTrade.pageId, chartMode: currentTrade.chartMode,
+        filename: (blob.name || "chart.png"), contentType: blob.type || "image/png", dataB64: reader.result }),
+    }).then(r => r.json()).then(res => {
+      if (res.error) { status.textContent = "Failed: " + res.error; status.style.color = "var(--down)"; return; }
+      status.textContent = "Chart added."; status.style.color = "var(--up)";
+      renderTradeChart(res.images);
+    }).catch(err => { status.textContent = String(err); status.style.color = "var(--down)"; });
+  };
+  reader.readAsDataURL(blob);
+}
+(function () {
+  const pz = document.getElementById("d-paste");
+  pz.onclick = () => document.getElementById("d-file").click();
+  document.getElementById("d-file").onchange = function () { uploadTradeChart(this.files[0]); };
+  function onPaste(ev) {
+    const items = (ev.clipboardData || {}).items || [];
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].type && items[i].type.indexOf("image") === 0) { ev.preventDefault(); uploadTradeChart(items[i].getAsFile()); return; }
+    }
+  }
+  pz.addEventListener("paste", onPaste);
+  document.querySelector(".detail-page").addEventListener("paste", onPaste);
+})();
+
 document.getElementById("d-entrysetup").addEventListener("change", e => saveField("Entry Setup", e.target.value, "entrySetup"));
 document.getElementById("d-exitsetup").addEventListener("change", e => saveField("Exit Setup", e.target.value, "exitSetup"));
 document.getElementById("d-buyquality").addEventListener("change", e => saveField("Buy Quality", e.target.value, "buyQuality"));
@@ -1601,7 +1831,17 @@ Promise.all([
   if (trades && trades.error) throw new Error(trades.error);
   ALL_TRADES = trades;
   SCHEMA = schema;
-  computeKpis(trades);
+  const accounts = [...new Set(trades.map(t => t.account))];
+  if (accounts.length > 1) {
+    document.getElementById("account-pills").innerHTML =
+      '<button class="filter-pill active" data-a="all">All accounts</button>'
+      + accounts.map(a => '<button class="filter-pill" data-a="' + esc(a) + '">' + esc(a)
+        + ' <span class="n">' + trades.filter(t => t.account === a).length + '</span></button>').join("");
+    document.querySelectorAll("#account-pills .filter-pill").forEach(p => p.addEventListener("click", () => {
+      document.querySelectorAll("#account-pills .filter-pill").forEach(x => x.classList.remove("active"));
+      p.classList.add("active"); activeAccount = p.dataset.a; draw();
+    }));
+  }
   draw();
 }).catch(err => {
   const el = document.getElementById("load-err");
@@ -1701,6 +1941,9 @@ SETUPS_PAGE = r"""<!doctype html>
   .chart-box { margin:2px 0 10px; border:1px solid var(--line); border-radius:9px; overflow:hidden;
     background:var(--bg); min-height:44px; }
   .chart-img { display:block; width:100%; height:auto; }
+  .chart-del { position:absolute; top:6px; right:6px; width:22px; height:22px; border-radius:6px; border:none;
+    background:rgba(0,0,0,.55); color:#fff; font-size:14px; line-height:1; cursor:pointer; }
+  .chart-del:hover { background:var(--down); }
   .chart-empty, .chart-loading { font-size:11.5px; color:var(--dim); padding:14px; text-align:center; }
   .paste-zone { border:1px dashed var(--line); border-radius:9px; padding:11px; text-align:center;
     font-size:11.5px; color:var(--dim); cursor:pointer; margin-bottom:13px; }
@@ -1848,6 +2091,12 @@ SETUPS_PAGE = r"""<!doctype html>
           <textarea class="thesis" id="thesis" placeholder="Why is this a clean example?"></textarea>
           <div style="margin-top:8px"><button class="btn" id="save-btn" disabled>Save to folder</button></div>
           <div class="save-msg" id="save-msg" hidden></div>
+          <div id="log-chart-wrap" hidden style="margin-top:12px;max-width:660px">
+            <div class="slabel">Chart</div>
+            <div class="chart-box" id="log-chart"><div class="chart-empty">Paste the chart for this entry &mdash; it uploads straight to Notion.</div></div>
+            <div class="paste-zone" id="log-paste" tabindex="0">Paste a chart (Ctrl/Cmd+V) or click to choose an image</div>
+            <input type="file" id="log-file" accept="image/*" hidden>
+          </div>
         </div></div>
       </div>
     </div>
@@ -2075,14 +2324,62 @@ document.getElementById("save-btn").onclick=function(){
       baseLengthDays:document.getElementById("base-len").value?+document.getElementById("base-len").value:null })
   }).then(function(r){return r.json();}).then(function(res){
     if(res.error){ msg.className="save-msg bad"; msg.textContent=res.error; btn.disabled=false; return; }
-    msg.className="save-msg ok"; msg.textContent=STATE.pick.ticker+" added to "+STATE.logSetup.name+". Paste the chart in Notion when ready.";
+    var sym=STATE.pick.ticker, folder=STATE.logSetup.name;
+    msg.className="save-msg ok"; msg.textContent=sym+" added to "+folder+". Add its chart below ↓";
     document.getElementById("thesis").value=""; document.getElementById("base-len").value="";
     document.getElementById("lookup-input").value=""; document.getElementById("picked-wrap").innerHTML="";
     document.getElementById("buy-date").value=""; document.getElementById("presets").innerHTML='<div class="pv na">Pick a ticker and date…</div>';
-    STATE.pick=null;
+    STATE.pick=null; btn.disabled=true;
+    LOG_CHART_PAGE=res.pageId;
+    var w=document.getElementById("log-chart-wrap"); w.hidden=false;
+    document.getElementById("log-chart").innerHTML='<div class="chart-empty">Paste the chart for '+esc(sym)+' — it uploads straight to Notion.</div>';
     loadData();
   }).catch(function(e){ msg.className="save-msg bad"; msg.textContent=String(e); btn.disabled=false; });
 };
+
+// chart paste for the entry just saved (Log tab)
+var LOG_CHART_PAGE=null;
+function uploadLogChart(blob){
+  if(!blob||!LOG_CHART_PAGE) return;
+  var msg=document.getElementById("save-msg"); msg.hidden=false; msg.className="save-msg"; msg.textContent="Uploading chart…";
+  var reader=new FileReader();
+  reader.onload=function(){
+    fetch("/api/setups/chart",{ method:"POST", headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({ pageId:LOG_CHART_PAGE, filename:(blob.name||"chart.png"),
+        contentType:blob.type||"image/png", dataB64:reader.result }) })
+    .then(function(r){return r.json();}).then(function(res){
+      if(res.error){ msg.className="save-msg bad"; msg.textContent=res.error; return; }
+      msg.className="save-msg ok"; msg.textContent="Chart uploaded.";
+      var lc=document.getElementById("log-chart"); lc.style.position="relative";
+      lc.innerHTML=(res.files||[]).map(function(f){
+        return '<a href="'+esc(f.url)+'" target="_blank"><img class="chart-img" src="'+esc(f.url)+'"></a>'; }).join("")
+        + '<button class="chart-del" id="log-chart-del" title="Remove chart">&times;</button>';
+      document.getElementById("log-chart-del").onclick=function(){
+        fetch("/api/setups/chart",{ method:"POST", headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({ pageId:LOG_CHART_PAGE, clear:true }) })
+        .then(function(r){return r.json();}).then(function(){
+          lc.innerHTML='<div class="chart-empty">Paste the chart for this entry — it uploads straight to Notion.</div>';
+          loadData();
+        });
+      };
+      loadData();
+    }).catch(function(err){ msg.className="save-msg bad"; msg.textContent=String(err); });
+  };
+  reader.readAsDataURL(blob);
+}
+(function(){
+  var pz=document.getElementById("log-paste");
+  pz.onclick=function(){ document.getElementById("log-file").click(); };
+  document.getElementById("log-file").onchange=function(){ uploadLogChart(this.files[0]); };
+  function onPaste(ev){
+    var items=(ev.clipboardData||{}).items||[];
+    for(var i=0;i<items.length;i++){
+      if(items[i].type && items[i].type.indexOf("image")===0){ ev.preventDefault(); uploadLogChart(items[i].getAsFile()); return; }
+    }
+  }
+  pz.addEventListener("paste", onPaste);
+  document.getElementById("page-log").addEventListener("paste", function(ev){ if(LOG_CHART_PAGE) onPaste(ev); });
+})();
 
 // ---- BROWSE ----
 function browseEntries(){
@@ -2204,7 +2501,19 @@ function openSheet(e){
   function renderCharts(files){
     var box=document.getElementById("s-chart");
     if(!files || !files.length){ box.innerHTML='<div class="chart-empty">No chart yet — paste one below. It uploads to this entry in Notion.</div>'; return; }
-    box.innerHTML = files.map(function(f){ return '<a href="'+esc(f.url)+'" target="_blank"><img class="chart-img" src="'+esc(f.url)+'"></a>'; }).join("");
+    box.innerHTML = files.map(function(f){ return '<a href="'+esc(f.url)+'" target="_blank"><img class="chart-img" src="'+esc(f.url)+'"></a>'; }).join("")
+      + '<button class="chart-del" title="Remove chart" id="s-chart-del">&times;</button>';
+    box.style.position="relative";
+    document.getElementById("s-chart-del").onclick=function(){
+      if(!confirm("Remove this chart from the entry in Notion?")) return;
+      var msg=document.getElementById("s-msg"); msg.hidden=false; msg.className="save-msg"; msg.textContent="Removing…";
+      fetch("/api/setups/chart",{ method:"POST", headers:{"Content-Type":"application/json"},
+        body:JSON.stringify({ pageId:e.pageId, clear:true }) })
+      .then(function(r){return r.json();}).then(function(res){
+        if(res.error){ msg.className="save-msg bad"; msg.textContent=res.error; return; }
+        msg.className="save-msg ok"; msg.textContent="Chart removed."; renderCharts([]); loadData();
+      });
+    };
   }
   fetch("/api/setups/chart?pageId="+encodeURIComponent(e.pageId)).then(function(r){return r.json();})
     .then(function(files){ renderCharts(files.error?[]:files); })

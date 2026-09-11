@@ -55,12 +55,24 @@ NAV_DB = "fb99ad0c-c723-45d5-b92b-a35770f512c2"         # IBKR NAV History
 STOP_FIELD = "Initial Stop $"
 
 # Every trading-log database the Trade Journal panel reads, one account per
-# entry. Deliberately a list rather than one hardcoded ID -- (NG-IBKR) is the
-# only one confirmed shared with the integration so far; adding the two
-# Angel One logs later is appending a row here, nothing else changes.
+# entry. The three are near-identical schemas; the differences that matter:
+#   currency   what PnL / prices are denominated in -- shown per trade, and
+#              why the KPI strip is scoped by an account filter rather than
+#              summing across books.
+#   chartMode  where each log keeps its chart screenshots. The US log pastes
+#              them into the page body (image blocks); the two India logs use
+#              a "Chart " file property (note the trailing space in Notion).
+#   country    which classification map the logo/sector lookup should use.
 TRADE_DATABASES = [
-    {"label": "IBKR (NG)", "id": TRADES_DB},
+    {"label": "NG-IBKR", "id": TRADES_DB,
+     "currency": "USD", "chartMode": "blocks", "country": "US"},
+    {"label": "ShG-AO", "id": "3b54788c-7a99-8036-8427-dddc286b31bb",
+     "currency": "INR", "chartMode": "property", "country": "IN"},
+    {"label": "SuG-AO", "id": "2124788c-7a99-8376-851a-014b6dcc2617",
+     "currency": "INR", "chartMode": "property", "country": "IN"},
 ]
+
+TRADE_CHART_PROPERTY = "Chart "  # the trailing space is real -- India logs only
 
 # Read (and, for the four below, written back) per trade. Formula fields are
 # deliberately excluded -- Cost Value, PnL, PnL%, Hold Days, Win, Outcome,
@@ -303,12 +315,23 @@ def fetch_database_schema(database_id):
     return options
 
 
-def _trade_from_page(page, account_label):
+def _formula_or_number(prop):
+    """Initial Stop % is a formula in two logs and a plain number in the third."""
+    return _formula_of(prop) if (prop or {}).get("type") == "formula" else _number_of(prop)
+
+
+def _trade_from_page(page, account):
     p = page.get("properties", {})
+    charts = []
+    if account.get("chartMode") == "property":
+        charts = _files_of(p.get(TRADE_CHART_PROPERTY))
     return {
         "pageId": page["id"],
         "notionUrl": page.get("url"),
-        "account": account_label,
+        "account": account["label"],
+        "currency": account.get("currency", "USD"),
+        "chartMode": account.get("chartMode", "blocks"),
+        "country": account.get("country", "US"),
         "ticker": _text_of(p.get("Ticker")),
         "dateOpened": _date_of(p.get("Date Opened")),
         "dateClosed": _date_of(p.get("Date Closed")),
@@ -320,13 +343,17 @@ def _trade_from_page(page, account_label):
         "exitSetup": _select_of(p.get("Exit Setup")),
         "buyQuality": _select_of(p.get("Buy Quality")),
         "sellQuality": _select_of(p.get("Sell Quality")),
+        "relativeStrength": _select_of(p.get("Relative Strength")),
         "entryThesis": _text_of(p.get(TRADE_TEXT_FIELD)),
+        "positionSize": _number_of(p.get("Position Size")),
         "costValue": _formula_of(p.get("Cost Value")),
-        "initialStopPct": _formula_of(p.get("Initial Stop %")),
+        "initialStopPct": _formula_or_number(p.get("Initial Stop %")),
         "pnl": _formula_of(p.get("PnL")),
         "pnlPct": _formula_of(p.get("PnL%")),
         "holdDays": _formula_of(p.get("Hold Days")),
+        "win": _formula_of(p.get("Win")),
         "outcome": _formula_of(p.get("Outcome")),
+        "charts": charts,          # property-mode only; blocks fetched on demand
     }
 
 
@@ -344,9 +371,108 @@ def fetch_trades(log=print):
             log(f"  {entry['label']}: {error}")
             continue
         for page in pages:
-            all_trades.append(_trade_from_page(page, entry["label"]))
+            all_trades.append(_trade_from_page(page, entry))
         log(f"  {entry['label']}: {len(pages)} trades")
     return all_trades
+
+
+def fetch_trade_schema(log=print):
+    """Merged select options across every configured trade log — a preset that
+    exists in any one book shows up in the editor for all of them."""
+    merged = {}
+    for entry in TRADE_DATABASES:
+        try:
+            for name, opts in fetch_database_schema(entry["id"]).items():
+                merged.setdefault(name, [])
+                for o in opts:
+                    if o not in merged[name]:
+                        merged[name].append(o)
+        except NotionError as error:
+            log(f"  {entry['label']} schema: {error}")
+    return merged
+
+
+def fetch_page_images(page_id):
+    """[{url, blockId}] for every image block in a page's body, following
+    pagination. The trade log keeps chart screenshots as pasted-in page images,
+    not a property, so this is how the Trade Journal shows them inline. URLs are
+    short-lived signed links — fetch this when the detail view opens."""
+    out, cursor = [], None
+    while True:
+        path = f"/blocks/{page_id}/children?page_size=100"
+        if cursor:
+            path += f"&start_cursor={cursor}"
+        page = _call("GET", path)
+        for block in page.get("results", []):
+            if block.get("type") == "image":
+                img = block.get("image") or {}
+                holder = img.get(img.get("type")) or {}
+                if holder.get("url"):
+                    out.append({"url": holder["url"], "blockId": block["id"]})
+        if not page.get("has_more"):
+            return out
+        cursor = page.get("next_cursor")
+
+
+def delete_block(block_id, log=print):
+    _call("DELETE", f"/blocks/{block_id}")
+    log(f"  deleted block {block_id}")
+
+
+# One chart API for the Trade Journal, two storage shapes behind it:
+#   chart_mode "blocks"    US log -- charts are page-body image blocks. Each is
+#                          added and deleted independently; a trade can carry
+#                          several.
+#   chart_mode "property"  India logs -- charts live in the "Chart " file
+#                          property. Notion can't re-reference an
+#                          already-hosted file through a property PATCH, so an
+#                          upload here REPLACES whatever was there. Screenshots
+#                          pasted straight into Notion still show until the
+#                          next upload from the panel.
+
+def fetch_trade_charts(page_id, chart_mode):
+    if chart_mode == "property":
+        page = _call("GET", f"/pages/{page_id}")
+        return _files_of(page.get("properties", {}).get(TRADE_CHART_PROPERTY))
+    return fetch_page_images(page_id)
+
+
+def add_trade_chart(page_id, chart_mode, filename, content_type, blob, log=print):
+    upload_id = _upload_bytes(filename, content_type, blob)
+    if chart_mode == "property":
+        _call("PATCH", f"/pages/{page_id}", {"properties": {TRADE_CHART_PROPERTY: {
+            "files": [{"type": "file_upload", "name": filename,
+                       "file_upload": {"id": upload_id}}]}}})
+        log(f"  chart set on {page_id}")
+    else:
+        _call("PATCH", f"/blocks/{page_id}/children", {"children": [{
+            "object": "block", "type": "image",
+            "image": {"type": "file_upload", "file_upload": {"id": upload_id}}}]})
+        log(f"  chart appended to {page_id}")
+    return fetch_trade_charts(page_id, chart_mode)
+
+
+def remove_trade_chart(page_id, chart_mode, ref, log=print):
+    """ref is a block id for blocks mode, ignored for property mode (clears it)."""
+    if chart_mode == "property":
+        _call("PATCH", f"/pages/{page_id}",
+              {"properties": {TRADE_CHART_PROPERTY: {"files": []}}})
+        log(f"  chart cleared on {page_id}")
+    else:
+        delete_block(ref, log=log)
+    return fetch_trade_charts(page_id, chart_mode)
+
+
+def append_page_image(page_id, filename, content_type, blob, log=print):
+    """Upload one image and append it as a block to the page body — the same
+    place a screenshot pasted in Notion lands, so the trade log stays readable
+    from either side."""
+    upload_id = _upload_bytes(filename, content_type, blob)
+    _call("PATCH", f"/blocks/{page_id}/children", {"children": [{
+        "object": "block", "type": "image",
+        "image": {"type": "file_upload", "file_upload": {"id": upload_id}}}]})
+    log(f"  chart appended to page {page_id}")
+    return fetch_page_images(page_id)
 
 
 def update_trade(page_id, fields, log=print):
@@ -547,6 +673,11 @@ def fetch_entry_charts(page_id):
     detail view opens, not from the list read, since the URLs expire in ~1h."""
     page = _call("GET", f"/pages/{page_id}")
     return _files_of(page.get("properties", {}).get("Chart"))
+
+
+def clear_entry_chart(page_id, log=print):
+    _call("PATCH", f"/pages/{page_id}", {"properties": {"Chart": {"files": []}}})
+    log(f"  cleared chart on {page_id}")
 
 
 def attach_chart(page_id, filename, content_type, blob, replace=True, log=print):
