@@ -1954,6 +1954,9 @@ document.getElementById("d-sellquality").addEventListener("change", e => saveFie
 document.getElementById("d-thesis").addEventListener("blur", e => saveField("Entry Thesis", e.target.value, "entryThesis"));
 document.getElementById("d-close").addEventListener("click", () => document.getElementById("overlay").hidden = true);
 document.getElementById("overlay").addEventListener("click", e => { if (e.target.id === "overlay") e.target.hidden = true; });
+document.addEventListener("keydown", e => {
+  if (e.key === "Escape" && !document.getElementById("overlay").hidden) document.getElementById("overlay").hidden = true;
+});
 
 document.querySelectorAll(".filter-pill").forEach(p => p.addEventListener("click", () => {
   document.querySelectorAll(".filter-pill").forEach(x => x.classList.remove("active"));
@@ -2753,6 +2756,9 @@ function openSheet(e){
 }
 function ctxTile(k,v){ return '<div class="ptile"><div class="pk">'+k+'</div><div class="pv'+(v==null||v===""?' na':'')+'">'+esc(v==null||v===""?"n/a":v)+'</div></div>'; }
 document.getElementById("overlay").onclick=function(e){ if(e.target.id==="overlay") e.target.hidden=true; };
+document.addEventListener("keydown", function(e){
+  if(e.key==="Escape" && !document.getElementById("overlay").hidden) document.getElementById("overlay").hidden=true;
+});
 
 // ---- KPI ----
 function kpiEntries(){

@@ -1166,6 +1166,15 @@
     document.getElementById("pin-close").addEventListener("click", function () {
       pin.classList.remove("open");
     });
+    // Escape closes the pin the same way the × does, from anywhere on the
+    // page — not just when focus happens to be inside it. Checked against
+    // .open rather than always firing so Escape still does nothing (rather
+    // than something silently wrong) on a page where the pin was never opened.
+    document.addEventListener("keydown", function (e) {
+      if (e.key === "Escape" && pin.classList.contains("open")) {
+        pin.classList.remove("open");
+      }
+    });
     document.getElementById("pin-open").addEventListener("click", function (e) {
       e.preventDefault();
       Sync.publish({ ticker: document.getElementById("pin-symbol").textContent });
