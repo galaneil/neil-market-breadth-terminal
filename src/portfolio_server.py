@@ -1017,9 +1017,30 @@ class Handler(BaseHTTPRequestHandler):
                 for t in trades:
                     t["logoid"] = (setup_context.classify("US", t.get("ticker"))[2]
                                    or setup_context.classify("IN", t.get("ticker"))[2])
+                block_ids = [t["pageId"] for t in trades if t.get("chartMode") != "property"]
+                presence = notion_sync.bulk_chart_presence(block_ids)
+                for t in trades:
+                    t["hasChart"] = (bool(t.get("charts")) if t.get("chartMode") == "property"
+                                     else presence.get(t["pageId"]))
                 self._send(200, json.dumps(trades), "application/json")
             except Exception as error:
                 self._send(500, json.dumps({"error": str(error)}), "application/json")
+            return
+        if route.path == "/api/journal/pending":
+            try:
+                import notion_sync
+                trades = notion_sync.fetch_trades(log=lambda *a: None)
+                block_ids = [t["pageId"] for t in trades if t.get("chartMode") != "property"]
+                presence = notion_sync.bulk_chart_presence(block_ids)
+                count = 0
+                for t in trades:
+                    has_chart = (bool(t.get("charts")) if t.get("chartMode") == "property"
+                                 else presence.get(t["pageId"]))
+                    if not t.get("entryThesis") or has_chart is False:
+                        count += 1
+                self._send(200, json.dumps({"count": count}), "application/json")
+            except Exception as error:
+                self._send(200, json.dumps({"count": 0, "error": str(error)}), "application/json")
             return
         if route.path == "/api/journal/chart":
             try:
@@ -1462,7 +1483,11 @@ JOURNAL_PAGE = r"""<!doctype html>
   .jlogo{border-radius:5px; flex:none; display:inline-flex; align-items:center; justify-content:center;
     font-size:8px; font-weight:800; color:#fff; overflow:hidden;}
   .jlogo img{width:100%; height:100%; object-fit:cover;}
-  .acct{font-size:10px; font-weight:700; padding:2px 6px; border-radius:4px; background:var(--line); color:var(--dim);}
+  .acct{font-size:10px; font-weight:700; padding:2px 6px; border-radius:4px; background:var(--line); color:var(--dim);
+    display:inline-flex; align-items:center; gap:4px;}
+  .acct-broker{width:11px; height:11px; object-fit:contain; border-radius:2px;}
+  .nav-badge{background:var(--warn,#ca8a04); color:#1a1d24; font-size:9.5px; font-weight:800; border-radius:9px;
+    padding:1px 6px; margin-left:auto; flex:none;}
   .chart-box{margin:4px 0 8px; border:1px solid var(--line); border-radius:9px; overflow:hidden; background:var(--bg); min-height:44px;}
   .chart-box img{display:block; width:100%; height:auto; border-bottom:1px solid var(--line);}
   .chart-box img:last-child{border-bottom:none;}
@@ -1532,8 +1557,9 @@ JOURNAL_PAGE = r"""<!doctype html>
     <button class="filter-pill active" data-filter="all">All</button>
     <button class="filter-pill" data-filter="open">Open</button>
     <button class="filter-pill" data-filter="closed">Closed</button>
-    <button class="filter-pill gap" data-filter="nosetup">&#9888; No entry setup</button>
-    <button class="filter-pill gap" data-filter="noexit">&#9888; Closed, no exit setup</button>
+    <button class="filter-pill gap" data-filter="nosetup">&#9888; No entry setup <span class="n" id="cnt-nosetup"></span></button>
+    <button class="filter-pill gap" data-filter="noexit">&#9888; Closed, no exit setup <span class="n" id="cnt-noexit"></span></button>
+    <button class="filter-pill gap" data-filter="pending">&#9888; Needs chart or thesis <span class="n" id="cnt-pending"></span></button>
   </div>
   <input id="search" placeholder="Filter by ticker&hellip;">
 
@@ -1585,6 +1611,17 @@ let searchTerm = "";
 
 function esc(s){ var d=document.createElement("div"); d.textContent=(s==null?"":String(s)); return d.innerHTML; }
 function logoColor(s){ let h=0; for(let i=0;i<(s||"").length;i++) h=(h*31+s.charCodeAt(i))%360; return "hsl("+h+",42%,45%)"; }
+const ACCOUNT_META = {
+  "NG-IBKR": { flag: "🇺🇸", brokerLogo: "interactive-brokers-group" },
+  "ShG-AO":  { flag: "🇮🇳", brokerLogo: "angel-broking" },
+  "SuG-AO":  { flag: "🇮🇳", brokerLogo: "angel-broking" },
+};
+function acctChip(account){
+  const m = ACCOUNT_META[account] || {};
+  const broker = m.brokerLogo
+    ? '<img class="acct-broker" src="https://s3-symbol-logo.tradingview.com/' + m.brokerLogo + '.svg" alt="">' : "";
+  return '<span class="acct">' + (m.flag || "") + ' ' + broker + esc(account) + '</span>';
+}
 function jlogo(sym, logoid, px){
   px = px || 18;
   const init = esc((sym||"").slice(0,2));
@@ -1663,6 +1700,7 @@ function drawBreakdown(elId, trades, key) {
 }
 
 let activeAccount = "all";
+function isPending(t) { return !t.entryThesis || t.hasChart === false; }
 function passesFilter(t) {
   if (activeAccount !== "all" && t.account !== activeAccount) return false;
   if (searchTerm && !(t.ticker || "").toLowerCase().includes(searchTerm)) return false;
@@ -1670,13 +1708,23 @@ function passesFilter(t) {
   if (activeFilter === "closed") return !!t.dateClosed;
   if (activeFilter === "nosetup") return !t.entrySetup;
   if (activeFilter === "noexit") return !!t.dateClosed && !t.exitSetup;
+  if (activeFilter === "pending") return isPending(t);
   return true;
 }
 
 function completenessBadge(t) {
-  if (!t.entrySetup) return '<span class="gap-badge">no entry setup</span>';
-  if (t.dateClosed && !t.exitSetup) return '<span class="gap-badge">no exit setup</span>';
-  return '<span class="ok-badge">&#10003; complete</span>';
+  const bits = [];
+  if (!t.entrySetup) bits.push('no entry setup');
+  if (t.dateClosed && !t.exitSetup) bits.push('no exit setup');
+  if (!t.entryThesis) bits.push('no thesis');
+  if (t.hasChart === false) bits.push('no chart');
+  return bits.length ? '<span class="gap-badge">' + bits.join(', ') + '</span>'
+                      : '<span class="ok-badge">&#10003; complete</span>';
+}
+function updatePillCounts() {
+  document.getElementById("cnt-nosetup").textContent = ALL_TRADES.filter(t => !t.entrySetup).length || "";
+  document.getElementById("cnt-noexit").textContent = ALL_TRADES.filter(t => t.dateClosed && !t.exitSetup).length || "";
+  document.getElementById("cnt-pending").textContent = ALL_TRADES.filter(isPending).length || "";
 }
 
 function draw() {
@@ -1689,7 +1737,7 @@ function draw() {
     const pnlCls = t.pnlPct == null ? "" : (t.pnlPct >= 0 ? "up" : "down");
     return '<tr class="clickable" data-idx="' + idx + '">'
       + '<td class="sym"><span class="sym-cell">' + jlogo(t.ticker, t.logoid, 16) + (t.ticker || "&mdash;") + '</span></td>'
-      + '<td><span class="acct">' + t.account + '</span></td>'
+      + '<td>' + acctChip(t.account) + '</td>'
       + '<td>' + fmtDate(t.dateOpened) + '</td>'
       + '<td>' + (t.entrySetup ? '<span class="setup-chip">' + t.entrySetup + '</span>' : '<span style="color:var(--dim);font-size:11.5px">&mdash;</span>') + '</td>'
       + '<td class="pnl ' + pnlCls + '">' + fmtPct(t.pnlPct) + '</td>'
@@ -1711,7 +1759,7 @@ function openDetail(t) {
   document.getElementById("overlay").hidden = false;
   document.getElementById("d-ticker").innerHTML = jlogo(t.ticker, t.logoid, 22) + esc(t.ticker || "");
   loadTradeChart(t);
-  document.getElementById("d-account").textContent = t.account;
+  document.getElementById("d-account").innerHTML = acctChip(t.account);
   document.getElementById("d-dates").innerHTML = fmtDate(t.dateOpened) + " &rarr; " + fmtDate(t.dateClosed);
   document.getElementById("d-prices").innerHTML = fmtMoney(t.entryPrice, t.currency) + " &rarr; " + fmtMoney(t.exitPrice, t.currency);
   document.getElementById("d-shares").innerHTML = t.shares ?? "&mdash;";
@@ -1831,11 +1879,12 @@ Promise.all([
   if (trades && trades.error) throw new Error(trades.error);
   ALL_TRADES = trades;
   SCHEMA = schema;
+  updatePillCounts();
   const accounts = [...new Set(trades.map(t => t.account))];
   if (accounts.length > 1) {
     document.getElementById("account-pills").innerHTML =
       '<button class="filter-pill active" data-a="all">All accounts</button>'
-      + accounts.map(a => '<button class="filter-pill" data-a="' + esc(a) + '">' + esc(a)
+      + accounts.map(a => '<button class="filter-pill" data-a="' + esc(a) + '">' + acctChip(a)
         + ' <span class="n">' + trades.filter(t => t.account === a).length + '</span></button>').join("");
     document.querySelectorAll("#account-pills .filter-pill").forEach(p => p.addEventListener("click", () => {
       document.querySelectorAll("#account-pills .filter-pill").forEach(x => x.classList.remove("active"));
@@ -3982,8 +4031,10 @@ function wireSubNav(wrap, item) {
 }
 
 function itemHTML(item) {
+  const badge = item.label === "Trade Journal"
+    ? '<span class="nav-badge" id="tj-badge" hidden>0</span>' : "";
   let html = '<div class="nav-item"><a data-top="' + item.label + '">'
-    + (ICONS[item.label] || "") + '<span class="nav-label">' + item.label + '</span>'
+    + (ICONS[item.label] || "") + '<span class="nav-label">' + item.label + '</span>' + badge
     + pinButton(item) + '</a>';
   if (item.children) {
     html += '<div class="sub-nav" data-top="' + item.label + '">' + item.children.map(c =>
@@ -4133,6 +4184,22 @@ async function refreshSidebarFreshness() {
 }
 refreshSidebarFreshness();
 setInterval(refreshSidebarFreshness, 60000);
+
+// How many logged trades are still missing a chart or an entry thesis --
+// the backlog from "I took/closed this, haven't written it up yet." Reuses
+// the same per-page chart-presence cache the Trade Journal itself warms, so
+// this is only slow the very first time it runs in a session.
+async function refreshJournalBadge() {
+  try {
+    const r = await (await fetch("/api/journal/pending")).json();
+    const el = document.getElementById("tj-badge");
+    if (!el) return;
+    el.hidden = !r.count;
+    el.textContent = r.count || 0;
+  } catch (err) { /* local-hub-only endpoint -- say nothing if unreachable */ }
+}
+refreshJournalBadge();
+setInterval(refreshJournalBadge, 60000);
 
 // Remembers the last panel across a restart or reload, rather than always
 // dumping back to Market Environment — this is meant to stay open and be

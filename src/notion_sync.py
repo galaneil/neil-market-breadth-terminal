@@ -437,6 +437,32 @@ def fetch_trade_charts(page_id, chart_mode):
     return fetch_page_images(page_id)
 
 
+# Cache of pageId -> bool, so "does this trade have a chart" only pays the
+# per-page blocks-fetch cost once per process, not on every journal load.
+# Property-mode trades never touch this -- fetch_trades already reads their
+# Chart file list in the same call that gets everything else.
+_CHART_PRESENCE = {}
+
+
+def bulk_chart_presence(page_ids, max_workers=10):
+    """{pageId: bool} for every id not already cached, fetched concurrently.
+    A page whose blocks fail to load is left out rather than guessed at, so a
+    transient error never flags a trade as missing its chart."""
+    import concurrent.futures
+    todo = [pid for pid in page_ids if pid not in _CHART_PRESENCE]
+    if todo:
+        def check(pid):
+            try:
+                return pid, bool(fetch_page_images(pid))
+            except Exception:
+                return pid, None
+        with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+            for pid, has in pool.map(check, todo):
+                if has is not None:
+                    _CHART_PRESENCE[pid] = has
+    return {pid: _CHART_PRESENCE.get(pid) for pid in page_ids}
+
+
 def add_trade_chart(page_id, chart_mode, filename, content_type, blob, log=print):
     upload_id = _upload_bytes(filename, content_type, blob)
     if chart_mode == "property":
@@ -449,7 +475,10 @@ def add_trade_chart(page_id, chart_mode, filename, content_type, blob, log=print
             "object": "block", "type": "image",
             "image": {"type": "file_upload", "file_upload": {"id": upload_id}}}]})
         log(f"  chart appended to {page_id}")
-    return fetch_trade_charts(page_id, chart_mode)
+    result = fetch_trade_charts(page_id, chart_mode)
+    if chart_mode != "property":
+        _CHART_PRESENCE[page_id] = bool(result)
+    return result
 
 
 def remove_trade_chart(page_id, chart_mode, ref, log=print):
@@ -460,7 +489,10 @@ def remove_trade_chart(page_id, chart_mode, ref, log=print):
         log(f"  chart cleared on {page_id}")
     else:
         delete_block(ref, log=log)
-    return fetch_trade_charts(page_id, chart_mode)
+    result = fetch_trade_charts(page_id, chart_mode)
+    if chart_mode != "property":
+        _CHART_PRESENCE[page_id] = bool(result)
+    return result
 
 
 def append_page_image(page_id, filename, content_type, blob, log=print):
