@@ -512,6 +512,25 @@ def run_auto_sync(force_tickers=False, log=print):
     else:
         log(f"  tickers synced {age_hours:.1f}h ago, skipping")
 
+    # IBKR's Flex report needs no login, so this is the one broker leg of the
+    # Trade Journal that really can run on a clock -- once a day is plenty
+    # for an end-of-day statement. Angel One reconciles opportunistically
+    # instead, right when a session exists (see _fetch_fresh).
+    broker_age_hours = None
+    if state.get("ibkrTrades"):
+        broker_age_hours = (time.time() - state["ibkrTrades"]) / 3600
+    if broker_age_hours is None or broker_age_hours >= 24:
+        try:
+            import broker_sync
+            result = broker_sync.reconcile_ibkr(log=log)
+            log(f"  IBKR trade sync: {len(result['created'])} logged, "
+                f"{len(result['needs_date'])} need a buy date confirmed, "
+                f"{len(result['possibly_closed'])} possibly closed")
+            state["ibkrTrades"] = time.time()
+            _save_sync_state(state)
+        except Exception as error:
+            log(f"  IBKR trade sync failed: {error}")
+
     return origin_result
 
 
@@ -561,6 +580,17 @@ BROKER_META = {
 ANGELONE_BROKERS = {
     "angelone": "ANGELONE",
     "angelone2": "ANGELONE2",
+}
+
+# Which Angel One SESSION (this file's broker id) is which NOTION trade log
+# (notion_sync.TRADE_DATABASES label) -- needed so broker_sync.py logs a fill
+# into the right person's book. UNCONFIRMED: inferred from registration order
+# (angelone = first configured = Shital, angelone2 = second = Sumit), not
+# verified against anything that actually names an account holder. Wrong here
+# means a trade lands in the wrong sibling's log -- flagged, not guessed past.
+ANGELONE_ACCOUNT_LABEL = {
+    "angelone": "ShG-AO",
+    "angelone2": "SuG-AO",
 }
 
 # Drop <broker>.png (or .svg) in here and the header uses it instead of the
@@ -813,6 +843,21 @@ def _fetch_fresh(broker):
         if not session:
             raise NeedsLogin("Angel One needs a login")
         view = broker_api.angelone(session, stops=stops, log=lambda m: None, broker_id=broker)
+        # A session existing right now is the one moment Angel One CAN be
+        # reconciled against Notion (see broker_sync.py) -- there is no clock
+        # to hook otherwise. Best-effort: a failure here must never break the
+        # portfolio view itself.
+        account_label = ANGELONE_ACCOUNT_LABEL.get(broker)
+        if account_label:
+            try:
+                import broker_sync
+                token, api_key = session
+                result = broker_sync.reconcile_angelone(token, api_key, account_label, log=log)
+                if result["created"] or result["closed"]:
+                    log(f"  {account_label} trade sync: {len(result['created'])} logged, "
+                        f"{len(result['closed'])} closed")
+            except Exception as error:
+                log(f"  {account_label} trade sync failed: {error}")
     else:
         raise RuntimeError(f"unknown broker {broker!r}")
 
@@ -1270,6 +1315,46 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(400, json.dumps({"error": str(error)}), "application/json")
             return
 
+        if route.path == "/api/journal/create-from-broker":
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                body = json.loads(self.rfile.read(length) or b"{}")
+                account_label = body.get("account")
+                ticker = body.get("ticker")
+                date_opened = body.get("dateOpened")
+                entry_price = body.get("entryPrice")
+                shares = body.get("shares")
+                if not all([account_label, ticker, date_opened, entry_price, shares]):
+                    raise ValueError("account, ticker, dateOpened, entryPrice and shares are all required")
+                import notion_sync
+                account = next((a for a in notion_sync.TRADE_DATABASES
+                               if a["label"] == account_label), None)
+                if not account:
+                    raise ValueError(f"unknown account {account_label!r}")
+                result = notion_sync.create_trade(
+                    account, ticker, date_opened, entry_price, shares, log=log)
+                self._send(200, json.dumps(result), "application/json")
+            except Exception as error:
+                self._send(400, json.dumps({"error": str(error)}), "application/json")
+            return
+
+        if route.path == "/api/journal/sync-brokers":
+            try:
+                import broker_sync
+                results = [broker_sync.reconcile_ibkr(log=log)]
+                for broker, label in ANGELONE_ACCOUNT_LABEL.items():
+                    session = _sessions.get(broker)
+                    if session:
+                        token, api_key = session
+                        results.append(broker_sync.reconcile_angelone(token, api_key, label, log=log))
+                    else:
+                        results.append({"account": label, "created": [], "closed": [],
+                                        "error": "not logged in this session"})
+                self._send(200, json.dumps({"results": results}), "application/json")
+            except Exception as error:
+                self._send(500, json.dumps({"error": str(error)}), "application/json")
+            return
+
         if route.path == "/api/journal/chart":
             length = int(self.headers.get("Content-Length") or 0)
             try:
@@ -1528,8 +1613,14 @@ JOURNAL_PAGE = r"""<!doctype html>
   .notion-link{font-size:12px; color:var(--accent); text-decoration:none;}
 </style></head><body>
 <main>
-  <h1>Trade Journal</h1>
-  <p class="sub">Reads all three trade logs (NG-IBKR, ShG-AO, SuG-AO) directly — the full record, open and closed. Editing a chip or the thesis writes straight back to that same Notion page; paste a chart (Ctrl/Cmd+V) right in the detail view and it uploads there too.</p>
+  <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap">
+    <div>
+      <h1>Trade Journal</h1>
+      <p class="sub">Reads all three trade logs (NG-IBKR, ShG-AO, SuG-AO) directly — the full record, open and closed. New trades and closes are logged from each broker's own execution history; editing a chip or the thesis writes straight back to Notion; paste a chart (Ctrl/Cmd+V) right in the detail view. Chart and Entry Thesis are the only two things left to fill in by hand.</p>
+    </div>
+    <button id="sync-brokers-btn" style="font-size:12px;font-weight:700;padding:8px 14px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--text);cursor:pointer;white-space:nowrap">&#8635; Sync from brokers</button>
+  </div>
+  <div id="sync-banner" hidden style="font-size:12px;background:color-mix(in srgb, var(--accent) 10%, transparent);border:1px solid color-mix(in srgb, var(--accent) 30%, transparent);border-radius:9px;padding:10px 13px;margin-bottom:12px;line-height:1.6"></div>
   <div id="load-err" hidden></div>
 
   <div class="kpi-strip">
@@ -1872,31 +1963,96 @@ document.querySelectorAll(".filter-pill").forEach(p => p.addEventListener("click
 }));
 document.getElementById("search").addEventListener("input", e => { searchTerm = e.target.value.trim().toLowerCase(); draw(); });
 
-Promise.all([
-  fetch("/api/journal/trades").then(r => r.json()),
-  fetch("/api/journal/schema").then(r => r.json()),
-]).then(([trades, schema]) => {
-  if (trades && trades.error) throw new Error(trades.error);
-  ALL_TRADES = trades;
-  SCHEMA = schema;
-  updatePillCounts();
-  const accounts = [...new Set(trades.map(t => t.account))];
-  if (accounts.length > 1) {
-    document.getElementById("account-pills").innerHTML =
-      '<button class="filter-pill active" data-a="all">All accounts</button>'
-      + accounts.map(a => '<button class="filter-pill" data-a="' + esc(a) + '">' + acctChip(a)
-        + ' <span class="n">' + trades.filter(t => t.account === a).length + '</span></button>').join("");
-    document.querySelectorAll("#account-pills .filter-pill").forEach(p => p.addEventListener("click", () => {
-      document.querySelectorAll("#account-pills .filter-pill").forEach(x => x.classList.remove("active"));
-      p.classList.add("active"); activeAccount = p.dataset.a; draw();
-    }));
-  }
-  draw();
-}).catch(err => {
-  const el = document.getElementById("load-err");
-  el.hidden = false;
-  el.textContent = "Could not load the trade journal: " + err.message;
+document.getElementById("sync-brokers-btn").addEventListener("click", function () {
+  const btn = this, banner = document.getElementById("sync-banner");
+  btn.disabled = true; btn.textContent = "Syncing…";
+  fetch("/api/journal/sync-brokers", { method: "POST" }).then(r => r.json()).then(res => {
+    btn.disabled = false; btn.innerHTML = "&#8635; Sync from brokers";
+    if (res.error) { banner.hidden = false; banner.textContent = "Sync failed: " + res.error; return; }
+    renderSyncBanner(res.results);
+    loadJournal();
+  }).catch(err => { btn.disabled = false; btn.innerHTML = "&#8635; Sync from brokers";
+    banner.hidden = false; banner.textContent = "Sync failed: " + err; });
 });
+
+function renderSyncBanner(results) {
+  const banner = document.getElementById("sync-banner");
+  const lines = [];
+  const needsDateRows = [];
+  results.forEach(r => {
+    if (r.error) { lines.push(esc(r.account) + ": " + esc(r.error)); return; }
+    const created = (r.created || []).length;
+    const closed = (r.closed || []).length;
+    const possiblyClosed = r.possibly_closed || [];
+    let line = "<b>" + esc(r.account) + "</b>: " + created + " new trade" + (created === 1 ? "" : "s") + " logged";
+    if (closed) line += ", " + closed + " closed (real exit price from the trade book)";
+    if (possiblyClosed.length) {
+      line += ', <span style="color:var(--warn)">' + possiblyClosed.length + " possibly closed</span> — no exit price "
+        + "from IBKR yet (add “Trades” to the Flex Query to automate this too): "
+        + possiblyClosed.map(p => '<a class="notion-link" href="' + esc(p.notionUrl) + '" target="_blank">' + esc(p.ticker) + "</a>").join(", ");
+    }
+    lines.push(line);
+    (r.needs_date || []).forEach(nd => needsDateRows.push(Object.assign({ account: r.account }, nd)));
+  });
+  let html = lines.join("<br>");
+  if (needsDateRows.length) {
+    html += '<div style="margin-top:9px;font-weight:700">New positions found — Flex doesn\'t report an open date, just confirm one:</div>';
+    html += needsDateRows.map((nd, i) =>
+      '<div style="display:flex;gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap">'
+      + '<b>' + esc(nd.ticker) + '</b> <span style="color:var(--dim)">' + nd.shares + ' @ ' + fmtMoney(nd.entryPrice, "USD") + '</span>'
+      + '<input type="date" id="nd-date-' + i + '" style="font-size:12px;padding:4px 7px;border-radius:6px;border:1px solid var(--line);background:var(--panel);color:var(--text)">'
+      + '<button class="log-nd-btn" data-i="' + i + '" style="font-size:11.5px;font-weight:700;padding:5px 10px;border-radius:6px;border:none;background:var(--accent);color:#fff;cursor:pointer">Log it</button>'
+      + '<span id="nd-status-' + i + '"></span></div>'
+    ).join("");
+  }
+  banner.hidden = false;
+  banner.innerHTML = html;
+  needsDateRows.forEach((nd, i) => {
+    document.querySelector('.log-nd-btn[data-i="' + i + '"]').addEventListener("click", function () {
+      const dateVal = document.getElementById("nd-date-" + i).value;
+      const status = document.getElementById("nd-status-" + i);
+      if (!dateVal) { status.textContent = "pick a date"; status.style.color = "var(--down)"; return; }
+      this.disabled = true; status.textContent = "logging…"; status.style.color = "var(--dim)";
+      fetch("/api/journal/create-from-broker", { method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ account: nd.account, ticker: nd.ticker, dateOpened: dateVal,
+          entryPrice: nd.entryPrice, shares: nd.shares }) })
+        .then(r => r.json()).then(res => {
+          if (res.error) { status.textContent = res.error; status.style.color = "var(--down)"; this.disabled = false; return; }
+          status.textContent = "logged ✓"; status.style.color = "var(--up)";
+          loadJournal();
+        });
+    });
+  });
+}
+
+function loadJournal() {
+  return Promise.all([
+    fetch("/api/journal/trades").then(r => r.json()),
+    fetch("/api/journal/schema").then(r => r.json()),
+  ]).then(([trades, schema]) => {
+    if (trades && trades.error) throw new Error(trades.error);
+    ALL_TRADES = trades;
+    SCHEMA = schema;
+    updatePillCounts();
+    const accounts = [...new Set(trades.map(t => t.account))];
+    if (accounts.length > 1) {
+      document.getElementById("account-pills").innerHTML =
+        '<button class="filter-pill active" data-a="all">All accounts</button>'
+        + accounts.map(a => '<button class="filter-pill" data-a="' + esc(a) + '">' + acctChip(a)
+          + ' <span class="n">' + trades.filter(t => t.account === a).length + '</span></button>').join("");
+      document.querySelectorAll("#account-pills .filter-pill").forEach(p => p.addEventListener("click", () => {
+        document.querySelectorAll("#account-pills .filter-pill").forEach(x => x.classList.remove("active"));
+        p.classList.add("active"); activeAccount = p.dataset.a; draw();
+      }));
+    }
+    draw();
+  }).catch(err => {
+    const el = document.getElementById("load-err");
+    el.hidden = false;
+    el.textContent = "Could not load the trade journal: " + err.message;
+  });
+}
+loadJournal();
 </script>
 </body></html>"""
 

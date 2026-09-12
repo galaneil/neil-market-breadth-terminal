@@ -507,6 +507,44 @@ def append_page_image(page_id, filename, content_type, blob, log=print):
     return fetch_page_images(page_id)
 
 
+def create_trade(account, ticker, date_opened, entry_price, shares,
+                  initial_stop=None, log=print):
+    """One new row in an account's trading log, straight from the broker.
+    Entry Setup / Buy Quality / Entry Thesis are left blank on purpose --
+    that is the one part of a trade that stays yours, and a blank Entry
+    Setup is exactly what already puts a row in the "needs attention" queue."""
+    ticker = (ticker or "").upper()
+    props = {
+        "Ticker": title(ticker),
+        "Date Opened": date(date_opened),
+        "Entry Price": number(entry_price),
+        "Shares": number(shares),
+    }
+    if initial_stop is not None:
+        props[STOP_FIELD] = number(initial_stop)
+    page = _call("POST", "/pages", {
+        "parent": {"database_id": account["id"]}, "properties": props})
+    log(f"  {account['label']}: logged {ticker} opened {date_opened} "
+        f"@ {entry_price}")
+    return {"pageId": page["id"], "notionUrl": page.get("url")}
+
+
+def close_trade(page_id, date_closed, exit_price, log=print):
+    """Fills in the two fields a broker's execution history can answer for
+    certain -- Date Closed and Exit Price -- and nothing discretionary."""
+    _call("PATCH", f"/pages/{page_id}", {"properties": {
+        "Date Closed": date(date_closed),
+        "Exit Price": number(exit_price),
+    }})
+    log(f"  closed {page_id}: {date_closed} @ {exit_price}")
+
+
+def update_stop(page_id, stop, log=print):
+    _call("PATCH", f"/pages/{page_id}",
+          {"properties": {STOP_FIELD: number(stop)}})
+    log(f"  stop set on {page_id}: {stop}")
+
+
 def update_trade(page_id, fields, log=print):
     """Write one or more editable properties back onto a single trade page.
     `fields` is {property_name: raw_value} -- select/text distinguished by

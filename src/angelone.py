@@ -56,6 +56,7 @@ HOLDINGS = "/rest/secure/angelbroking/portfolio/v1/getAllHolding"
 RMS = "/rest/secure/angelbroking/user/v1/getRMS"
 POSITIONS = "/rest/secure/angelbroking/order/v1/getPosition"
 ORDER_BOOK = "/rest/secure/angelbroking/order/v1/getOrderBook"
+TRADE_BOOK = "/rest/secure/angelbroking/order/v1/getTradeBook"
 GTT_LIST = "/rest/secure/angelbroking/gtt/v1/ruleList"
 
 # A resting stop can be either a plain stop-loss order sitting in the order
@@ -218,6 +219,34 @@ def stops(token, api_key, log=print):
 
     log(f"  stops resting at broker: {len(found)}")
     return found
+
+
+def tradebook(token, api_key, log=print):
+    """Every filled execution this session's token can see, oldest first.
+
+    This is the actual trade-history equivalent of IBKR's Flex Trades section
+    (which Neil's Flex Query does not currently include) -- SmartAPI exposes
+    it directly, no separate report to configure. Each row is one fill, not
+    one order, so a partially-filled order can appear more than once; the
+    reconciler is responsible for grouping these back into round-trip trades.
+    """
+    rows = []
+    try:
+        for t in (_call(TRADE_BOOK, api_key, token) or []):
+            qty = _number(t.get("fillsize"))
+            price = _number(t.get("fillprice"))
+            rows.append({
+                "symbol": _clean(t.get("tradingsymbol")),
+                "side": (t.get("transactiontype") or "").upper(),
+                "quantity": qty,
+                "price": price,
+                "datetime": t.get("filltime") or t.get("fulfilledtime") or t.get("exchtime"),
+                "orderid": t.get("orderid"),
+            })
+    except AngelOneError as error:
+        log(f"  trade book unavailable ({error})")
+    log(f"  fills read: {len(rows)}")
+    return rows
 
 
 def portfolio(token, api_key):
