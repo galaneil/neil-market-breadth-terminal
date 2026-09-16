@@ -4,19 +4,18 @@ so nothing about a trade's objective facts is ever typed by hand. The only
 things left for a human are the chart and the entry thesis — the two fields
 no API can answer.
 
-TWO BROKERS, TWO DIFFERENT LEVELS OF TRUTH RIGHT NOW
+TWO BROKERS, TWO DIFFERENT TRIGGERS
 -----------------------------------------------------------------------------
-IBKR (NG-IBKR)     Read via ibkr_flex.py's Flex report. Flex needs no session
-                   and no login, so this runs unattended, daily, forever. But
-                   the currently-configured Flex Query has no Trades section
-                   — only OpenPosition, so a NEW position (with its real
-                   entry price and open date) can be logged, but a CLOSE
-                   cannot: a position vanishing between two reports says
-                   nothing about what it sold for or exactly when. Rather
-                   than guess, closes are only ever reported as
-                   "possibly closed" for a human to confirm and enter. Fixing
-                   this for good means adding "Trades" to the Flex Query on
-                   IBKR's own site — no code change reaches that.
+IBKR (NG-IBKR)     Read via ibkr_flex.py's Flex report — real fills (Trades
+                   section, added 2026-09-12), so both opens AND closes get
+                   real prices and dates, the same FIFO leg logic as Angel
+                   One below. Flex needs no session and no login, so this
+                   runs unattended, daily, forever. The one gap: a position
+                   opened before the Trades section existed, or older than
+                   the report's history window, has no fill in the report at
+                   all — those fall back to being logged from the open
+                   position alone if it carries a real open date, or into
+                   "needs_date" for a one-field human confirm if it doesn't.
 
 Angel One (ShG-AO, See TRADE_DATABASES.
 SuG-AO)            Read via angelone.tradebook() — real fills, so both opens
@@ -34,14 +33,37 @@ log, against rows with an empty Date Closed. Nothing here ever touches a row
 that already has a Date Closed, and nothing here ever writes Entry Setup,
 Exit Setup, Buy/Sell Quality, Entry Thesis, or a chart — those stay entirely
 the human's.
+
+ONLY THE MOST RECENT ROUND TRIP PER TICKER EVER GETS TOUCHED
+-----------------------------------------------------------------------------
+A report can carry more than one full round trip for the same ticker (e.g.
+MU closed in August, then reopened in September, both inside one 30-day Flex
+window). Only the last of those legs is ever live-relevant -- anything
+earlier already has its own Notion row from before this system existed, or
+from an earlier day's sync. Matching every leg against "the account's one
+open row for this ticker" (as an earlier version of this file did) breaks
+the moment a ticker has more than one leg in the window: the first, already-
+resolved leg would grab the wrong row and close it with stale data, then a
+duplicate row would get created for the leg that's actually still open --
+and since older legs stay inside the window for weeks, this replayed on
+*every single sync*, corrupting the same ticker daily. Only ever looking at
+legs[-1] makes a rerun a no-op once a ticker's current state is logged.
+
+_RECONCILE_LOCK exists because the exact same corruption can happen from a
+single run, too: a manual "Sync from brokers" click racing the automatic
+24h background sync, both reading Notion's open rows before either has
+written, both trying to resolve the same leg.
 """
 
 import os
 import sys
+import threading
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import notion_sync
+
+_RECONCILE_LOCK = threading.Lock()
 
 
 def _open_rows(database_id):
@@ -57,19 +79,19 @@ def _open_rows(database_id):
 
 
 def reconcile_ibkr(log=print):
-    """New IBKR positions become new Notion rows automatically ONLY when the
-    Flex report actually carries a real open date for them. As currently
-    configured it does not (openDateTime comes back blank on every position,
-    verified against a live statement) -- so a new position instead comes
-    back in `needs_date`, pre-filled with everything the report DOES know
-    (ticker, entry price, shares), for a one-field confirm rather than either
-    a fabricated date or full manual entry. Positions that vanished are
-    reported, never guessed at."""
+    """Real fills (the Flex report's Trades section) drive both new opens and
+    closes, via the same FIFO leg logic as Angel One below. A position that
+    predates the Trades section, or falls outside the report's history
+    window, has no fill to read -- those fall back to the open position
+    itself: logged straight from it if a real open date is present, or into
+    `needs_date` for a one-field human confirm if not. Positions that
+    vanished with no matching close fill are reported as `possibly_closed`,
+    never guessed at."""
     import ibkr_flex
 
     account = next(a for a in notion_sync.TRADE_DATABASES if a["label"] == "NG-IBKR")
-    result = {"account": "NG-IBKR", "created": [], "needs_date": [],
-              "possibly_closed": [], "error": None}
+    result = {"account": "NG-IBKR", "created": [], "closed": [],
+              "needs_date": [], "possibly_closed": [], "error": None}
     try:
         statement = ibkr_flex.parse(ibkr_flex.fetch_statement(log=log))
     except Exception as error:
@@ -77,39 +99,84 @@ def reconcile_ibkr(log=print):
         result["error"] = str(error)
         return result
 
-    open_notion = _open_rows(account["id"])
-    seen = set()
-    for pos in statement.get("positions", []):
-        ticker = (pos.get("symbol") or "").upper()
-        qty = pos.get("quantity")
-        if not ticker or not qty:
-            continue
-        seen.add(ticker)
-        if ticker in open_notion:
-            continue
-        opened = (pos.get("opened") or "")[:10]
-        if not opened or pos.get("cost_price") is None:
-            log(f"  IBKR: {ticker} has no open date from Flex, needs a manual date")
-            result["needs_date"].append({
-                "ticker": ticker, "entryPrice": pos.get("cost_price"), "shares": qty})
-            continue
-        created = notion_sync.create_trade(
-            account, ticker, opened, pos["cost_price"], qty, log=log)
-        result["created"].append({"ticker": ticker, **created})
+    with _RECONCILE_LOCK:
+        open_notion = _open_rows(account["id"])
+        current_positions = {}
+        for pos in statement.get("positions", []):
+            ticker = (pos.get("symbol") or "").upper()
+            if ticker and pos.get("quantity"):
+                current_positions[ticker] = pos
 
-    result["possibly_closed"] = [
-        {"ticker": t, "pageId": row["id"], "notionUrl": row.get("url")}
-        for t, row in open_notion.items() if t not in seen]
-    return result
+        fills = [{
+            "symbol": (t.get("symbol") or "").upper(),
+            # IBKR's own quantity is already signed (negative on a sell) --
+            # unlike Angel One's tradebook, where quantity is always positive
+            # and side alone carries direction. _legs_from_fills expects the
+            # latter shape (it applies its own sign from `side`), so a raw
+            # IBKR quantity here would double-flip the sign on every sell.
+            "quantity": abs(t["quantity"]) if t.get("quantity") is not None else None,
+            "price": t.get("price"),
+            "side": "BUY" if t.get("side") == "BUY" else "SELL",
+            "datetime": t.get("datetime"),
+        } for t in statement.get("trades", [])]
+
+        handled = set()  # tickers whose open/close state came from a real fill
+        for symbol, legs in _legs_from_fills(fills).items():
+            if not legs:
+                continue
+            leg = legs[-1]  # only the current round trip is live-relevant --
+                             # see the module docstring for why earlier legs
+                             # must never be reprocessed.
+            existing = open_notion.get(symbol)
+            opened = (leg["opened"] or "")[:10]
+            if leg["open"]:
+                handled.add(symbol)
+                if existing or not opened:
+                    continue
+                created = notion_sync.create_trade(
+                    account, symbol, opened, leg["entryPrice"], leg["shares"], log=log)
+                result["created"].append({"ticker": symbol, **created})
+            elif existing:
+                closed = (leg["closed"] or "")[:10]
+                if not closed or leg["exitPrice"] is None:
+                    continue
+                handled.add(symbol)
+                notion_sync.close_trade(existing["id"], closed, leg["exitPrice"], log=log)
+                result["closed"].append({
+                    "ticker": symbol, "pageId": existing["id"],
+                    "notionUrl": existing.get("url"), "exitPrice": leg["exitPrice"],
+                    "dateClosed": closed})
+
+        for ticker, pos in current_positions.items():
+            if ticker in open_notion or ticker in handled:
+                continue
+            opened = (pos.get("opened") or "")[:10]
+            if opened and pos.get("cost_price") is not None:
+                created = notion_sync.create_trade(
+                    account, ticker, opened, pos["cost_price"], pos["quantity"], log=log)
+                result["created"].append({"ticker": ticker, **created})
+            else:
+                log(f"  IBKR: {ticker} has no open date from Flex, needs a manual date")
+                result["needs_date"].append({
+                    "ticker": ticker, "entryPrice": pos.get("cost_price"),
+                    "shares": pos["quantity"]})
+
+        result["possibly_closed"] = [
+            {"ticker": t, "pageId": row["id"], "notionUrl": row.get("url")}
+            for t, row in open_notion.items()
+            if t not in current_positions and t not in handled]
+        return result
 
 
-def _angelone_legs(fills):
+def _legs_from_fills(fills):
     """Fills, oldest first, folded into round-trip legs per symbol: a leg
     starts the moment a flat position takes on size and ends the moment it
     returns to flat. A pyramid add or a partial trim stays inside the same
     leg — its entry/exit price is the quantity-weighted average of the buys
     and sells that make it up, same as Cost Value already averages entries
-    in Notion's own formulas."""
+    in Notion's own formulas. Shared by both brokers -- IBKR's Flex trades
+    and Angel One's tradebook fills are normalized to the same shape
+    ({symbol, quantity, price, side, datetime}) before reaching this."""
     fills = [f for f in fills if f.get("symbol") and f.get("quantity") and f.get("price")]
     fills.sort(key=lambda f: f.get("datetime") or "")
 
@@ -172,12 +239,17 @@ def reconcile_angelone(token, api_key, account_label, log=print):
         result["error"] = str(error)
         return result
 
-    legs_by_symbol = _angelone_legs(fills)
-    open_notion = _open_rows(account["id"])
+    with _RECONCILE_LOCK:
+        legs_by_symbol = _legs_from_fills(fills)
+        open_notion = _open_rows(account["id"])
 
-    for symbol, legs in legs_by_symbol.items():
-        existing = open_notion.get(symbol)
-        for leg in legs:
+        for symbol, legs in legs_by_symbol.items():
+            if not legs:
+                continue
+            leg = legs[-1]  # only the current round trip is live-relevant --
+                             # see the module docstring for why earlier legs
+                             # must never be reprocessed.
+            existing = open_notion.get(symbol)
             opened = (leg["opened"] or "")[:10]
             if leg["open"]:
                 if existing or not opened:
@@ -194,4 +266,4 @@ def reconcile_angelone(token, api_key, account_label, log=print):
                     "ticker": symbol, "pageId": existing["id"],
                     "notionUrl": existing.get("url"), "exitPrice": leg["exitPrice"],
                     "dateClosed": closed})
-    return result
+        return result

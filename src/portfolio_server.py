@@ -1338,6 +1338,22 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(400, json.dumps({"error": str(error)}), "application/json")
             return
 
+        if route.path == "/api/journal/close-from-broker":
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                body = json.loads(self.rfile.read(length) or b"{}")
+                page_id = body.get("pageId")
+                date_closed = body.get("dateClosed")
+                exit_price = body.get("exitPrice")
+                if not all([page_id, date_closed, exit_price is not None]):
+                    raise ValueError("pageId, dateClosed and exitPrice are all required")
+                import notion_sync
+                notion_sync.close_trade(page_id, date_closed, float(exit_price), log=log)
+                self._send(200, json.dumps({"ok": True}), "application/json")
+            except Exception as error:
+                self._send(400, json.dumps({"error": str(error)}), "application/json")
+            return
+
         if route.path == "/api/journal/sync-brokers":
             try:
                 import broker_sync
@@ -1559,7 +1575,10 @@ JOURNAL_PAGE = r"""<!doctype html>
   table{width:100%; border-collapse:collapse; font-size:12.5px; background:var(--panel);
     border:1px solid var(--line); border-radius:10px; overflow:hidden;}
   th{text-align:left; font-size:10.5px; text-transform:uppercase; letter-spacing:.03em; color:var(--dim);
-    padding:8px 10px; border-bottom:1px solid var(--line); font-weight:600; cursor:pointer;}
+    padding:8px 10px; border-bottom:1px solid var(--line); font-weight:600; white-space:nowrap;}
+  th[data-sort]{cursor:pointer; user-select:none;}
+  th[data-sort]:hover{color:var(--text);}
+  th.r, td.r{text-align:right;}
   td{padding:9px 10px; border-bottom:1px solid var(--line); vertical-align:middle;}
   tr:last-child td{border-bottom:none;}
   tr.clickable{cursor:pointer;} tr.clickable:hover{background:color-mix(in srgb, var(--accent) 6%, transparent);}
@@ -1654,10 +1673,24 @@ JOURNAL_PAGE = r"""<!doctype html>
   </div>
   <input id="search" placeholder="Filter by ticker&hellip;">
 
+  <div style="overflow-x:auto">
   <table>
-    <thead><tr><th>Ticker</th><th>Account</th><th>Opened</th><th>Setup</th><th>P&amp;L%</th><th>Completeness</th></tr></thead>
+    <thead><tr>
+      <th>Ticker</th>
+      <th data-sort="dateOpened" data-label="Opened">Opened</th>
+      <th id="th-closed" data-sort="dateClosed" data-label="Closed">Closed</th>
+      <th>Setup</th>
+      <th data-sort="entryPrice" data-label="Entry" class="r">Entry</th>
+      <th data-sort="shares" data-label="Shares" class="r">Shares</th>
+      <th data-sort="costValue" data-label="Cost Value" class="r">Cost Value</th>
+      <th>Stop</th>
+      <th data-sort="pnlPct" data-label="P&amp;L%" class="r">P&amp;L%</th>
+      <th>Completeness</th>
+      <th id="th-account">Account</th>
+    </tr></thead>
     <tbody id="rows"></tbody>
   </table>
+  </div>
   <div id="empty" hidden>No trades match this filter.</div>
 </main>
 
@@ -1818,21 +1851,72 @@ function updatePillCounts() {
   document.getElementById("cnt-pending").textContent = ALL_TRADES.filter(isPending).length || "";
 }
 
+let sortState = { key: null, dir: -1 };
+function sortRows(rows) {
+  if (!sortState.key) {
+    // Default: most-recently-active trade first -- a closed trade sorts by
+    // its close date, an open one by its open date, so a new sync landing
+    // either kind surfaces at the top without extra clicks.
+    rows.sort((a, b) => (b.dateClosed || b.dateOpened || "").localeCompare(a.dateClosed || a.dateOpened || ""));
+    return rows;
+  }
+  const k = sortState.key, dir = sortState.dir;
+  rows.sort((a, b) => {
+    const av = a[k], bv = b[k];
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1;
+    if (bv == null) return -1;
+    return typeof av === "string" ? dir * av.localeCompare(bv) : dir * (av - bv);
+  });
+  return rows;
+}
+function updateSortIndicators() {
+  document.querySelectorAll("th[data-sort]").forEach(th => {
+    const active = sortState.key === th.dataset.sort;
+    th.textContent = th.dataset.label + (active ? (sortState.dir === -1 ? " ▼" : " ▲") : "");
+  });
+}
+document.querySelectorAll("th[data-sort]").forEach(th => th.addEventListener("click", () => {
+  const key = th.dataset.sort;
+  if (sortState.key === key) sortState.dir *= -1;
+  else { sortState.key = key; sortState.dir = -1; }
+  updateSortIndicators();
+  draw();
+}));
+updateSortIndicators();
+
 function draw() {
-  const rows = ALL_TRADES.filter(passesFilter);
+  const rows = sortRows(ALL_TRADES.filter(passesFilter));
   computeKpis(rows);
+
+  // A single account is already implied by the account pill you're on --
+  // showing the chip on every row just repeats it. Only "All accounts"
+  // needs the column to tell rows apart.
+  const showAccount = activeAccount === "all";
+  document.getElementById("th-account").style.display = showAccount ? "" : "none";
+  // The Closed column is blank on every row while viewing Open, so it's
+  // pure dead space there.
+  const showClosed = activeFilter !== "open";
+  document.getElementById("th-closed").style.display = showClosed ? "" : "none";
+
   const tbody = document.getElementById("rows");
   document.getElementById("empty").hidden = rows.length > 0;
   tbody.innerHTML = rows.map((t, i) => {
     const idx = ALL_TRADES.indexOf(t);
     const pnlCls = t.pnlPct == null ? "" : (t.pnlPct >= 0 ? "up" : "down");
+    const stop = t.initialStop == null ? "&mdash;" : fmtMoney(t.initialStop, t.currency) + (t.initialStopPct != null ? ' <span style="color:var(--dim)">(' + fmtPct(-Math.abs(t.initialStopPct)) + ')</span>' : "");
     return '<tr class="clickable" data-idx="' + idx + '">'
       + '<td class="sym"><span class="sym-cell">' + jlogo(t.ticker, t.logoid, 16) + (t.ticker || "&mdash;") + '</span></td>'
-      + '<td>' + acctChip(t.account) + '</td>'
       + '<td>' + fmtDate(t.dateOpened) + '</td>'
+      + '<td' + (showClosed ? "" : ' style="display:none"') + '>' + fmtDate(t.dateClosed) + '</td>'
       + '<td>' + (t.entrySetup ? '<span class="setup-chip">' + t.entrySetup + '</span>' : '<span style="color:var(--dim);font-size:11.5px">&mdash;</span>') + '</td>'
-      + '<td class="pnl ' + pnlCls + '">' + fmtPct(t.pnlPct) + '</td>'
+      + '<td class="r">' + fmtMoney(t.entryPrice, t.currency) + '</td>'
+      + '<td class="r">' + (t.shares ?? "&mdash;") + '</td>'
+      + '<td class="r">' + fmtMoney(t.costValue, t.currency) + '</td>'
+      + '<td>' + stop + '</td>'
+      + '<td class="pnl r ' + pnlCls + '">' + fmtPct(t.pnlPct) + '</td>'
       + '<td>' + completenessBadge(t) + '</td>'
+      + '<td' + (showAccount ? "" : ' style="display:none"') + '>' + acctChip(t.account) + '</td>'
     + '</tr>';
   }).join("");
   tbody.querySelectorAll("tr").forEach(row => row.onclick = () => openDetail(ALL_TRADES[Number(row.dataset.idx)]));
@@ -1982,6 +2066,7 @@ function renderSyncBanner(results) {
   const banner = document.getElementById("sync-banner");
   const lines = [];
   const needsDateRows = [];
+  const possiblyClosedRows = [];
   results.forEach(r => {
     if (r.error) { lines.push(esc(r.account) + ": " + esc(r.error)); return; }
     const created = (r.created || []).length;
@@ -1989,13 +2074,10 @@ function renderSyncBanner(results) {
     const possiblyClosed = r.possibly_closed || [];
     let line = "<b>" + esc(r.account) + "</b>: " + created + " new trade" + (created === 1 ? "" : "s") + " logged";
     if (closed) line += ", " + closed + " closed (real exit price from the trade book)";
-    if (possiblyClosed.length) {
-      line += ', <span style="color:var(--warn)">' + possiblyClosed.length + " possibly closed</span> — no exit price "
-        + "from IBKR yet (add “Trades” to the Flex Query to automate this too): "
-        + possiblyClosed.map(p => '<a class="notion-link" href="' + esc(p.notionUrl) + '" target="_blank">' + esc(p.ticker) + "</a>").join(", ");
-    }
+    if (possiblyClosed.length) line += ', <span style="color:var(--warn)">' + possiblyClosed.length + " possibly closed</span> — no longer an open position at the broker";
     lines.push(line);
     (r.needs_date || []).forEach(nd => needsDateRows.push(Object.assign({ account: r.account }, nd)));
+    possiblyClosed.forEach(pc => possiblyClosedRows.push(Object.assign({ account: r.account }, pc)));
   });
   let html = lines.join("<br>");
   if (needsDateRows.length) {
@@ -2006,6 +2088,18 @@ function renderSyncBanner(results) {
       + '<input type="date" id="nd-date-' + i + '" style="font-size:12px;padding:4px 7px;border-radius:6px;border:1px solid var(--line);background:var(--panel);color:var(--text)">'
       + '<button class="log-nd-btn" data-i="' + i + '" style="font-size:11.5px;font-weight:700;padding:5px 10px;border-radius:6px;border:none;background:var(--accent);color:#fff;cursor:pointer">Log it</button>'
       + '<span id="nd-status-' + i + '"></span></div>'
+    ).join("");
+  }
+  if (possiblyClosedRows.length) {
+    html += '<div style="margin-top:9px;font-weight:700">No longer open at the broker — confirm the exit to close it out:</div>';
+    html += possiblyClosedRows.map((pc, i) =>
+      '<div style="display:flex;gap:8px;align-items:center;margin-top:6px;flex-wrap:wrap">'
+      + '<b>' + esc(pc.ticker) + '</b>'
+      + '<input type="date" id="pc-date-' + i + '" style="font-size:12px;padding:4px 7px;border-radius:6px;border:1px solid var(--line);background:var(--panel);color:var(--text)">'
+      + '<input type="number" step="0.01" placeholder="exit price" id="pc-price-' + i + '" style="width:90px;font-size:12px;padding:4px 7px;border-radius:6px;border:1px solid var(--line);background:var(--panel);color:var(--text)">'
+      + '<button class="close-pc-btn" data-i="' + i + '" style="font-size:11.5px;font-weight:700;padding:5px 10px;border-radius:6px;border:none;background:var(--accent);color:#fff;cursor:pointer">Close it</button>'
+      + '<a class="notion-link" href="' + esc(pc.notionUrl) + '" target="_blank" style="font-size:11.5px">open in Notion</a>'
+      + '<span id="pc-status-' + i + '"></span></div>'
     ).join("");
   }
   banner.hidden = false;
@@ -2022,6 +2116,22 @@ function renderSyncBanner(results) {
         .then(r => r.json()).then(res => {
           if (res.error) { status.textContent = res.error; status.style.color = "var(--down)"; this.disabled = false; return; }
           status.textContent = "logged ✓"; status.style.color = "var(--up)";
+          loadJournal();
+        });
+    });
+  });
+  possiblyClosedRows.forEach((pc, i) => {
+    document.querySelector('.close-pc-btn[data-i="' + i + '"]').addEventListener("click", function () {
+      const dateVal = document.getElementById("pc-date-" + i).value;
+      const priceVal = document.getElementById("pc-price-" + i).value;
+      const status = document.getElementById("pc-status-" + i);
+      if (!dateVal || !priceVal) { status.textContent = "date + price needed"; status.style.color = "var(--down)"; return; }
+      this.disabled = true; status.textContent = "closing…"; status.style.color = "var(--dim)";
+      fetch("/api/journal/close-from-broker", { method: "POST", headers: {"Content-Type": "application/json"},
+        body: JSON.stringify({ pageId: pc.pageId, dateClosed: dateVal, exitPrice: priceVal }) })
+        .then(r => r.json()).then(res => {
+          if (res.error) { status.textContent = res.error; status.style.color = "var(--down)"; this.disabled = false; return; }
+          status.textContent = "closed ✓"; status.style.color = "var(--up)";
           loadJournal();
         });
     });

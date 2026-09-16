@@ -136,8 +136,23 @@ def _number(value):
         return None
 
 
+def _iso_datetime(trade_date, date_time_attr):
+    """'20260911', '20260911;113517' -> '2026-09-11 11:35:17'. Flex's own
+    dateTime attribute is blank on some report types, so tradeDate (always
+    present on a Trade element) is the fallback for the date half."""
+    date_part = (date_time_attr or "").split(";")[0] or trade_date
+    time_part = (date_time_attr or "").split(";")
+    time_part = time_part[1] if len(time_part) > 1 else ""
+    if not date_part or len(date_part) != 8:
+        return None
+    iso_date = f"{date_part[:4]}-{date_part[4:6]}-{date_part[6:8]}"
+    if len(time_part) == 6:
+        return f"{iso_date} {time_part[:2]}:{time_part[2:4]}:{time_part[4:6]}"
+    return iso_date
+
+
 def parse(xml_text):
-    """{positions, cash, nav, as_of} from the statement XML."""
+    """{positions, cash, nav, trades, as_of} from the statement XML."""
     root = ET.fromstring(xml_text)
 
     positions = []
@@ -179,6 +194,20 @@ def parse(xml_text):
             "dividends": _number(get("dividends")),
         })
 
+    trades = []
+    for node in root.iter("Trade"):
+        get = node.get
+        trades.append({
+            "account": get("accountId"),
+            "symbol": get("symbol"),
+            "side": get("buySell"),
+            "quantity": _number(get("quantity")),
+            "price": _number(get("tradePrice")),
+            "datetime": _iso_datetime(get("tradeDate"), get("dateTime")),
+            "open_close": get("openCloseIndicator"),
+            "trade_id": get("tradeID"),
+        })
+
     nav = []
     for node in root.iter("EquitySummaryByReportDateInBase"):
         get = node.get
@@ -195,6 +224,7 @@ def parse(xml_text):
         "positions": positions,
         "cash": cash,
         "nav": nav,
+        "trades": trades,
         "as_of": nav[-1]["date"] if nav else (
             positions[0]["report_date"] if positions else None),
     }

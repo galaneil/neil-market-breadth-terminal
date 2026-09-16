@@ -568,8 +568,12 @@
     card.innerHTML =
       '<div class="card-title">' + label +
         (ticker ? ' <span class="card-title-ticker">' + ticker + "</span>" : "") + "</div>" +
-      '<div class="card-value ' + pctClass(chg) + '">' + fmtNum(last.close, 2) + "</div>" +
-      '<div class="card-sub">' + (chg === null ? "&nbsp;" : fmtSignedPct(chg) + " vs prior close") + "</div>" +
+      // Value stays plain -- only the change itself carries the color, same
+      // as the stock-pin popup (Money Flows etc.): the level isn't up or
+      // down, the move from yesterday is.
+      '<div class="card-value">' + fmtNum(last.close, 2) + "</div>" +
+      '<div class="card-sub">' + (chg === null ? "&nbsp;" :
+        '<span class="pct ' + pctClass(chg) + '">' + fmtSignedPct(chg) + "</span>") + "</div>" +
       '<div class="badge-row">' +
         badge("EMA10 " + (last.above_ema10 ? "above" : "below"), last.above_ema10 ? "up" : "down") +
         badge("EMA20 " + (last.above_ema20 ? "above" : "below"), last.above_ema20 ? "up" : "down") +
@@ -3987,6 +3991,7 @@
       }
 
       const cls = DATA.classification ? DATA.classification[sym] : null;
+      const dayChg = end > 0 ? ((d.close[end] / d.close[end - 1]) - 1) * 100 : null;
       const windows = [["1 week", 5], ["1 month", 21], ["3 months", 63], ["6 months", 126]];
       let cards = "";
       windows.forEach(function (w) {
@@ -4022,7 +4027,8 @@
               '<div class="stock-sym">' + sym + "</div>" +
               '<div class="card-sub">' + (cls ? cls[1] + " &middot; " + cls[0] : "&nbsp;") + "</div>" +
             "</div>" +
-            '<div class="stock-price"><div class="card-value">' + fmtNum(d.close[end], 2) + "</div>" +
+            '<div class="stock-price"><div class="card-value">' + fmtNum(d.close[end], 2) +
+              (dayChg === null ? "" : ' <span class="pct ' + pctClass(dayChg) + '" style="font-size:14px;font-weight:600">' + fmtSignedPct(dayChg) + "</span>") + "</div>" +
               '<div class="card-sub">close on ' + d.dates[end] + "</div></div>" +
           "</div>" +
           rsRatingBlock(d, end) +
