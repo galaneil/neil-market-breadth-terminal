@@ -320,6 +320,15 @@ def _formula_or_number(prop):
     return _formula_of(prop) if (prop or {}).get("type") == "formula" else _number_of(prop)
 
 
+PARENT_FIELD = "Parent Trade"   # self-relation: a pyramid add points at its core
+
+
+def _relation_ids(prop):
+    if not prop or prop.get("type") != "relation":
+        return []
+    return [r["id"] for r in prop.get("relation", [])]
+
+
 def _trade_from_page(page, account):
     p = page.get("properties", {})
     charts = []
@@ -354,6 +363,7 @@ def _trade_from_page(page, account):
         "win": _formula_of(p.get("Win")),
         "outcome": _formula_of(p.get("Outcome")),
         "charts": charts,          # property-mode only; blocks fetched on demand
+        "parentId": _relation_ids(p.get(PARENT_FIELD))[0] if _relation_ids(p.get(PARENT_FIELD)) else None,
     }
 
 
@@ -508,7 +518,7 @@ def append_page_image(page_id, filename, content_type, blob, log=print):
 
 
 def create_trade(account, ticker, date_opened, entry_price, shares,
-                  initial_stop=None, log=print):
+                  initial_stop=None, log=print, parent_id=None, entry_setup=None):
     """One new row in an account's trading log, straight from the broker.
     Entry Setup / Buy Quality / Entry Thesis are left blank on purpose --
     that is the one part of a trade that stays yours, and a blank Entry
@@ -522,11 +532,21 @@ def create_trade(account, ticker, date_opened, entry_price, shares,
     }
     if initial_stop is not None:
         props[STOP_FIELD] = number(initial_stop)
+    if parent_id:
+        props[PARENT_FIELD] = {"relation": [{"id": parent_id}]}
+    if entry_setup:
+        props["Entry Setup"] = select(entry_setup)
     page = _call("POST", "/pages", {
         "parent": {"database_id": account["id"]}, "properties": props})
     log(f"  {account['label']}: logged {ticker} opened {date_opened} "
         f"@ {entry_price}")
     return {"pageId": page["id"], "notionUrl": page.get("url")}
+
+
+def child_rows(database_id, parent_id):
+    """Every pyramid add linked to one core row (open or closed)."""
+    return query(database_id, {"filter": {"property": PARENT_FIELD,
+                                          "relation": {"contains": parent_id}}})
 
 
 def close_trade(page_id, date_closed, exit_price, log=print):

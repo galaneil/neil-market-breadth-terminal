@@ -72,10 +72,55 @@ def _open_rows(database_id):
         "filter": {"property": "Date Closed", "date": {"is_empty": True}}})
     out = {}
     for page in pages:
-        ticker = notion_sync._text_of(page.get("properties", {}).get("Ticker"))
+        props = page.get("properties", {})
+        # A pyramid add shares its core's ticker; letting it into this map
+        # would let it shadow the core row it hangs off.
+        if notion_sync._relation_ids(props.get(notion_sync.PARENT_FIELD)):
+            continue
+        ticker = notion_sync._text_of(props.get("Ticker"))
         if ticker:
             out[ticker.upper()] = page
     return out
+
+
+def _add_events(leg):
+    """A leg's buys folded to one event per day: [{date, shares, price}],
+    oldest first. Two fills of one order split across prices are one add."""
+    by_day = {}
+    for qty, price, dt in leg.get("buys", []):
+        day = (dt or "")[:10]
+        if not day:
+            continue
+        e = by_day.setdefault(day, [0, 0.0])
+        e[0] += qty
+        e[1] += qty * price
+    return [{"date": d, "shares": q, "price": v / q} for d, (q, v) in sorted(by_day.items())]
+
+
+def _sync_adds(account, symbol, core, leg, result, log):
+    """Every buy after the core row's own open date becomes its own row,
+    linked to the core (Parent Trade) so it can carry its own chart and
+    thesis. Already-logged adds are matched by date, so a rerun is a no-op."""
+    core_date = notion_sync._date_of(core.get("properties", {}).get("Date Opened")) or ""
+    logged = set()
+    for child in notion_sync.child_rows(account["id"], core["id"]):
+        d = notion_sync._date_of(child.get("properties", {}).get("Date Opened"))
+        if d:
+            logged.add(d[:10])
+    for ev in _add_events(leg):
+        if ev["date"] <= core_date[:10] or ev["date"] in logged:
+            continue
+        created = notion_sync.create_trade(
+            account, symbol, ev["date"], ev["price"], ev["shares"], log=log,
+            parent_id=core["id"], entry_setup="Pyramid Add")
+        result.setdefault("added", []).append({"ticker": symbol, "date": ev["date"],
+                                               "shares": ev["shares"], **created})
+
+
+def _close_children(account, core, closed, exit_price, log):
+    for child in notion_sync.child_rows(account["id"], core["id"]):
+        if not notion_sync._date_of(child.get("properties", {}).get("Date Closed")):
+            notion_sync.close_trade(child["id"], closed, exit_price, log=log)
 
 
 def reconcile_ibkr(log=print):
@@ -131,7 +176,10 @@ def reconcile_ibkr(log=print):
             opened = (leg["opened"] or "")[:10]
             if leg["open"]:
                 handled.add(symbol)
-                if existing or not opened:
+                if existing:
+                    _sync_adds(account, symbol, existing, leg, result, log)
+                    continue
+                if not opened:
                     continue
                 created = notion_sync.create_trade(
                     account, symbol, opened, leg["entryPrice"], leg["shares"], log=log)
@@ -142,6 +190,7 @@ def reconcile_ibkr(log=print):
                     continue
                 handled.add(symbol)
                 notion_sync.close_trade(existing["id"], closed, leg["exitPrice"], log=log)
+                _close_children(account, existing, closed, leg["exitPrice"], log)
                 result["closed"].append({
                     "ticker": symbol, "pageId": existing["id"],
                     "notionUrl": existing.get("url"), "exitPrice": leg["exitPrice"],
@@ -189,6 +238,13 @@ def _legs_from_fills(fills):
         pos = running.get(sym, 0)
         leglist = legs.setdefault(sym, [])
 
+        if side < 0 and pos <= 0:
+            # A sell with nothing to sell means its buy fell outside the
+            # report's window (Flex only looks back ~30 days). Counting it
+            # drove the running position negative, so the next buys netted
+            # it back to flat and looked like a closed round trip -- which
+            # then closed a still-open row with a stale exit price.
+            continue
         if pos == 0:
             leglist.append({"buys": [], "sells": []})
         leg = leglist[-1]
@@ -213,7 +269,7 @@ def _legs_from_fills(fills):
             parsed.append({
                 "shares": buy_qty, "entryPrice": entry_price, "opened": opened,
                 "closed": closed, "exitPrice": exit_price,
-                "open": closed is None,
+                "open": closed is None, "buys": leg["buys"],
             })
         out[sym] = parsed
     return out

@@ -1581,6 +1581,10 @@ JOURNAL_PAGE = r"""<!doctype html>
   th.r, td.r{text-align:right;}
   td{padding:9px 10px; border-bottom:1px solid var(--line); vertical-align:middle;}
   tr:last-child td{border-bottom:none;}
+  tr.child td{background:color-mix(in srgb, var(--violet) 5%, transparent);}
+  tr.child td:first-child{padding-left:22px;}
+  .add-pill{font-size:9.5px; font-weight:700; color:var(--violet); background:rgba(124,58,237,.14);
+    padding:1px 6px; border-radius:4px; margin-right:6px;}
   tr.clickable{cursor:pointer;} tr.clickable:hover{background:color-mix(in srgb, var(--accent) 6%, transparent);}
   .sym{font-weight:700;}
   .sym-cell{display:inline-flex; align-items:center; gap:7px;}
@@ -1768,7 +1772,7 @@ function mean(arr) { return arr.length ? arr.reduce((s, x) => s + x, 0) / arr.le
 //   Outcome = Profit / Loss / Breakeven by sign of PnL
 // Everything here is over CLOSED trades, the way the Notion roll-ups are.
 function computeKpis(trades) {
-  const open = trades.filter(t => !t.dateClosed);
+  const open = trades.filter(t => !t.dateClosed && !t.parentId);   // positions, not each add
   const closed = trades.filter(t => t.dateClosed);
   const rated = closed.filter(t => t.win != null);        // has both prices
   const wins = rated.filter(t => t.win === 1);
@@ -1888,6 +1892,16 @@ updateSortIndicators();
 function draw() {
   const rows = sortRows(ALL_TRADES.filter(passesFilter));
   computeKpis(rows);
+  // Pyramid adds sit directly under their core row, whatever the sort.
+  const ids = new Set(rows.map(r => r.pageId));
+  const kids = {};
+  rows.forEach(r => { if (r.parentId && ids.has(r.parentId)) (kids[r.parentId] = kids[r.parentId] || []).push(r); });
+  const nested = [];
+  rows.forEach(r => {
+    if (r.parentId && ids.has(r.parentId)) return;
+    nested.push(r);
+    (kids[r.pageId] || []).sort((a, b) => (a.dateOpened || "").localeCompare(b.dateOpened || "")).forEach(k => nested.push(k));
+  });
 
   // A single account is already implied by the account pill you're on --
   // showing the chip on every row just repeats it. Only "All accounts"
@@ -1901,12 +1915,12 @@ function draw() {
 
   const tbody = document.getElementById("rows");
   document.getElementById("empty").hidden = rows.length > 0;
-  tbody.innerHTML = rows.map((t, i) => {
+  tbody.innerHTML = nested.map((t, i) => {
     const idx = ALL_TRADES.indexOf(t);
     const pnlCls = t.pnlPct == null ? "" : (t.pnlPct >= 0 ? "up" : "down");
     const stop = t.initialStop == null ? "&mdash;" : fmtMoney(t.initialStop, t.currency) + (t.initialStopPct != null ? ' <span style="color:var(--dim)">(' + fmtPct(-Math.abs(t.initialStopPct)) + ')</span>' : "");
-    return '<tr class="clickable" data-idx="' + idx + '">'
-      + '<td class="sym"><span class="sym-cell">' + jlogo(t.ticker, t.logoid, 16) + (t.ticker || "&mdash;") + '</span></td>'
+    return '<tr class="clickable' + (t.parentId ? " child" : "") + '" data-idx="' + idx + '">'
+      + '<td class="sym"><span class="sym-cell">' + (t.parentId ? '<span class="add-pill">&#8627; Add</span>' : "") + jlogo(t.ticker, t.logoid, 16) + (t.ticker || "&mdash;") + '</span></td>'
       + '<td>' + fmtDate(t.dateOpened) + '</td>'
       + '<td' + (showClosed ? "" : ' style="display:none"') + '>' + fmtDate(t.dateClosed) + '</td>'
       + '<td>' + (t.entrySetup ? '<span class="setup-chip">' + t.entrySetup + '</span>' : '<span style="color:var(--dim);font-size:11.5px">&mdash;</span>') + '</td>'
@@ -2074,6 +2088,9 @@ function renderSyncBanner(results) {
     const possiblyClosed = r.possibly_closed || [];
     let line = "<b>" + esc(r.account) + "</b>: " + created + " new trade" + (created === 1 ? "" : "s") + " logged";
     if (closed) line += ", " + closed + " closed (real exit price from the trade book)";
+    const added = r.added || [];
+    if (added.length) line += ', <span style="color:var(--violet)">' + added.length + " pyramid add" + (added.length === 1 ? "" : "s")
+      + " linked</span> (" + added.map(a => esc(a.ticker) + " +" + a.shares).join(", ") + ") — add a chart to each";
     if (possiblyClosed.length) line += ', <span style="color:var(--warn)">' + possiblyClosed.length + " possibly closed</span> — no longer an open position at the broker";
     lines.push(line);
     (r.needs_date || []).forEach(nd => needsDateRows.push(Object.assign({ account: r.account }, nd)));
