@@ -648,6 +648,7 @@
     }
 
     function draw(tf) {
+      drawnTf = tf;
       // Rebuilt every draw, not once outside — MBT_EXTEND unshifts older
       // history into this exact `rows` array after first paint (see below),
       // which shifts every later row's index. A map built once before that
@@ -675,7 +676,53 @@
           .map(function (r) { return { time: r.date, value: r.avg_vol30 }; }));
       }
       chart.timeScale().fitContent();
+      if (window.MBT_FOCUS && window.MBT_FOCUS.length) applyFocus();
     }
+
+    // Context for arriving from the landing page: when the hub passes a
+    // stretch (MBT_FOCUS, set by a postMessage below) for this index, shade it
+    // and zoom to it with some room either side. Only ever set via that hand-off,
+    // so opening the page normally is unchanged.
+    let focusSeries = null, drawnTf = "ALL";
+    function applyFocus() {
+      const f = (window.MBT_FOCUS || []).find(function (x) { return x.key === seriesKey || "index_" + x.key === seriesKey; });
+      if (focusSeries) { try { chart.removeSeries(focusSeries); } catch (e) {} focusSeries = null; }
+      const old = card.querySelector(".focus-banner");
+      if (old) old.remove();
+      if (!f) return;
+      const inRange = rows.filter(function (r) { return r.date >= f.start && r.date <= f.end; });
+      if (!inRange.length) return;
+      const up = f.type !== "down";
+      focusSeries = chart.addHistogramSeries({ priceScaleId: "focus", priceLineVisible: false, lastValueVisible: false });
+      chart.priceScale("focus").applyOptions({ scaleMargins: { top: 0, bottom: 0 }, visible: false });
+      focusSeries.setData(inRange.map(function (r) {
+        return { time: r.date, value: 1, color: up ? "rgba(22,163,74,0.17)" : "rgba(220,38,38,0.17)" };
+      }));
+      const banner = document.createElement("div");
+      banner.className = "focus-banner";
+      banner.style.cssText = "font-size:12px;margin:6px 0;padding:6px 10px;border-radius:7px;display:flex;justify-content:space-between;gap:10px;align-items:center;" +
+        "background:" + (up ? "rgba(22,163,74,0.12)" : "rgba(220,38,38,0.12)") + ";color:inherit";
+      banner.innerHTML = "<span>Shaded: <b>" + (up ? "Uptrend" : "Downtrend") + " state</b> &middot; " + f.start + " &rarr; " + f.end +
+        " (" + inRange.length + " sessions)</span><a href=\"#\" style=\"font-weight:600;color:inherit\">clear &times;</a>";
+      banner.querySelector("a").addEventListener("click", function (ev) {
+        ev.preventDefault();
+        window.MBT_FOCUS = [];
+        applyFocus();
+        chart.timeScale().fitContent();
+      });
+      card.insertBefore(banner, container);
+      // Zoom to the stretch with a margin, but only when the full history is on
+      // screen; a shorter timeframe the user picked stays as they set it.
+      if (drawnTf === "ALL") {
+        const i0 = rows.indexOf(inRange[0]), i1 = rows.indexOf(inRange[inRange.length - 1]);
+        const pad = Math.max(15, Math.round(inRange.length * 0.4));
+        chart.timeScale().setVisibleRange({
+          from: rows[Math.max(0, i0 - pad)].date,
+          to: rows[Math.min(rows.length - 1, i1 + pad)].date,
+        });
+      }
+    }
+    (window.MBT_FOCUS_APPLIERS = window.MBT_FOCUS_APPLIERS || []).push({ key: seriesKey, apply: applyFocus, el: card });
 
     setupTimeframeToggle(card.querySelector(".tf-toggle"), draw);
 
@@ -4764,6 +4811,19 @@
     Array.prototype.unshift.apply(S[key], older);
     redrawAllCharts();
   };
+
+  // The hub passes {mbtFocus: [{key, start, end, type}]} when you arrive from a
+  // landing-page click, so the exact stretch being looked at is shaded.
+  window.addEventListener("message", function (e) {
+    if (e.origin !== location.origin || !e.data || !Array.isArray(e.data.mbtFocus)) return;
+    window.MBT_FOCUS = e.data.mbtFocus;
+    let first = null;
+    (window.MBT_FOCUS_APPLIERS || []).forEach(function (a) {
+      a.apply();
+      if (!first && window.MBT_FOCUS.some(function (f) { return f.key === a.key || "index_" + f.key === a.key; })) first = a.el;
+    });
+    if (first) first.scrollIntoView({ block: "nearest" });
+  });
 
   // ---------- Wire everything up ----------
   renderEnvironmentPanel();

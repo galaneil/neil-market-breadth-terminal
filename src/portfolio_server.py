@@ -76,7 +76,9 @@ DOCS_ROOT = config.DOCS_DIR
 # Signals / Algorithms are plain flat lists under their own header, same as
 # Portfolio and System already are.
 HUB_PANELS = [
-    {"label": "Market Environment", "path": "panel-summary.html"},
+    # Native hub page (not a docs/ page): it shows the user's own book next to
+    # the market data, which must never be published to GitHub Pages.
+    {"label": "Market Environment", "native": "/home"},
     # Each country tracks a different set of indices (US: 3, India: 4), so
     # this entry's children are NOT listed here — they are built per-country
     # in _hub_nav_json() from config.COUNTRIES, which is the one place that
@@ -129,6 +131,7 @@ SYSTEM_PANELS = [
     {"label": "Data Freshness", "path": "panel-freshness.html"},
 ]
 
+HOME_PAGE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "home_page.html")
 OUTPUT_DIR = os.path.join(os.path.dirname(config.ROOT_DIR), "Portfolio Local")
 STOPS_FILE = os.path.join(OUTPUT_DIR, "stops.json")
 
@@ -1013,6 +1016,40 @@ class Handler(BaseHTTPRequestHandler):
             page = HUB_PAGE.replace("%%NAV_JSON%%", _hub_nav_json())
             self._send(200, page, "text/html; charset=utf-8")
             return
+        if route.path == "/home":
+            # Read per request so edits to the page show up on reload.
+            with open(HOME_PAGE_FILE, encoding="utf-8") as f:
+                self._send(200, f.read(), "text/html; charset=utf-8")
+            return
+        if route.path == "/api/home":
+            import home_data
+            q = parse_qs(route.query)
+            code = (q.get("country") or ["US"])[0].upper()
+            if code not in config.COUNTRIES:
+                code = "US"
+            self._send(200, json.dumps(home_data.build(code)), "application/json")
+            return
+        if route.path == "/api/home/ticker":
+            import home_data
+            q = parse_qs(route.query)
+            code = (q.get("country") or ["US"])[0].upper()
+            if code not in config.COUNTRIES:
+                code = "US"
+            self._send(200, json.dumps(home_data.ticker_view((q.get("symbol") or [""])[0], code)),
+                       "application/json")
+            return
+        if route.path == "/api/home/book":
+            import home_data
+            # ?part=risk (fast: positions + quotes) or ?part=journal (slow:
+            # Notion chart scan) so the page can draw the first without the second.
+            part = (parse_qs(route.query).get("part") or [""])[0]
+            body = {}
+            if part in ("", "risk"):
+                body["risk"] = home_data.book_risk()
+            if part in ("", "journal"):
+                body["journal"] = home_data.journal_summary()
+            self._send(200, json.dumps(body), "application/json")
+            return
         if route.path == "/portfolio":
             self._send(200, PORTFOLIO_PAGE, "text/html; charset=utf-8")
             return
@@ -1070,6 +1107,41 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(200, json.dumps(trades), "application/json")
             except Exception as error:
                 self._send(500, json.dumps({"error": str(error)}), "application/json")
+            return
+        if route.path == "/api/journal/mfe":
+            try:
+                import home_data
+                import journal_mfe
+                self._send(200, json.dumps(journal_mfe.rows(home_data._trades())), "application/json")
+            except Exception as error:
+                self._send(200, json.dumps({"error": str(error)}), "application/json")
+            return
+        if route.path == "/api/journal/backtest":
+            try:
+                import home_data
+                import journal_mfe
+                q = parse_qs(route.query)
+                use_stop = (q.get("stop") or ["1"])[0] != "0"
+                self._send(200, json.dumps(journal_mfe.backtest(home_data._trades(), use_stop)), "application/json")
+            except Exception as error:
+                self._send(200, json.dumps({"error": str(error)}), "application/json")
+            return
+        if route.path == "/api/journal/group":
+            try:
+                import home_data
+                import journal_mfe
+                self._send(200, json.dumps(journal_mfe.group_strength(home_data._trades())), "application/json")
+            except Exception as error:
+                self._send(200, json.dumps({"error": str(error)}), "application/json")
+            return
+        if route.path == "/api/journal/path":
+            import journal_mfe
+            q = parse_qs(route.query)
+            g = lambda k: (q.get(k) or [""])[0]
+            code = g("country").upper()
+            code = code if code in config.COUNTRIES else "US"
+            self._send(200, json.dumps(journal_mfe.path(code, g("symbol"), g("from"), g("to"))),
+                       "application/json")
             return
         if route.path == "/api/journal/pending":
             try:
@@ -1521,6 +1593,7 @@ JOURNAL_PAGE = r"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Trade Journal</title>
+<script src="/docs/vendor/lightweight-charts.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
@@ -1634,6 +1707,43 @@ JOURNAL_PAGE = r"""<!doctype html>
   .field-label{font-size:10.5px; text-transform:uppercase; letter-spacing:.03em; color:var(--dim); margin:14px 0 4px;}
   .save-status{font-size:11px; color:var(--up); margin-top:4px; height:14px;}
   .notion-link{font-size:12px; color:var(--accent); text-decoration:none;}
+  #ins{margin-bottom:16px;}
+  .itabs{display:flex; gap:4px; border-bottom:1px solid var(--line); margin:8px 0 14px; overflow-x:auto;}
+  .itab{font-size:12.5px; font-weight:600; color:var(--dim); padding:8px 4px; margin-right:20px; border-bottom:2px solid transparent; cursor:pointer; white-space:nowrap;}
+  .itab.on{color:var(--accent); border-bottom-color:var(--accent);}
+  .itab small{display:block; font-size:10px; font-weight:500; color:var(--dim);}
+  .icard{background:var(--panel); border:1px solid var(--line); border-radius:11px; padding:14px 16px; margin-bottom:12px;}
+  .icard h3{font-size:13px; margin:0 0 3px;} .icard .isub{font-size:11.5px; color:var(--dim); margin:0 0 10px; max-width:760px; line-height:1.5;}
+  .crow{display:grid; grid-template-columns:160px 1fr 72px 56px; align-items:center; gap:10px; padding:6px 6px; font-size:12.5px; border-radius:8px;}
+  .crow.hd{color:var(--dim); font-size:10px; text-transform:uppercase; letter-spacing:.03em; border-bottom:1px solid var(--line); border-radius:0; padding-bottom:5px;}
+  .crow.click{cursor:pointer;} .crow.click:hover{background:color-mix(in srgb, var(--accent) 8%, transparent);}
+  .crow.sel{background:color-mix(in srgb, var(--accent) 10%, transparent); outline:1px solid var(--accent);}
+  .ctrack{height:16px; border-radius:5px; background:var(--line); overflow:hidden;}
+  .cfill{height:100%; display:flex; align-items:center; font-size:10px; font-weight:700; color:#fff; padding-left:6px; min-width:34px;}
+  .found{font-size:12px; color:var(--dim); line-height:1.55; background:color-mix(in srgb, var(--warn) 10%, transparent); border:1px dashed color-mix(in srgb, var(--warn) 45%, transparent); border-radius:9px; padding:9px 12px; margin-top:10px;}
+  .found.g{background:color-mix(in srgb, var(--up) 10%, transparent); border-color:color-mix(in srgb, var(--up) 45%, transparent);}
+  .drill{margin-top:10px; border:1px solid var(--line); border-radius:10px; background:var(--bg); padding:10px 12px;}
+  .drill h4{margin:0 0 6px; font-size:12px; display:flex; justify-content:space-between;} .drill h4 span.x{color:var(--dim); cursor:pointer; font-weight:600; font-size:11px;}
+  .drill-scroll{max-height:260px; overflow:auto;}
+  .drill table{width:100%; border-collapse:collapse; font-size:12px;} .drill th{text-align:left; font-size:10px; color:var(--dim); text-transform:uppercase; padding:4px 6px; border-bottom:1px solid var(--line);}
+  .drill td{padding:5px 6px; border-bottom:1px solid var(--line);} .drill .r{text-align:right;} .drill tr.tc{cursor:pointer;} .drill tr.tc:hover td{background:color-mix(in srgb, var(--accent) 8%, transparent);}
+  .i2{display:grid; grid-template-columns:1fr 1fr; gap:10px;} @media (max-width:760px){.i2{grid-template-columns:1fr;}}
+  .mgrid{display:grid; grid-template-columns:repeat(3,1fr); gap:10px;} @media (max-width:860px){.mgrid{grid-template-columns:1fr 1fr;}}
+  .mcard{border:1px solid var(--line); border-radius:10px; padding:10px 12px; background:var(--panel); cursor:pointer;} .mcard:hover{border-color:var(--accent);} .mcard.sel{border-color:var(--violet); box-shadow:0 0 0 1px var(--violet);}
+  .mcard .mt{font-size:12px; font-weight:700; display:flex; justify-content:space-between;} .mcard .mt span{font-weight:500; color:var(--dim); font-size:10.5px;} .mcard .mn{font-size:11px; color:var(--dim); margin:3px 0 6px;}
+  table.lbt{width:100%; border-collapse:collapse; font-size:12.5px; background:var(--panel); border:1px solid var(--line); border-radius:9px;}
+  table.lbt th{text-align:left; font-size:10.5px; color:var(--dim); text-transform:uppercase; padding:7px 9px; border-bottom:1px solid var(--line); cursor:pointer; user-select:none;}
+  table.lbt td{padding:7px 9px; border-bottom:1px solid var(--line);} table.lbt .r{text-align:right;} table.lbt tr.tc{cursor:pointer;} table.lbt tr.tc:hover td{background:color-mix(in srgb, var(--accent) 8%, transparent);}
+  .tagp{font-size:10px; font-weight:700; padding:1px 7px; border-radius:99px; margin-left:6px; background:rgba(240,85,75,.14); color:var(--down);} .tagp.g{background:rgba(46,204,113,.14); color:var(--up);}
+  #mfe{margin-bottom:16px;}
+  .mfe-tiles{display:grid; grid-template-columns:repeat(4,1fr); gap:8px; margin:8px 0 10px;}
+  @media (max-width:700px){.mfe-tiles{grid-template-columns:repeat(2,1fr);}}
+  .mfe-note{font-size:11.5px; color:var(--dim); line-height:1.55; margin:0 0 10px; max-width:760px;}
+  .mfe-bar{position:relative; height:8px; background:var(--line); border-radius:4px; min-width:90px;}
+  .mfe-bar i{position:absolute; left:0; top:0; bottom:0; border-radius:4px; background:var(--up); opacity:.85;}
+  .mfe-bar i.low{background:var(--warn);}
+  #d-path{height:190px; margin:4px 0 12px; border:1px solid var(--line); border-radius:9px; overflow:hidden;}
+  #d-path[hidden]{display:none;}
 </style></head><body>
 <main>
   <div style="display:flex;justify-content:space-between;align-items:flex-start;gap:14px;flex-wrap:wrap">
@@ -1664,6 +1774,34 @@ JOURNAL_PAGE = r"""<!doctype html>
       <div><div class="bd-title">Entry Setup</div><table class="bd-table" id="bd-entry"></table></div>
       <div><div class="bd-title">Exit Setup</div><table class="bd-table" id="bd-exit"></table></div>
     </div>
+  </details>
+
+  <details id="ins" open>
+    <summary style="font-size:12px;font-weight:700;cursor:pointer;margin-bottom:4px">Trade insights &mdash; computed from your own log, price history and the terminal's group ranks</summary>
+    <div class="itabs" id="itabs">
+      <div class="itab on" data-p="calib">Self-rating calibration<small>do you know a good trade when you're in it?</small></div>
+      <div class="itab" data-p="behav">Exit behavior &amp; hold time<small>what actually leaks</small></div>
+      <div class="itab" data-p="board">Ticker leaderboard<small>names you keep re-fighting</small></div>
+      <div class="itab" data-p="group">Group strength at entry<small>was the industry already leading?</small></div>
+      <div class="itab" data-p="mfec">MFE &amp; capture<small>how much of the move you kept</small></div>
+      <div class="itab" data-p="rule">Rule discipline<small>too early or too late vs your rule</small></div>
+    </div>
+    <div id="ipane"></div>
+  </details>
+
+  <details id="mfe">
+    <summary style="font-size:12px;font-weight:700;cursor:pointer;margin-bottom:8px">MFE &amp; capture &mdash; how much of each winner's peak you kept</summary>
+    <p class="mfe-note"><b>MFE</b> is the best open profit a trade showed between your entry and exit (daily highs). <b>Capture</b> is your realised P&amp;L% divided by that peak: 100% means you sold at the top, 40% means you gave back 60% of it. <b>MAE</b> is the deepest drawdown from entry (daily lows). Click a row for the price path. Respects the account filter and search.</p>
+    <div class="mfe-tiles" id="mfe-tiles"></div>
+    <div style="overflow-x:auto"><table class="bd-table" id="mfe-table"></table></div>
+  </details>
+
+  <details id="bt">
+    <summary style="font-size:12px;font-weight:700;cursor:pointer;margin-bottom:8px">Exit-rule backtest &mdash; what if you had sold by a rule instead</summary>
+    <p class="mfe-note">Each closed trade is replayed from your <b>real entry price and date</b> using daily bars, and sold by the rule instead of when you actually sold. Rules run past your real exit if they hadn't fired yet. <label style="white-space:nowrap"><input type="checkbox" id="bt-stop" checked> also honour my initial stop (fills at the stop, or the open if it gapped)</label>. Pyramid adds are replayed as their own entries. <b>S</b> = stopped out, <b>H</b> = rule never fired (marked to the latest close). Respects the account filter and search.</p>
+    <div style="overflow-x:auto"><table class="bd-table" id="bt-rules"></table></div>
+    <div class="bd-title" style="margin-top:14px">Per trade &mdash; click a column to sort, a row for detail</div>
+    <div style="overflow-x:auto"><table class="bd-table" id="bt-table"></table></div>
   </details>
 
   <div class="filter-pills" id="account-pills"></div>
@@ -1703,6 +1841,7 @@ JOURNAL_PAGE = r"""<!doctype html>
     <div class="detail-head"><b id="d-ticker" class="sym-cell"></b><button class="detail-close" id="d-close">&times;</button></div>
     <div class="detail-body">
       <div class="chart-box" id="d-chart"><div class="chart-note">Loading chart&hellip;</div></div>
+      <div id="d-path" hidden></div>
       <div class="paste-zone" id="d-paste" tabindex="0">Paste a chart (Ctrl/Cmd+V) or click to choose an image &mdash; adds to this trade's Notion page</div>
       <input type="file" id="d-file" accept="image/*" hidden>
       <div class="detail-grid">
@@ -1713,6 +1852,7 @@ JOURNAL_PAGE = r"""<!doctype html>
         <div><div class="k">Cost Value <i style="color:var(--violet);font-style:normal;font-size:10px">&fnof;</i></div><div class="v" id="d-cost"></div></div>
         <div><div class="k">Initial Stop $ / % <i style="color:var(--violet);font-style:normal;font-size:10px">&fnof;</i></div><div class="v" id="d-stop"></div></div>
         <div><div class="k">PnL% / Hold Days <i style="color:var(--violet);font-style:normal;font-size:10px">&fnof;</i></div><div class="v" id="d-pnl"></div></div>
+        <div><div class="k">MFE / capture / MAE</div><div class="v" id="d-mfe">&mdash;</div></div>
         <div><a class="notion-link" id="d-notion-link" href="#" target="_blank" rel="noopener">Open this trade in Notion &rarr;</a></div>
       </div>
 
@@ -1734,6 +1874,13 @@ JOURNAL_PAGE = r"""<!doctype html>
 <script>
 let ALL_TRADES = [];
 let SCHEMA = {};
+let BT = null;         // {rules, byId}
+let BT0 = null;        // same, stops off: the pure rule-vs-you comparison
+let GRP = {};          // pageId -> {industry, rank, of, quartile}
+let insTab = "calib", insDrill = {};
+let btSort = { key: "actual", dir: -1 };
+let MFE = {};          // pageId -> {mfe, mae, capture, gaveBack, peakDate}
+let mfeSort = { key: "gaveBack", dir: -1 };
 let activeFilter = "all";
 let searchTerm = "";
 
@@ -1802,6 +1949,335 @@ function computeKpis(trades) {
 
   drawBreakdown("bd-entry", trades, "entrySetup");
   drawBreakdown("bd-exit", trades, "exitSetup");
+  drawMfe(trades);
+  drawBt(trades);
+  drawIns(trades);
+}
+
+// ---------------- Trade insights (tabs) ----------------
+document.getElementById("itabs").addEventListener("click", e => {
+  const t = e.target.closest(".itab"); if (!t) return;
+  insTab = t.dataset.p; insDrill = {};
+  document.querySelectorAll(".itab").forEach(x => x.classList.toggle("on", x === t));
+  draw();
+});
+const pp = v => v == null ? "&mdash;" : (v >= 0 ? "+" : "") + (v * 100).toFixed(1) + "%";
+const wrCol = w => w >= 0.5 ? "var(--up)" : w >= 0.3 ? "var(--warn)" : "var(--down)";
+function grpStats(list) {
+  const rated = list.filter(t => t.pnlPct != null);
+  return { n: list.length, wr: rated.length ? rated.filter(t => t.pnlPct > 0).length / rated.length : 0, avg: mean(rated.map(t => t.pnlPct)) };
+}
+function calRows(id, groups, drillTitle) {
+  // groups: [{name, list}] -> bar rows; a click opens that group's trades
+  return groups.filter(g => g.list.length).map((g, i) => {
+    const s = grpStats(g.list);
+    return '<div class="crow click' + (insDrill[id] === g.name ? " sel" : "") + '" data-d="' + id + '" data-g="' + esc(g.name) + '"><div>' + esc(g.name) + '</div>'
+      + '<div class="ctrack"><div class="cfill" style="width:' + Math.max(6, s.wr * 100) + '%;background:' + wrCol(s.wr) + '">' + (s.wr * 100).toFixed(1) + '%</div></div>'
+      + '<div class="r ' + (s.avg >= 0 ? "up" : "down") + '" style="text-align:right;font-weight:700">' + pp(s.avg) + '</div><div style="text-align:right;color:var(--dim)">' + s.n + '</div></div>';
+  }).join("");
+}
+const CAL_HD = '<div class="crow hd"><div>Group</div><div>Win rate</div><div style="text-align:right">Avg P&amp;L%</div><div style="text-align:right">Trades</div></div>';
+function tradeTable(list, extra) {
+  return '<div class="drill-scroll"><table><thead><tr><th>Ticker</th><th>Opened</th><th>Closed</th>' + (extra ? extra.head : "") + '<th class="r">P&amp;L%</th></tr></thead><tbody>'
+    + list.map(t => '<tr class="tc" data-i="' + ALL_TRADES.indexOf(t) + '"><td class="sym">' + esc(t.ticker) + '</td><td>' + fmtDate(t.dateOpened) + '</td><td>' + fmtDate(t.dateClosed) + '</td>'
+      + (extra ? extra.cells(t) : "") + '<td class="r ' + (t.pnlPct >= 0 ? "up" : "down") + '" style="font-weight:700">' + pp(t.pnlPct) + '</td></tr>').join("") + '</tbody></table></div>';
+}
+function drillBox(id, title, list, extra) {
+  if (insDrill[id] == null) return '<div class="drill" id="dr-' + id + '" hidden></div>';
+  const sorted = list.slice().sort((a, b) => b.pnlPct - a.pnlPct);
+  return '<div class="drill" id="dr-' + id + '"><h4><span>' + esc(title) + ' &mdash; ' + list.length + ' trades, best to worst</span><span class="x" data-close="' + id + '">close &times;</span></h4>' + tradeTable(sorted, extra) + '</div>';
+}
+function wireIns(pane, trades, groupsById) {
+  pane.querySelectorAll(".crow.click").forEach(r => r.onclick = () => { insDrill[r.dataset.d] = insDrill[r.dataset.d] === r.dataset.g ? null : r.dataset.g; drawIns(trades); });
+  pane.querySelectorAll("[data-close]").forEach(x => x.onclick = () => { insDrill[x.dataset.close] = null; drawIns(trades); });
+  pane.querySelectorAll("tr.tc").forEach(tr => tr.onclick = () => openDetail(ALL_TRADES[Number(tr.dataset.i)]));
+}
+function cell(v, cls) { return '<td class="r ' + (cls || "") + '">' + v + '</td>'; }
+
+function drawIns(trades) {
+  const pane = document.getElementById("ipane");
+  if (!pane) return;
+  const closed = trades.filter(t => t.dateClosed && t.pnlPct != null);
+  const core = closed.filter(t => !t.parentId);
+  if (!closed.length) { pane.innerHTML = '<div class="found">No closed trades match this filter.</div>'; return; }
+  let html = "";
+  const drillFor = (id, title, groups) => { const g = groups.find(x => x.name === insDrill[id]); return g ? drillBox(id, title + ": " + g.name, g.list) : '<div class="drill" hidden></div>'; };
+  if (insTab === "calib") {
+    const by = (key, order) => order.map(name => ({ name, list: closed.filter(t => t[key] === name) }));
+    const buy = by("buyQuality", ["Right Buy", "Marginal", "Wrong Buy"]), sell = by("sellQuality", ["Good Sell", "Marginal", "Bad Sell"]);
+    const bS = buy.map(g => grpStats(g.list)), rated = buy.reduce((s, g) => s + g.list.length, 0);
+    html += '<div class="icard"><h3>Buy Quality vs. what actually happened</h3><p class="isub">The rating you gave each entry in the moment (' + rated + ' of ' + closed.length + ' closed trades rated) against the real outcome. Click a row for the trades.</p>'
+      + CAL_HD + calRows("buy", buy) + drillFor("buy", "Buy Quality", buy);
+    if (buy[0].list.length && buy[2].list.length) {
+      const good = bS[0].wr > bS[2].wr + 0.1;
+      html += '<div class="found ' + (good ? "g" : "") + '"><b>' + (good ? "Well calibrated" : "Weak calibration") + '</b> &mdash; "Right Buy" wins ' + (bS[0].wr * 100).toFixed(0) + '% (' + pp(bS[0].avg) + ' avg) vs "Wrong Buy" ' + (bS[2].wr * 100).toFixed(0) + '% (' + pp(bS[2].avg) + '). '
+        + (good ? "Your read on entry quality holds up; the leak is elsewhere." : "Your in-the-moment rating isn't separating winners from losers yet.") + '</div>';
+    }
+    html += '</div><div class="icard"><h3>Sell Quality vs. what actually happened</h3><p class="isub">Same check for exits: Good Sell / Marginal / Bad Sell.</p>' + CAL_HD + calRows("sell", sell) + drillFor("sell", "Sell Quality", sell) + '</div>';
+    pane.innerHTML = html; wireIns(pane, trades); return;
+  }
+  if (insTab === "behav") {
+    const names = [...new Set(closed.map(t => t.exitSetup).filter(Boolean))];
+    const ex = names.map(n => ({ name: n, list: closed.filter(t => t.exitSetup === n) })).sort((a, b) => grpStats(b.list).avg - grpStats(a.list).avg);
+    const bk = [["31+ days", 31, 1e9], ["15-30 days", 15, 30], ["8-14 days", 8, 14], ["4-7 days", 4, 7], ["2-3 days", 2, 3], ["0-1 day", 0, 1]];
+    const hold = bk.map(([name, lo, hi]) => ({ name, list: core.filter(t => t.holdDays != null && t.holdDays >= lo && t.holdDays <= hi) }));
+    html += '<div class="icard"><h3>Exit setup &mdash; the real breakdown</h3><p class="isub">Which exit behaviours make money and which are the real leaks, from the Exit Setup you tagged. Sorted best to worst average. Click a row for the trades.</p>'
+      + CAL_HD + calRows("exit", ex) + drillFor("exit", "Exit", ex);
+    const worst = ex.filter(g => g.list.length >= 3).sort((a, b) => grpStats(a.list).avg - grpStats(b.list).avg)[0], best = ex.filter(g => g.list.length >= 3)[0];
+    if (worst && best) html += '<div class="found"><b>Reading it</b> &mdash; best exit behaviour: <b>' + esc(best.name) + '</b> (' + pp(grpStats(best.list).avg) + ' avg, n=' + best.list.length + '); biggest leak: <b>' + esc(worst.name) + '</b> (' + pp(grpStats(worst.list).avg) + ' avg, n=' + worst.list.length + ').</div>';
+    html += '</div><div class="icard"><h3>Hold time vs. outcome</h3><p class="isub">Closed core trades (pyramid adds excluded) bucketed by days held.</p>' + CAL_HD + calRows("hold", hold) + drillFor("hold", "Held", hold) + '</div>';
+    pane.innerHTML = html; wireIns(pane, trades); return;
+  }
+  if (insTab === "board") {
+    const map = {};
+    closed.forEach(t => { (map[t.ticker] = map[t.ticker] || []).push(t); });
+    const curs = [...new Set(closed.map(t => t.currency || "USD"))];
+    const cur = curs.includes("USD") ? "USD" : curs[0];
+    let rows = Object.keys(map).filter(k => map[k].length >= 3).map(k => {
+      const s = grpStats(map[k]);
+      return { tk: k, n: s.n, wr: s.wr, avgp: s.avg, tot: map[k].filter(t => (t.currency || "USD") === cur).reduce((a, t) => a + (t.pnl || 0), 0), list: map[k] };
+    });
+    const key = insDrill.lbKey || "n", dir = insDrill.lbDir || -1;
+    rows.sort((a, b) => key === "tk" ? dir * a.tk.localeCompare(b.tk) : dir * (a[key] - b[key]));
+    const th = (k, l, r) => '<th data-k="' + k + '"' + (r ? ' class="r"' : "") + '>' + l + (key === k ? (dir === -1 ? " ▼" : " ▲") : "") + '</th>';
+    html += '<div class="icard"><h3>Tickers you\'ve traded 3+ times</h3><p class="isub">Names you trade well repeatedly, and names you keep re-entering that keep costing you. $ totals are ' + cur + ' only (accounts in other currencies are left out, never mixed). Click a header to sort, a row for its trades.</p>'
+      + '<table class="lbt"><thead><tr>' + th("tk", "Ticker") + th("n", "Trades", 1) + th("wr", "Win %", 1) + th("avgp", "Avg P&amp;L%", 1) + th("tot", "Total " + (cur === "USD" ? "$" : cur), 1) + '</tr></thead><tbody>'
+      + (rows.length ? rows.map(r => '<tr class="tc" data-t="' + esc(r.tk) + '"><td class="sym">' + esc(r.tk) + (r.tot >= 800 ? '<span class="tagp g">works</span>' : r.tot <= -500 ? '<span class="tagp">re-fought</span>' : "") + '</td>'
+        + cell(r.n) + cell((r.wr * 100).toFixed(1) + "%") + cell(pp(r.avgp), r.avgp >= 0 ? "up" : "down") + cell(fmtMoney(r.tot, cur), r.tot >= 0 ? "up" : "down")).join("</tr>") + "</tr>" : '<tr><td colspan="5" style="color:var(--dim)">No ticker has 3+ closed trades under this filter.</td></tr>')
+      + '</tbody></table>';
+    const open = insDrill.lbOpen && map[insDrill.lbOpen];
+    if (open) html += '<div class="drill"><h4><span>' + esc(insDrill.lbOpen) + ' &mdash; ' + open.length + ' trades</span><span class="x" data-lbclose="1">close &times;</span></h4>' + tradeTable(open.slice().sort((a, b) => b.pnlPct - a.pnlPct)) + '</div>';
+    html += '</div>';
+    pane.innerHTML = html;
+    pane.querySelectorAll("th[data-k]").forEach(h => h.onclick = () => { const k = h.dataset.k; insDrill.lbDir = (insDrill.lbKey || "n") === k ? -(insDrill.lbDir || -1) : (k === "tk" ? 1 : -1); insDrill.lbKey = k; drawIns(trades); });
+    pane.querySelectorAll("table.lbt tr.tc").forEach(r => r.onclick = () => { insDrill.lbOpen = insDrill.lbOpen === r.dataset.t ? null : r.dataset.t; drawIns(trades); });
+    const lc = pane.querySelector("[data-lbclose]"); if (lc) lc.onclick = () => { insDrill.lbOpen = null; drawIns(trades); };
+    pane.querySelectorAll(".drill tr.tc").forEach(tr => tr.onclick = () => openDetail(ALL_TRADES[Number(tr.dataset.i)]));
+    return;
+  }
+  if (insTab === "group") {
+    const withG = closed.filter(t => GRP[t.pageId]);
+    const names = ["Top quartile", "2nd quartile", "3rd quartile", "Bottom quartile"];
+    const gs = names.map((name, i) => ({ name, list: withG.filter(t => GRP[t.pageId].quartile === i + 1) }));
+    const extra = { head: '<th>Industry</th><th class="r">Rank that day</th>', cells: t => '<td>' + esc(GRP[t.pageId].industry) + '</td><td class="r">#' + GRP[t.pageId].rank + ' / ' + GRP[t.pageId].of + '</td>' };
+    const g = gs.find(x => x.name === insDrill.group);
+    html += '<div class="icard"><h3>Was the group already strong when you bought?</h3><p class="isub">Each trade\'s ticker is mapped to its industry, then to that industry\'s rank on your entry date from the terminal\'s own history, and bucketed by how strong the group was (' + withG.length + ' of ' + closed.length + ' closed trades matched). Click a row for the trades.</p>'
+      + CAL_HD + calRows("group", gs) + (g ? drillBox("group", g.name, g.list, extra) : "");
+    const top = gs[0].list.length;
+    if (withG.length) html += '<div class="found"><b>How much you buy leaders</b> &mdash; ' + top + ' of ' + withG.length + ' matched trades (' + Math.round(top / withG.length * 100) + '%) were bought when the industry sat in the top quartile of rank. Compare the win rates above to see whether group strength actually separates your winners from your losers, or is a filter you already apply.</div>';
+    html += '</div>';
+    pane.innerHTML = html; wireIns(pane, trades); return;
+  }
+  if (insTab === "mfec") {
+    const rows = core.filter(t => MFE[t.pageId]);
+    if (!rows.length) { pane.innerHTML = '<div class="found">Loading price history…</div>'; return; }
+    const winners = rows.filter(t => t.pnlPct > 0), caps = winners.map(t => MFE[t.pageId].capture).filter(x => x != null);
+    const rt = rows.filter(t => MFE[t.pageId].mfe >= 0.03 && t.pnlPct < 0);
+    const wMae = winners.map(t => MFE[t.pageId].mae).sort((a, b) => a - b);
+    const med = wMae.length ? wMae[Math.floor(wMae.length / 2)] : null, deep = winners.filter(t => MFE[t.pageId].mae <= -0.05).length;
+    const tile = (k, v, sub, cls) => '<div class="kpi-tile"><div class="kpi-k">' + k + '</div><div class="kpi-v ' + (cls || "") + '">' + v + '</div><div style="font-size:11px;color:var(--dim);margin-top:2px">' + sub + '</div></div>';
+    html += '<div class="icard"><h3>Maximum Favorable Excursion &mdash; how much of the move you actually kept</h3><p class="isub">MFE is the best price each trade reached (daily high) between entry and exit, from the terminal\'s real price history. <b>Capture</b> only makes sense for winners; for losers the useful number is the <b>giveback</b>: the profit cushion that round-tripped into a loss. ' + rows.length + ' of ' + core.length + ' closed core trades have price history.</p>'
+      + '<div class="i2">' + tile("Avg capture, winners (n=" + caps.length + ")", caps.length ? Math.round(mean(caps) * 100) + "%" : "&mdash;", "Realised P&amp;L% &divide; peak MFE%. Exit price counts toward the peak.", "up")
+      + tile("Round-trippers: had 3%+ cushion, closed a loss", rt.length + " / " + rows.length + " (" + Math.round(rt.length / rows.length * 100) + "%)", "Average giveback " + (rt.length ? (mean(rt.map(t => MFE[t.pageId].gaveBack)) * 100).toFixed(1) + " points" : "&mdash;"), "down") + '</div>';
+    const names = [...new Set(rows.map(t => t.exitSetup || "— none"))];
+    const groups = names.map(n => ({ name: n, list: rows.filter(t => (t.exitSetup || "— none") === n) })).filter(g => g.list.length >= 2).sort((a, b) => b.list.length - a.list.length);
+    const AX0 = -25, AX1 = 45, pos = v => Math.max(0, Math.min(100, (v * 100 - AX0) / (AX1 - AX0) * 100));
+    html += '<div style="font-size:12.5px;font-weight:700;margin:14px 0 4px">By exit type <span style="font-weight:400;color:var(--dim);font-size:11px">peak reached vs. what you kept &mdash; click a card, then a trade</span></div>'
+      + '<div style="display:flex;gap:16px;font-size:11px;color:var(--dim);margin-bottom:8px"><span><i style="display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--violet);margin-right:5px"></i>avg peak (MFE)</span><span><i style="display:inline-block;width:10px;height:10px;border-radius:50%;background:var(--accent);margin-right:5px"></i>avg kept (actual)</span></div><div class="mgrid">'
+      + groups.map(g => {
+        const mfe = mean(g.list.map(t => MFE[t.pageId].mfe)), kept = mean(g.list.map(t => t.pnlPct)), lo = Math.min(pos(mfe), pos(kept)), hi = Math.max(pos(mfe), pos(kept));
+        return '<div class="mcard' + (insDrill.mfeG === g.name ? " sel" : "") + '" data-g="' + esc(g.name) + '"><div class="mt">' + esc(g.name) + '<span>n=' + g.list.length + '</span></div><div class="mn">peak ' + pp(mfe) + ' &middot; kept ' + pp(kept) + ' &middot; gap ' + ((mfe - kept) * 100).toFixed(1) + 'pp</div>'
+          + '<svg viewBox="0 0 100 22" width="100%" height="30"><line x1="0" x2="100" y1="11" y2="11" stroke="currentColor" stroke-opacity=".18"/><line x1="' + pos(0) + '" x2="' + pos(0) + '" y1="3" y2="19" stroke="currentColor" stroke-opacity=".35" stroke-dasharray="1.5 1.5"/>'
+          + '<line x1="' + lo + '" x2="' + hi + '" y1="11" y2="11" stroke="var(--dim)" stroke-width="2.4"/><circle cx="' + pos(mfe) + '" cy="11" r="3.4" fill="var(--violet)"/><circle cx="' + pos(kept) + '" cy="11" r="3.4" fill="var(--accent)"/></svg></div>';
+      }).join("") + '</div>';
+    const sel = groups.find(g => g.name === insDrill.mfeG);
+    if (sel) {
+      const L = sel.list.slice().sort((a, b) => MFE[b.pageId].gaveBack - MFE[a.pageId].gaveBack);
+      html += '<div class="drill"><h4><span>' + esc(sel.name) + ' &mdash; ' + L.length + ' trades, biggest gap first (click for the price path)</span><span class="x" data-mclose="1">close &times;</span></h4><div class="drill-scroll"><table><thead><tr><th>Ticker</th><th>Opened &rarr; closed</th><th class="r">Peak</th><th class="r">Worst dip</th><th class="r">Kept</th><th class="r">Left on table</th></tr></thead><tbody>'
+        + L.map(t => { const m = MFE[t.pageId]; return '<tr class="tc" data-i="' + ALL_TRADES.indexOf(t) + '"><td class="sym">' + esc(t.ticker) + '</td><td>' + fmtDate(t.dateOpened) + ' &rarr; ' + fmtDate(t.dateClosed) + '</td><td class="r up">' + pp(m.mfe) + '</td><td class="r down">' + pp(m.mae) + '</td><td class="r ' + (t.pnlPct >= 0 ? "up" : "down") + '">' + pp(t.pnlPct) + '</td><td class="r">' + (m.gaveBack * 100).toFixed(1) + 'pp</td></tr>'; }).join("") + '</tbody></table></div></div>';
+    }
+    html += '</div><div class="icard"><h3>Stop calibration &mdash; how far do your eventual winners dip first?</h3><p class="isub">Maximum Adverse Excursion (worst drawdown from entry) on the ' + winners.length + ' trades that ended as winners.</p><div class="i2">'
+      + tile("Median MAE, eventual winners", pp(med), "The typical dip before it worked", "down") + tile("Winners that were down 5%+ first", deep + " / " + winners.length + " (" + (winners.length ? Math.round(deep / winners.length * 100) : 0) + "%)", "A stop tighter than about 5% would have cut these") + '</div></div>';
+    pane.innerHTML = html;
+    pane.querySelectorAll(".mcard").forEach(c => c.onclick = () => { insDrill.mfeG = insDrill.mfeG === c.dataset.g ? null : c.dataset.g; drawIns(trades); });
+    const mc = pane.querySelector("[data-mclose]"); if (mc) mc.onclick = () => { insDrill.mfeG = null; drawIns(trades); };
+    pane.querySelectorAll("tr.tc").forEach(tr => tr.onclick = () => openDetail(ALL_TRADES[Number(tr.dataset.i)]));
+    return;
+  }
+  if (insTab === "rule") {
+    if (!BT0) { pane.innerHTML = '<div class="found">Replaying your rule on every trade…</div>'; return; }
+    const rows = core.filter(t => BT0.byId[t.pageId]).map(t => ({ t, r: BT0.byId[t.pageId].yourrule }));
+    const dayGap = (a, b) => Math.round((new Date(a) - new Date(b)) / 864e5);
+    const early = rows.filter(x => x.r.kind === "holding" || x.t.dateClosed < x.r.date), late = rows.filter(x => x.r.kind !== "holding" && x.t.dateClosed > x.r.date), same = rows.length - early.length - late.length;
+    const edge = list => list.length ? mean(list.map(x => x.t.pnlPct - x.r.pct)) : null;
+    const tile = (label, list, days, cls) => '<div class="kpi-tile"><div class="kpi-k">' + label + '</div><div class="kpi-v ' + cls + '">' + list.length + ' / ' + rows.length + ' (' + Math.round(list.length / (rows.length || 1) * 100) + '%)</div><div style="font-size:11px;color:var(--dim);margin-top:2px">Avg ' + (list.length ? Math.abs(mean(list.map(days))).toFixed(1) : "&mdash;") + ' days ' + (cls === "up" ? "early" : "late") + ' &middot; you ' + pp(mean(list.map(x => x.t.pnlPct))) + ' vs rule ' + pp(mean(list.map(x => x.r.pct))) + ' &middot; edge <b class="' + (edge(list) >= 0 ? "up" : "down") + '">' + (edge(list) == null ? "&mdash;" : (edge(list) * 100 >= 0 ? "+" : "") + (edge(list) * 100).toFixed(2) + "pp") + '</b></div></div>';
+    html += '<div class="icard"><h3>Your stated sell rule, simulated against every trade</h3><p class="isub">Your rule: two closes below the 20 EMA, or a close below the 50 EMA. It is run day by day from each real entry (no stop applied) to find the date it would have fired, then compared with what you did. ' + rows.length + ' closed core trades.</p><div class="i2">'
+      + tile("Sold BEFORE the rule would've fired", early, x => dayGap(x.r.date, x.t.dateClosed), "up") + tile("Held PAST where the rule would've fired", late, x => dayGap(x.t.dateClosed, x.r.date), "down") + '</div>'
+      + '<div class="found ' + (edge(early) >= 0 ? "g" : "") + '"><b>Direct answer</b> &mdash; ' + Math.round(early.length / (rows.length || 1) * 100) + '% of the time you exit earlier than the rule ' + (edge(early) >= 0 ? "and that discretion is net positive" : "and that discretion has cost you") + ' (' + (edge(early) == null ? "&mdash;" : (edge(early) * 100 >= 0 ? "+" : "") + (edge(early) * 100).toFixed(2) + "pp") + '). In the ' + Math.round(late.length / (rows.length || 1) * 100) + '% where you held past it the effect is ' + (edge(late) == null ? "&mdash;" : (edge(late) * 100 >= 0 ? "+" : "") + (edge(late) * 100).toFixed(2) + "pp") + '. ' + same + ' trades exited on the rule\'s own day.</div></div>';
+    pane.innerHTML = html; return;
+  }
+}
+
+function drawBt(trades) {
+  const rt = document.getElementById("bt-rules"), tt = document.getElementById("bt-table");
+  if (!BT) { rt.innerHTML = '<tbody><tr><td style="color:var(--dim)">Replaying trades\u2026</td></tr></tbody>'; tt.innerHTML = ""; return; }
+  const rows = trades.filter(t => t.dateClosed && BT.byId[t.pageId] && t.pnlPct != null);
+  if (!rows.length) { rt.innerHTML = '<tbody><tr><td style="color:var(--dim)">No closed trades match this filter.</td></tr></tbody>'; tt.innerHTML = ""; return; }
+  const curs = [...new Set(rows.map(t => t.currency || "USD"))];
+  const dollars = (fn) => curs.length === 1 ? fmtMoney(rows.reduce((s, t) => s + fn(t) * (t.costValue || 0), 0), curs[0]) : "&mdash;";
+  const cls = v => v == null ? "" : v >= 0 ? "win" : "lose";
+  const stat = (get) => {
+    const v = rows.map(get), w = v.filter(x => x > 0);
+    return { avg: mean(v), wr: w.length / v.length };
+  };
+  const act = stat(t => t.pnlPct);
+  const line = (name, get, isActual) => {
+    const s = stat(get), diff = isActual ? null : s.avg - act.avg;
+    const beat = isActual ? null : rows.filter(t => get(t) > t.pnlPct).length;
+    return '<tr' + (isActual ? ' style="font-weight:700"' : "") + '><td>' + name + '</td>'
+      + '<td class="r ' + cls(s.avg) + '">' + fmtPct(s.avg) + '</td>'
+      + '<td class="r">' + Math.round(s.wr * 100) + '%</td>'
+      + '<td class="r ' + cls(diff) + '">' + (isActual ? "&mdash;" : fmtPct(diff)) + '</td>'
+      + '<td class="r">' + (isActual ? "&mdash;" : beat + " / " + rows.length) + '</td>'
+      + '<td class="r ' + cls(isActual ? 1 : diff) + '">' + (isActual ? dollars(t => t.pnlPct) : dollars(t => get(t) - t.pnlPct)) + '</td></tr>';
+  };
+  rt.innerHTML = '<thead><tr><th>Exit</th><th class="r">Avg P&L%</th><th class="r">Win %</th><th class="r">vs your exits (avg)</th><th class="r">Beat your exit</th>'
+    + '<th class="r">' + (curs.length === 1 ? "$ (on cost value)" : "$ (filter to one account)") + '</th></tr></thead><tbody>'
+    + line("Your actual exits (" + rows.length + " trades)", t => t.pnlPct, true)
+    + BT.rules.map(r => line('<span title="' + esc(r.desc) + '">' + esc(r.label) + '</span>', t => BT.byId[t.pageId][r.key].pct, false)).join("") + '</tbody>';
+
+  const val = (t, k) => k === "ticker" ? (t.ticker || "") : k === "dateClosed" ? t.dateClosed : k === "actual" ? t.pnlPct : BT.byId[t.pageId][k].pct;
+  const sorted = rows.slice().sort((a, b) => {
+    const av = val(a, btSort.key), bv = val(b, btSort.key);
+    return typeof av === "string" ? btSort.dir * av.localeCompare(bv) : btSort.dir * (av - bv);
+  });
+  const th = (k, label, r) => '<th data-bk="' + k + '"' + (r ? ' class="r"' : "") + ' style="cursor:pointer">' + label + (btSort.key === k ? (btSort.dir === -1 ? " \u25BC" : " \u25B2") : "") + '</th>';
+  tt.innerHTML = '<thead><tr>' + th("ticker", "Ticker") + th("dateClosed", "Closed") + th("actual", "Yours", 1)
+    + BT.rules.map(r => th(r.key, esc(r.label), 1)).join("") + '</tr></thead><tbody>'
+    + sorted.slice(0, 300).map(t => {
+      const b = BT.byId[t.pageId];
+      return '<tr class="clickable" data-i="' + ALL_TRADES.indexOf(t) + '"><td class="sym"><span class="sym-cell">' + jlogo(t.ticker, t.logoid, 16) + esc(t.ticker) + '</span></td><td>' + fmtDate(t.dateClosed) + '</td>'
+        + '<td class="r ' + cls(t.pnlPct) + '">' + fmtPct(t.pnlPct) + '</td>'
+        + BT.rules.map(r => {
+          const x = b[r.key];
+          return '<td class="r ' + cls(x.pct) + '" title="' + (x.kind === "stop" ? "stopped out " : x.kind === "holding" ? "never fired; marked to latest close " : "exit ") + x.date + '">' + fmtPct(x.pct) + (x.kind === "stop" ? ' <span style="color:var(--dim)">S</span>' : x.kind === "holding" ? ' <span style="color:var(--dim)">H</span>' : "") + '</td>';
+        }).join("") + '</tr>';
+    }).join("") + '</tbody>';
+  tt.querySelectorAll("th[data-bk]").forEach(h => h.onclick = () => {
+    const k = h.dataset.bk;
+    if (btSort.key === k) btSort.dir *= -1; else { btSort.key = k; btSort.dir = -1; }
+    drawBt(trades);
+  });
+  tt.querySelectorAll("tr.clickable").forEach(tr => tr.onclick = () => openDetail(ALL_TRADES[Number(tr.dataset.i)]));
+}
+
+function loadBt0() {
+  fetch("/api/journal/backtest?stop=0").then(r => r.json()).then(d => {
+    if (!d.trades) return;
+    BT0 = { rules: d.rules, byId: {} };
+    d.trades.forEach(x => { BT0.byId[x.pageId] = x.results; });
+    draw();
+  }).catch(() => {});
+}
+function loadGroups() {
+  fetch("/api/journal/group").then(r => r.json()).then(rows => {
+    if (!Array.isArray(rows)) return;
+    rows.forEach(r => { GRP[r.pageId] = r; });
+    draw();
+  }).catch(() => {});
+}
+
+function loadBacktest() {
+  const stop = document.getElementById("bt-stop").checked ? 1 : 0;
+  BT = null; draw();
+  fetch("/api/journal/backtest?stop=" + stop).then(r => r.json()).then(d => {
+    if (!d.trades) return;
+    BT = { rules: d.rules, byId: {} };
+    d.trades.forEach(x => { BT.byId[x.pageId] = x.results; });
+    draw();
+  }).catch(() => {});
+}
+document.getElementById("bt-stop").addEventListener("change", loadBacktest);
+
+function drawMfe(trades) {
+  const rows = trades.filter(t => t.dateClosed && MFE[t.pageId]).map(t => ({ t, m: MFE[t.pageId] }));
+  const tiles = document.getElementById("mfe-tiles"), table = document.getElementById("mfe-table");
+  if (!rows.length) {
+    tiles.innerHTML = "";
+    table.innerHTML = '<tbody><tr><td style="color:var(--dim)">' + (Object.keys(MFE).length ? "No closed trades match this filter." : "Loading price history\u2026") + '</td></tr></tbody>';
+    return;
+  }
+  const winners = rows.filter(r => r.t.pnlPct != null && r.t.pnlPct > 0);
+  const caps = winners.map(r => r.m.capture).filter(x => x != null);
+  const tile = (k, v, cls) => '<div class="kpi-tile"><div class="kpi-k">' + k + '</div><div class="kpi-v ' + (cls || "") + '">' + v + '</div></div>';
+  const avgCap = mean(caps);
+  tiles.innerHTML =
+      tile("Avg MFE (all closed)", fmtPct(mean(rows.map(r => r.m.mfe))), "up")
+    + tile("Avg capture (winners)", avgCap == null ? "&mdash;" : Math.round(avgCap * 100) + "%")
+    + tile("Avg given back (winners)", fmtPct(mean(winners.map(r => r.m.gaveBack).filter(x => x != null))), "down")
+    + tile("Avg MAE", fmtPct(mean(rows.map(r => r.m.mae))), "down");
+  const val = r => mfeSort.key === "ticker" ? (r.t.ticker || "")
+                 : mfeSort.key === "pnlPct" ? r.t.pnlPct
+                 : mfeSort.key === "dateClosed" ? r.t.dateClosed : r.m[mfeSort.key];
+  rows.sort((a, b) => {
+    const av = val(a), bv = val(b);
+    if (av == null && bv == null) return 0;
+    if (av == null) return 1;
+    if (bv == null) return -1;
+    return typeof av === "string" ? mfeSort.dir * av.localeCompare(bv) : mfeSort.dir * (av - bv);
+  });
+  const th = (k, label, r) => '<th data-mk="' + k + '"' + (r ? ' class="r"' : "") + ' style="cursor:pointer">' + label
+    + (mfeSort.key === k ? (mfeSort.dir === -1 ? " \u25BC" : " \u25B2") : "") + '</th>';
+  table.innerHTML = '<thead><tr>' + th("ticker", "Ticker") + th("dateClosed", "Closed")
+    + th("pnlPct", "P&L%", 1) + th("mfe", "MFE", 1) + th("capture", "Capture", 1)
+    + th("gaveBack", "Gave back", 1) + th("mae", "MAE", 1) + '<th>Peak on</th></tr></thead><tbody>'
+    + rows.slice(0, 300).map(r => {
+      const c = r.m.capture, w = c == null ? 0 : Math.max(0, Math.min(1, c)) * 100;
+      return '<tr class="clickable" data-i="' + ALL_TRADES.indexOf(r.t) + '"><td class="sym"><span class="sym-cell">' + jlogo(r.t.ticker, r.t.logoid, 16) + esc(r.t.ticker) + '</span></td>'
+        + '<td>' + fmtDate(r.t.dateClosed) + '</td>'
+        + '<td class="r ' + (r.t.pnlPct == null ? "" : r.t.pnlPct >= 0 ? "win" : "lose") + '">' + fmtPct(r.t.pnlPct) + '</td>'
+        + '<td class="r">' + fmtPct(r.m.mfe) + '</td>'
+        + '<td class="r"><div style="display:flex;align-items:center;gap:8px;justify-content:flex-end"><span>' + (c == null ? "&mdash;" : Math.round(c * 100) + "%") + '</span><span class="mfe-bar"><i class="' + (c != null && c < 0.5 ? "low" : "") + '" style="width:' + w + '%"></i></span></div></td>'
+        + '<td class="r">' + fmtPct(r.m.gaveBack) + '</td>'
+        + '<td class="r">' + fmtPct(r.m.mae) + '</td>'
+        + '<td>' + fmtDate(r.m.peakDate) + '</td></tr>';
+    }).join("") + '</tbody>';
+  table.querySelectorAll("th[data-mk]").forEach(h => h.onclick = () => {
+    const k = h.dataset.mk;
+    if (mfeSort.key === k) mfeSort.dir *= -1; else { mfeSort.key = k; mfeSort.dir = -1; }
+    drawMfe(trades);
+  });
+  table.querySelectorAll("tr.clickable").forEach(tr => tr.onclick = () => openDetail(ALL_TRADES[Number(tr.dataset.i)]));
+}
+
+let pathChart = null;
+function drawPath(t) {
+  const box = document.getElementById("d-path");
+  if (pathChart) { pathChart.remove(); pathChart = null; }
+  box.hidden = true;
+  if (!t.dateClosed || !t.dateOpened || !window.LightweightCharts) return;
+  fetch("/api/journal/path?country=" + encodeURIComponent(t.country || "US") + "&symbol=" + encodeURIComponent(t.ticker || "")
+        + "&from=" + t.dateOpened + "&to=" + t.dateClosed).then(r => r.json()).then(d => {
+    if (!d.candles || currentTrade !== t) return;
+    box.hidden = false;
+    const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+    pathChart = LightweightCharts.createChart(box, { width: box.clientWidth, height: 190,
+      layout: { background: { color: "transparent" }, textColor: css("--dim"), fontSize: 10 },
+      grid: { vertLines: { color: css("--line") }, horzLines: { color: css("--line") } },
+      rightPriceScale: { borderColor: css("--line") }, timeScale: { borderColor: css("--line") } });
+    const s = pathChart.addCandlestickSeries({ upColor: css("--up"), downColor: css("--down"),
+      borderUpColor: css("--up"), borderDownColor: css("--down"), wickUpColor: css("--up"), wickDownColor: css("--down") });
+    s.setData(d.candles);
+    if (t.entryPrice) s.createPriceLine({ price: t.entryPrice, color: css("--accent"), lineWidth: 1, lineStyle: 2, title: "entry" });
+    if (t.exitPrice) s.createPriceLine({ price: t.exitPrice, color: css("--warn"), lineWidth: 1, lineStyle: 2, title: "exit" });
+    const m = MFE[t.pageId];
+    if (m) s.createPriceLine({ price: m.peak, color: css("--up"), lineWidth: 1, lineStyle: 2, title: "peak" });
+    const marks = [{ time: t.dateOpened, position: "belowBar", color: css("--accent"), shape: "arrowUp", text: "in" },
+                   { time: t.dateClosed, position: "aboveBar", color: css("--warn"), shape: "arrowDown", text: "out" }]
+      .filter(x => d.candles.some(c => c.time === x.time));
+    s.setMarkers(marks);
+    pathChart.timeScale().fitContent();
+  }).catch(() => {});
 }
 
 function drawBreakdown(elId, trades, key) {
@@ -1956,6 +2432,11 @@ function openDetail(t) {
   document.getElementById("d-stop").innerHTML = fmtMoney(t.initialStop, t.currency) + " / " + fmtPct(t.initialStopPct);
   document.getElementById("d-pnl").innerHTML = fmtPct(t.pnlPct) + " / " + (t.holdDays ?? "&mdash;") + "d";
   document.getElementById("d-notion-link").href = t.notionUrl || "#";
+  const m = MFE[t.pageId];
+  document.getElementById("d-mfe").innerHTML = m
+    ? fmtPct(m.mfe) + " / " + (m.capture == null ? "&mdash;" : Math.round(m.capture * 100) + "%") + " / " + fmtPct(m.mae)
+    : "&mdash;";
+  drawPath(t);
   fillSelect("d-entrysetup", SCHEMA["Entry Setup"] || [], t.entrySetup);
   fillSelect("d-exitsetup", SCHEMA["Exit Setup"] || [], t.exitSetup);
   fillSelect("d-buyquality", SCHEMA["Buy Quality"] || [], t.buyQuality);
@@ -2176,6 +2657,14 @@ function loadJournal() {
       }));
     }
     draw();
+    fetch("/api/journal/mfe").then(r => r.json()).then(rows => {
+      if (!Array.isArray(rows)) return;
+      rows.forEach(r => { MFE[r.pageId] = r; });
+      draw();
+    }).catch(() => {});
+    loadBacktest();
+    loadBt0();
+    loadGroups();
   }).catch(err => {
     const el = document.getElementById("load-err");
     el.hidden = false;
@@ -3928,6 +4417,9 @@ def _hub_nav_json():
             return {"label": entry["label"], "children": [
                 {"label": c["label"], "url": prefix + c["path"],
                  "note": c.get("note", "")} for c in entry["children"]]}
+        if entry.get("native"):
+            return {"label": entry["label"], "url": entry["native"] + "?country=" + cfg.get("short", "US"),
+                    "scoped": False}
         return {"label": entry["label"], "url": prefix + entry["path"]}
 
     countries = []
@@ -4522,6 +5014,26 @@ if (!restored) {
   else go(first.url, first.label, undefined, first.label);
 }
 refreshNav();
+
+// Native pages (Market Environment) live inside the frame and cannot call go()
+// themselves; they post {hubGo: "<panel label>"} and the hub navigates.
+window.addEventListener("message", e => {
+  if (e.origin !== location.origin || !e.data || !e.data.hubGo) return;
+  const item = topLevelItems().find(p => p.label === e.data.hubGo);
+  if (!item) return;
+  if (item.children) openGroup(item);
+  else go(item.url, item.label, item.scoped, item.label);
+  refreshNav();
+  // A landing-page click can say which stretch of an index to shade; hand it to
+  // each frame once it has loaded (the frames are new, so wait for their load).
+  if (Array.isArray(e.data.focus) && item.children) {
+    document.querySelectorAll("#stack-wrap iframe").forEach(f => {
+      const send = () => { try { f.contentWindow.postMessage({mbtFocus: e.data.focus}, location.origin); } catch (err) {} };
+      f.addEventListener("load", send);
+      setTimeout(send, 1500);
+    });
+  }
+});
 </script>
 </body></html>"""
 

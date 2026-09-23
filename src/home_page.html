@@ -1,0 +1,424 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Market Environment</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600;700&display=swap">
+<script src="/docs/vendor/lightweight-charts.js"></script>
+<style>
+  :root { --bg:#f5f6f8; --panel:#fff; --text:#1a1d24; --dim:#6b7280; --line:#e2e5ea;
+    --up:#16a34a; --down:#dc2626; --warn:#ca8a04; --violet:#7c3aed; --accent:#2563eb; --teal:#0d9488;
+    --up-a:rgba(22,163,74,.12); --down-a:rgba(220,38,38,.12); --accent-a:rgba(37,99,235,.08); --warn-a:rgba(202,138,4,.10); --violet-a:rgba(124,58,237,.08); --teal-a:rgba(13,148,136,.10); }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+    --bg:#10131a; --panel:#171b24; --text:#e7e9ee; --dim:#9096a3; --line:#262b36;
+    --up:#2ecc71; --down:#f0554b; --warn:#facc15; --violet:#a78bfa; --accent:#5b9dff; --teal:#2dd4bf;
+    --up-a:rgba(46,204,113,.14); --down-a:rgba(240,85,75,.14); --accent-a:rgba(91,157,255,.09); --warn-a:rgba(250,204,21,.10); --violet-a:rgba(167,139,250,.09); --teal-a:rgba(45,212,191,.10); } }
+  :root[data-theme="dark"] {
+    --bg:#10131a; --panel:#171b24; --text:#e7e9ee; --dim:#9096a3; --line:#262b36;
+    --up:#2ecc71; --down:#f0554b; --warn:#facc15; --violet:#a78bfa; --accent:#5b9dff; --teal:#2dd4bf;
+    --up-a:rgba(46,204,113,.14); --down-a:rgba(240,85,75,.14); --accent-a:rgba(91,157,255,.09); --warn-a:rgba(250,204,21,.10); --violet-a:rgba(167,139,250,.09); --teal-a:rgba(45,212,191,.10); }
+  * { box-sizing:border-box; } html,body { margin:0; }
+  body { background:var(--bg); color:var(--text); font:14px/1.45 "IBM Plex Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
+  .mono,.num { font-family:"IBM Plex Mono",ui-monospace,Consolas,monospace; font-variant-numeric:tabular-nums; }
+  .wrap { max-width:1240px; margin:0 auto; padding:22px 24px 60px; }
+  .up { color:var(--up); } .down { color:var(--down); } .dim { color:var(--dim); }
+  .topbar { display:flex; justify-content:flex-end; margin-bottom:10px; }
+  .kbtn { display:inline-flex; align-items:center; gap:7px; font:600 12px inherit; font-family:inherit; color:var(--dim); background:var(--panel); border:1px solid var(--line); border-radius:9px; padding:8px 13px; cursor:pointer; }
+  .kbtn:hover { border-color:var(--accent); color:var(--accent); }
+  .kbtn kbd { font:700 10px "IBM Plex Mono",monospace; background:var(--bg); border:1px solid var(--line); border-radius:4px; padding:1px 5px; }
+  .brief { border-radius:14px; padding:17px 20px; margin-bottom:18px; border:1px solid color-mix(in srgb,var(--accent) 30%,var(--line)); background:linear-gradient(135deg,var(--accent-a),var(--violet-a) 60%,var(--panel) 100%); }
+  .brief .row { display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; margin-bottom:11px; align-items:baseline; }
+  .brief .eyebrow { font:700 10.5px inherit; font-family:inherit; text-transform:uppercase; letter-spacing:.06em; color:var(--accent); display:flex; align-items:center; gap:7px; }
+  .brief .dot { width:6px; height:6px; border-radius:50%; background:var(--up); box-shadow:0 0 0 3px var(--up-a); }
+  .brief .date { font-size:11.5px; color:var(--dim); font-weight:600; }
+  .brief ul { list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:8px; max-width:900px; }
+  .brief li { display:flex; gap:9px; font-size:14px; cursor:pointer; padding:4px 6px; margin:-4px -6px; border-radius:8px; }
+  .brief li:hover { background:color-mix(in srgb,var(--panel) 60%,transparent); }
+  .layout { display:grid; grid-template-columns:1fr 340px; gap:18px; align-items:start; }
+  @media (max-width:980px){ .layout{grid-template-columns:1fr;} }
+  .left { min-width:0; } .right { position:sticky; top:12px; }
+  .lbl { font:700 11px inherit; font-family:inherit; text-transform:uppercase; letter-spacing:.05em; color:var(--dim); margin:20px 0 10px; }
+  .lbl:first-child { margin-top:0; }
+  .grid2 { display:grid; grid-template-columns:repeat(2,1fr); gap:12px; margin-bottom:12px; }
+  @media (max-width:640px){ .grid2{grid-template-columns:1fr;} }
+  .pcard { border-radius:13px; padding:14px 15px; cursor:pointer; transition:transform .12s, box-shadow .12s; border:1px solid var(--line); position:relative; }
+  .pcard:hover { transform:translateY(-2px); box-shadow:0 8px 20px rgba(0,0,0,.10); }
+  .pcard.breadth { background:var(--accent-a); border-color:color-mix(in srgb,var(--accent) 30%,var(--line)); }
+  .pcard.signals { background:var(--teal-a); border-color:color-mix(in srgb,var(--teal) 30%,var(--line)); }
+  .pcard.portfolio { background:var(--violet-a); border-color:color-mix(in srgb,var(--violet) 30%,var(--line)); }
+  .eyebrow3 { font:700 10px inherit; font-family:inherit; text-transform:uppercase; letter-spacing:.04em; display:flex; align-items:center; gap:6px; }
+  .breadth .eyebrow3 { color:var(--accent); } .signals .eyebrow3 { color:var(--teal); } .portfolio .eyebrow3 { color:var(--violet); }
+  .pv { font-size:19px; font-weight:700; margin-top:6px; } .psub { font-size:11px; color:var(--dim); margin-top:2px; }
+  .pcard.compact { display:flex; align-items:center; justify-content:space-between; }
+  .pcard.compact .pv { font-size:16px; margin-top:4px; }
+  .ema { display:flex; gap:4px; margin-top:6px; flex-wrap:wrap; }
+  .ema span { font:700 9px inherit; font-family:inherit; padding:1px 5px; border-radius:4px; border:1px solid; } .ema .g { color:var(--up); border-color:var(--up); } .ema .r { color:var(--down); border-color:var(--down); }
+  .wide { border-radius:13px; padding:16px 18px; border:1px solid color-mix(in srgb,var(--accent) 30%,var(--line)); background:var(--accent-a); margin-bottom:12px; }
+  .wide .top { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; margin-bottom:10px; }
+  .wide .name { font-weight:700; font-size:14px; } .wide .sub { font-size:11px; color:var(--dim); }
+  .logo { width:26px; height:26px; border-radius:7px; background:#444; display:inline-flex; align-items:center; justify-content:center; font:700 9px inherit; font-family:inherit; color:#fff; overflow:hidden; flex:none; }
+  .logo img { width:100%; height:100%; object-fit:contain; }
+  .scr-layout { display:grid; grid-template-columns:1.6fr 1fr; gap:16px; } @media (max-width:860px){ .scr-layout{grid-template-columns:1fr;} }
+  .box { background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:8px 10px 4px; }
+  .box .ml { font:700 10px inherit; font-family:inherit; color:var(--dim); text-transform:uppercase; letter-spacing:.03em; margin-bottom:4px; display:flex; justify-content:space-between; }
+  .legend { display:flex; gap:12px; font-size:10px; color:var(--dim); padding:4px 2px; } .legend i { width:10px; height:2px; display:inline-block; margin-right:4px; vertical-align:middle; }
+  table.pt { width:100%; border-collapse:collapse; font-size:12px; } .pt th { text-align:left; font:700 9.5px inherit; font-family:inherit; color:var(--dim); text-transform:uppercase; padding:5px 6px; border-bottom:1px solid var(--line); } .pt td { padding:6px; border-bottom:1px solid var(--line); } .pt .r { text-align:right; }
+  .tick-in { font:600 12px "IBM Plex Mono",monospace; width:84px; padding:6px 9px; border-radius:8px; border:1px solid var(--line); background:var(--panel); color:var(--text); text-transform:uppercase; }
+  .tick-in:focus { outline:none; border-color:var(--accent); }
+  .mf-row { display:grid; grid-template-columns:38px 1fr 1fr; gap:6px; align-items:center; margin-top:8px; font-size:10px; } .mf-row .w { color:var(--dim); font-weight:600; }
+  .bar { height:9px; border-radius:5px; background:var(--line); overflow:hidden; } .bar i { display:block; height:100%; } .bar .hi { background:var(--up); } .bar .lo { background:var(--down); }
+  .mf-c { font-size:9px; color:var(--dim); text-align:right; }
+  .seg { display:inline-flex; border:1px solid var(--line); border-radius:8px; overflow:hidden; } .seg button { font:600 11.5px inherit; font-family:inherit; padding:6px 11px; border:none; background:var(--panel); color:var(--dim); cursor:pointer; } .seg button.on { background:var(--accent); color:#fff; }
+  .hero { display:flex; align-items:center; gap:14px; margin:12px 0 14px; }
+  .badge { font-size:18px; font-weight:700; padding:9px 14px; border-radius:11px; } .badge.up { background:var(--up-a); color:var(--up); } .badge.down { background:var(--down-a); color:var(--down); }
+  .age { font-size:12px; color:var(--dim); } .age b { color:var(--text); font-size:14px; }
+  .ribbon { display:flex; height:32px; border-radius:8px; overflow:hidden; margin-bottom:8px; }
+  .rs { position:relative; display:flex; align-items:center; justify-content:center; font:700 9.5px inherit; font-family:inherit; color:#fff; cursor:pointer; } .rs.up { background:var(--up); } .rs.down { background:var(--down); } .rs.sel { outline:2px solid var(--text); outline-offset:-2px; }
+  .rs .tip { position:absolute; bottom:120%; left:50%; transform:translateX(-50%); background:var(--text); color:var(--bg); font-size:10.5px; padding:5px 9px; border-radius:6px; white-space:nowrap; opacity:0; pointer-events:none; z-index:5; } .rs:hover .tip { opacity:1; }
+  .rlabels { display:flex; justify-content:space-between; font-size:10px; color:var(--dim); margin-bottom:12px; }
+  .detail { background:var(--bg); border:1px solid var(--line); border-radius:10px; padding:12px 14px; margin-bottom:12px; }
+  .detail .h { display:flex; justify-content:space-between; margin-bottom:8px; } .detail .g { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; font-size:12px; }
+  .detail .k { color:var(--dim); font-size:10.5px; text-transform:uppercase; } .detail .v { font-weight:700; margin-top:2px; } .detail .n { font-size:11px; color:var(--dim); margin-top:9px; padding-top:9px; border-top:1px solid var(--line); }
+  .go { font-size:11px; font-weight:700; color:var(--accent); margin-top:9px; }
+  .prev { background:var(--warn-a); border:1px solid color-mix(in srgb,var(--warn) 40%,var(--line)); border-radius:10px; padding:11px 14px; } .prev .t { font:700 11px inherit; font-family:inherit; color:var(--warn); text-transform:uppercase; } .prev .v { font-size:14px; font-weight:700; margin-top:4px; } .prev .s { font-size:11.5px; color:var(--dim); margin-top:2px; }
+  .card { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px 18px; }
+  .card h2 { font-size:14px; margin:0 0 3px; } .card .sub { color:var(--dim); font-size:12px; margin:0 0 12px; }
+  .lrow { display:grid; grid-template-columns:1fr auto; gap:8px; padding:5px 0; font-size:12.5px; }
+  .link { cursor:pointer; border-bottom:1px dashed color-mix(in srgb,var(--accent) 55%,transparent); } .link:hover { color:var(--accent); }
+  .ch { font-size:12.5px; font-weight:700; margin:12px 0 6px; }
+  .acct { display:flex; align-items:center; gap:7px; font-size:11px; border-top:1px solid var(--line); margin-top:7px; padding-top:7px; } .acct:first-child { border-top:none; margin-top:0; padding-top:0; }
+  .acct b { font-family:"IBM Plex Mono",monospace; } .acct .n { font-weight:700; width:56px; } .acct .warn { color:var(--warn); } .acct .down { color:var(--down); }
+  .eyebtn { width:22px; height:22px; border-radius:5px; border:1px solid var(--line); background:var(--panel); color:var(--dim); cursor:pointer; font-size:11px; }
+  .blur { filter:blur(6px); user-select:none; }
+  .err { font-size:11.5px; color:var(--dim); padding:8px 0; }
+  .cmdk { position:fixed; inset:0; background:rgba(10,12,18,.55); display:none; align-items:flex-start; justify-content:center; padding-top:12vh; z-index:100; } .cmdk.open { display:flex; }
+  .cmdk .box2 { width:100%; max-width:540px; background:var(--panel); border:1px solid var(--line); border-radius:14px; box-shadow:0 24px 60px rgba(0,0,0,.35); overflow:hidden; }
+  .cmdk input { width:100%; border:none; border-bottom:1px solid var(--line); background:transparent; color:var(--text); font:15px inherit; font-family:inherit; padding:14px 16px; } .cmdk input:focus { outline:none; }
+  .cmdk .list { max-height:320px; overflow-y:auto; padding:6px; } .cmdk .it { padding:10px 11px; border-radius:8px; cursor:pointer; font-size:13px; } .cmdk .it.sel { background:var(--accent-a); } .cmdk .it small { color:var(--dim); margin-left:8px; }
+</style></head>
+<body>
+<div class="wrap">
+  <div class="topbar"><button class="kbtn" id="cmdkBtn">Jump anywhere <kbd id="kbd">Ctrl K</kbd></button></div>
+
+  <div class="brief"><div class="row"><div class="eyebrow"><span class="dot"></span>Morning brief &middot; from your data</div><div class="date" id="briefDate"></div></div><ul id="briefList"><li class="dim">Loading&hellip;</li></ul></div>
+
+  <div class="layout">
+    <div class="left">
+      <div class="lbl">Market Breadth</div>
+      <div class="grid2" id="topRow"></div>
+      <div id="mfWrap"></div>
+      <div class="wide" id="cardScreener"></div>
+      <div class="wide" id="cardTracker" hidden></div>
+      <div class="wide" id="cardRatio" hidden></div>
+      <div class="lbl">Signals &amp; Portfolio</div>
+      <div class="grid2" id="sigRow"></div>
+      <div class="grid2" id="pfRow"></div>
+    </div>
+    <div class="right">
+      <div class="card">
+        <h2>Trend strength over time</h2><div class="sub">Raw daily reading (faint), 10-day smoothed on top.</div>
+        <div class="seg" id="rangeSeg"><button data-n="5">1W</button><button data-n="21">1M</button><button data-n="63" class="on">3M</button><button data-n="126">6M</button><button data-n="0">YTD</button></div>
+        <div id="trendCv" style="height:190px;margin-top:10px"></div>
+        <div class="seg" id="lbSeg" style="margin-top:14px"><button data-k="1w" class="on">1 week</button><button data-k="1m">1 month</button></div>
+        <div id="leaders"></div>
+      </div>
+    </div>
+  </div>
+</div>
+<div class="cmdk" id="cmdk"><div class="box2"><input id="cmdkIn" placeholder="Jump to a panel, or type a ticker and press Enter" autocomplete="off"><div class="list" id="cmdkList"></div></div></div>
+
+<script>
+(function(){
+const P = new URLSearchParams(location.search);
+const COUNTRY = P.get("country") || "US";
+const $ = id => document.getElementById(id);
+const esc = s => { const d=document.createElement("div"); d.textContent=s==null?"":String(s); return d.innerHTML; };
+const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+const pct = (n, d=1) => (n>=0?"+":"") + n.toFixed(d) + "%";
+const money = n => (n<0?"-":"") + "$" + Math.abs(n).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2});
+// Pages run inside the hub's iframe; navigation is a request to the hub.
+// The stretch each index is in right now, so the Trend card lands on it shaded.
+function currentStretches(){
+  const tt = (H && H.trendTracker) || {};
+  return Object.keys(tt).filter(k => tt[k].segments && tt[k].segments.length).map(k => { const s = tt[k].segments[tt[k].segments.length-1]; return {key:k, start:s.start, end:s.end, type:s.type}; });
+}
+function go(label, focus){ try { window.parent.postMessage({hubGo: label, focus: focus}, location.origin); } catch(e){} }
+function scrollTo(id){ const el=$(id); if (el) el.scrollIntoView({behavior:"smooth", block:"center"}); }
+async function api(path){ try { const r = await fetch(path); return await r.json(); } catch(e){ return {error:String(e)}; } }
+
+let H = null, BOOK = null, TICKER = null;
+const TRACK = {idx:null, sel:null, segs:[]};
+
+// ---------- cards ----------
+function renderTop(){
+  const e = H.environment; if (e.error) { $("topRow").innerHTML = '<div class="err">Market data unavailable: '+esc(e.error)+'</div>'; return; }
+  const t = e.trend, pi = t.perIndex || {}, part = e.participation || {}, lead = ((e.leaders||{})["1w"]||{}).sectors||{};
+  const names = {nasdaq:"NDX", sp500:"SPX", russell2000:"RUT", nifty500:"N500", niftymidcap150:"MID", niftysmallcap250:"SML", sensex:"SENSEX"};
+  const emaRows = Object.keys(pi).map(k => '<div class="ema">'+["above_ema10","above_ema20","above_ema50"].map((f,i)=>'<span class="'+(pi[k][f]?"g":"r")+'">'+(i?"":(names[k]||k)+" ")+[10,20,50][i]+'</span>').join("")+'</div>').join("");
+  const bull = (e.overall||"").toLowerCase() === "bullish";
+  const partLbl = (part.label||"").toLowerCase();
+  $("topRow").innerHTML =
+    '<div class="pcard breadth" data-go="Indices"><div class="eyebrow3">Trend &middot; Indices</div><div class="pv '+(bull?"up":"down")+'">'+esc(cap(e.overall||"n/a"))+' &middot; '+t.favourable+'/'+t.total+'</div><div class="psub">index vs EMA 10/20/50, large caps '+t.largeCapFavourable+'/'+t.largeCapTotal+'</div>'+emaRows+'</div>'+
+    '<div class="pcard breadth" data-go="Sector &amp; Industry"><div class="eyebrow3">Sector &amp; Industry</div><div class="pv '+(partLbl==="bullish"?"up":"down")+'">'+esc(cap(part.label||"n/a"))+' &middot; '+(part.sectors_positive!=null?part.sectors_positive+'/'+part.sectors_total:"—")+'</div><div class="psub">Participation &middot; '+(part.industries_positive!=null?part.industries_positive+'/'+part.industries_total+' industries, '+part.industries_positive_pct+'%':"")+'</div>'+
+    (lead.top&&lead.top[0]?'<div class="psub" style="margin-top:8px">1W leader: <b style="color:var(--text)">'+esc(lead.top[0].name)+'</b> '+pct(lead.top[0].chg,2)+'</div>':'')+
+    (lead.bottom&&lead.bottom[0]?'<div class="psub">1W laggard: <b style="color:var(--text)">'+esc(lead.bottom[0].name)+'</b> '+pct(lead.bottom[0].chg,2)+'</div>':'')+'</div>';
+}
+function cap(s){ return s.charAt(0).toUpperCase()+s.slice(1); }
+
+function renderMF(){
+  const m = H.moneyFlows;
+  if (!m || m.error || !m.windows) { $("mfWrap").innerHTML = ""; return; }
+  const W = m.windows;
+  if (!["w13","w26","w52"].some(w => W[w].hi.count || W[w].lo.count)) { $("mfWrap").innerHTML = ""; return; }
+  const mx = Math.max(...["w13","w26","w52"].map(w => Math.max(W[w].hi.count, W[w].lo.count)), 1);
+  const short = s => s ? s.replace("Electronic Technology","Elec. Tech").replace("Health Technology","Health Tech") : "—";
+  const row = (lab, w) => '<div class="mf-row"><div class="w">'+lab+'</div><div class="bar"><i class="hi" style="width:'+Math.max(4,W[w].hi.count/mx*100)+'%"></i></div><div class="bar"><i class="lo" style="width:'+Math.max(4,W[w].lo.count/mx*100)+'%"></i></div></div>'+
+    '<div class="mf-row" style="margin-top:-4px"><div></div><div class="mf-c up">'+W[w].hi.count+' highs ('+esc(short(W[w].hi.leadSector))+')</div><div class="mf-c down">'+W[w].lo.count+' lows ('+esc(short(W[w].lo.leadSector))+')</div></div>';
+  const los = ["w13","w26","w52"].map(w => W[w].lo.leadSector), sameLo = los.every(x => x && x===los[0]);
+  $("mfWrap").innerHTML = '<div class="wide" id="cardMF" style="cursor:pointer"><div class="eyebrow3" style="color:var(--accent)">Money Flows <span class="up" style="font-size:9.5px;background:var(--up-a);padding:1px 7px;border-radius:99px;margin-left:6px">S&amp;P 500</span></div>'+
+    '<div class="pv up">'+W.w13.hi.count+' highs <span class="down">/ '+W.w13.lo.count+' lows</span> <span style="font-size:12px;font-weight:500;color:var(--dim)">13-week window</span></div>'+
+    '<div class="psub">Distinct S&amp;P 500 names over the last '+m.sessions+' sessions &middot; worst group: '+esc(los[0]||"—")+(sameLo?" in every window":"")+'</div><div style="max-width:480px">'+row("13w","w13")+row("26w","w26")+row("52w","w52")+'</div></div>';
+  $("cardMF").onclick = () => go("Money Flows");
+}
+
+function renderScreener(){
+  const T = TICKER, el = $("cardScreener");
+  const head = '<div class="top"><div style="display:flex;align-items:center;gap:9px">'+
+    (T&&!T.error?'<span class="logo"><img src="https://s3-symbol-logo.tradingview.com/'+esc(T.logoid||"")+'.svg" onerror="this.replaceWith(document.createTextNode(\''+esc(T.symbol.slice(0,2))+'\'))"></span>':'')+
+    '<div><div class="name link" id="scrGo">'+(T&&!T.error?esc(T.symbol)+' &middot; '+esc(T.industry||T.sector||"")+' &rarr;':'Screener')+'</div><div class="sub">last viewed here &middot; type a ticker to change</div></div></div>'+
+    '<input class="tick-in" id="tickIn" placeholder="Ticker" maxlength="12"></div>';
+  if (!T || T.error) { el.innerHTML = head + '<div class="err">'+esc(T?T.error:"Loading…")+'</div>'; wireTicker(); return; }
+  el.innerHTML = head + '<div class="scr-layout"><div class="box"><div class="ml"><span>Price</span><span class="mono" id="cLast"></span></div><div id="candle" style="height:220px"></div><div class="legend"><span><i style="background:#f0b429"></i>EMA 10</span><span><i style="background:#8b5cf6"></i>EMA 20</span><span><i style="background:#38bdf8"></i>EMA 50</span></div></div>'+
+    '<div><div class="box" style="margin-bottom:10px"><div class="ml"><span>RS vs '+esc(T.benchmark)+' (10d vs 30d avg of RS line; green = gaining)</span><span id="rsTag"></span></div><div id="rsCv" style="height:150px"></div></div>'+
+    '<table class="pt"><thead><tr><th>Window</th><th class="r">'+esc(T.symbol)+'</th><th class="r">'+esc(T.benchmark)+'</th><th class="r">Relative</th></tr></thead><tbody>'+
+    T.relative.map(r=>'<tr><td>'+r.window+'</td><td class="r num">'+pct(r.stock)+'</td><td class="r num dim">'+pct(r.bench)+'</td><td class="r num '+(r.rel>=0?"up":"down")+'" style="font-weight:700">'+(r.rel>=0?"+":"")+r.rel.toFixed(1)+'pp</td></tr>').join("")+'</tbody></table></div></div>';
+  $("scrGo").onclick = () => go("Screener");
+  wireTicker(); drawCandles(); drawRs();
+  $("cLast").textContent = T.close[T.close.length-1].toFixed(2)+" as of "+T.dates[T.dates.length-1];
+}
+function wireTicker(){
+  const inp = $("tickIn"); if (!inp) return;
+  inp.addEventListener("keydown", e => { if (e.key==="Enter" && inp.value.trim()) setTicker(inp.value.trim()); });
+}
+async function setTicker(sym){
+  const t = await api("/api/home/ticker?country="+COUNTRY+"&symbol="+encodeURIComponent(sym));
+  if (t.error) { TICKER = t; renderScreener(); return; }
+  try { localStorage.setItem("home-ticker", t.symbol); } catch(e){}
+  TICKER = t; renderScreener(); renderBrief();
+}
+let candleChart = null;
+function drawCandles(){
+  const T = TICKER, el = $("candle"); if (!window.LightweightCharts || !el) return;
+  if (candleChart) { try { candleChart.remove(); } catch(e){} }
+  candleChart = LightweightCharts.createChart(el, {width:el.clientWidth, height:220,
+    layout:{background:{color:"transparent"}, textColor:css("--dim"), fontFamily:"IBM Plex Mono, monospace", fontSize:10},
+    grid:{vertLines:{color:css("--line")}, horzLines:{color:css("--line")}}, rightPriceScale:{borderColor:css("--line")}, timeScale:{borderColor:css("--line")}, crosshair:{mode:0}});
+  const s = candleChart.addCandlestickSeries({upColor:css("--up"), downColor:css("--down"), borderUpColor:css("--up"), borderDownColor:css("--down"), wickUpColor:css("--up"), wickDownColor:css("--down")});
+  s.setData(T.dates.map((d,i)=>({time:d, open:T.open[i], high:T.high[i], low:T.low[i], close:T.close[i]})));
+  [["ema10","#f0b429"],["ema20","#8b5cf6"],["ema50","#38bdf8"]].forEach(([k,c]) => { const l = candleChart.addLineSeries({color:c, lineWidth:1.3, priceLineVisible:false, lastValueVisible:false, crosshairMarkerVisible:false}); l.setData(T.dates.map((d,i)=>({time:d, value:T[k][i]}))); });
+  candleChart.timeScale().fitContent();
+  new ResizeObserver(en => { if (candleChart) candleChart.applyOptions({width:en[0].contentRect.width}); }).observe(el);
+}
+let rsChart = null;
+function ema(a, n){ const k = 2/(n+1); const o = []; a.forEach((v,i) => o.push(i ? v*k + o[i-1]*(1-k) : v)); return o; }
+function chartOpts(el, h){
+  return {width:el.clientWidth, height:h, layout:{background:{color:"transparent"}, textColor:css("--dim"), fontFamily:"IBM Plex Mono, monospace", fontSize:10},
+    grid:{vertLines:{color:css("--line")}, horzLines:{color:css("--line")}}, rightPriceScale:{borderColor:css("--line")}, timeScale:{borderColor:css("--line"), timeVisible:false}, crosshair:{mode:0}};
+}
+// Same construction as the Stock lookup page: RS line = stock / benchmark, then the
+// distance of its 10-day average from its 30-day average, so zero is where the
+// colour flips and +4% means the same thing on every ticker.
+function drawRs(){
+  const T = TICKER, el = $("rsCv"); if (!el || !window.LightweightCharts) return;
+  if (rsChart) { try { rsChart.remove(); } catch(e){} rsChart = null; }
+  const valid = T.rs.map(v => v == null ? 100 : v), fast = ema(valid, 10), slow = ema(valid, 30);
+  rsChart = LightweightCharts.createChart(el, chartOpts(el, 150));
+  const up = css("--up"), dn = css("--down");
+  const ser = rsChart.addBaselineSeries({baseValue:{type:"price", price:0}, topLineColor:up, topFillColor1:"rgba(22,163,74,0.45)", topFillColor2:"rgba(22,163,74,0.04)",
+    bottomLineColor:dn, bottomFillColor1:"rgba(220,38,38,0.04)", bottomFillColor2:"rgba(220,38,38,0.45)", lineWidth:2, priceLineVisible:false, lastValueVisible:false,
+    priceFormat:{type:"custom", formatter:v => (v>=0?"+":"")+v.toFixed(1)+"%"}});
+  ser.setData(T.dates.map((d,i) => T.rs[i] == null ? {time:d} : {time:d, value:(fast[i]/slow[i]-1)*100}));
+  rsChart.timeScale().fitContent();
+  if (candleChart) {   // keep both panes on the same dates
+    let lock = false;
+    const link = (a, b) => a.timeScale().subscribeVisibleLogicalRangeChange(r => { if (lock || !r) return; lock = true; b.timeScale().setVisibleLogicalRange(r); lock = false; });
+    link(candleChart, rsChart); link(rsChart, candleChart);
+  }
+  const rising = fast[fast.length-1] > slow[slow.length-1], tag = $("rsTag");
+  tag.textContent = rising ? "▲ gaining" : "▼ losing ground"; tag.style.color = rising ? up : dn; tag.style.fontWeight = 700;
+  new ResizeObserver(en => { if (rsChart) rsChart.applyOptions({width:en[0].contentRect.width}); }).observe(el);
+}
+
+// ---------- trend tracker ----------
+const TL = {up:"Uptrend", down:"Downtrend"};
+function renderTracker(){
+  const tt = H.trendTracker, el = $("cardTracker"), keys = Object.keys(tt||{}).filter(k => tt[k].segments && tt[k].segments.length);
+  if (!keys.length) { el.hidden = true; return; }
+  el.hidden = false;
+  if (!TRACK.idx || !tt[TRACK.idx]) TRACK.idx = keys[0];
+  el.innerHTML = '<div class="top"><div><div class="name" id="trTitle"></div><div class="sub">2 closes above/below the 20 EMA &middot; a break needs the second close lower than the first &middot; below the 200 EMA is never an uptrend</div></div><div class="seg" id="idxSeg">'+
+    keys.map(k => '<button data-k="'+k+'"'+(k===TRACK.idx?' class="on"':"")+'>'+esc(tt[k].label.replace("NASDAQ Composite","NASDAQ").replace("Russell 2000","Russell"))+'</button>').join("")+'</div></div>'+
+    '<div class="hero"><div class="badge" id="trBadge"></div><div class="age" id="trAge"></div></div><div class="ribbon" id="ribbon"></div><div class="rlabels"><span id="rStart"></span><span>most recent &rarr; click any bar</span></div><div class="detail" id="trDetail" hidden></div><div class="prev" id="trPrev"></div>';
+  $("idxSeg").onclick = e => { const b = e.target.closest("button"); if (!b) return; TRACK.idx = b.dataset.k; renderTracker(); };
+  drawTracker();
+}
+function drawTracker(){
+  const d = H.trendTracker[TRACK.idx], segs = d.segments, cur = segs[segs.length-1], asOf = new Date(d.asOf), start = new Date(cur.start);
+  const age = Math.round((Date.now() - start)/864e5);
+  $("trTitle").textContent = "Trend Tracker — " + d.label;
+  const b = $("trBadge"); b.className = "badge " + cur.type; b.textContent = (cur.type==="up"?"▲ ":"▼ ") + TL[cur.type];
+  $("trAge").innerHTML = 'Since <b>'+cur.start+'</b><br><b>'+age+'</b> day'+(age===1?"":"s")+' old';
+  TRACK.segs = segs.map(s => { const a = new Date(s.start), z = new Date(s===cur ? Date.now() : s.end); return Object.assign({}, s, {dur:Math.max(1, Math.round((z-a)/864e5))}); });
+  const tot = TRACK.segs.reduce((a,s)=>a+s.dur,0);
+  $("ribbon").innerHTML = TRACK.segs.map((s,i)=>'<div class="rs '+s.type+'" data-i="'+i+'" style="width:'+(s.dur/tot*100).toFixed(2)+'%">'+(s.dur>=5?s.dur+"d":"")+'<span class="tip">'+TL[s.type]+' · '+s.start+' → '+s.end+' ('+s.dur+'d) — click for detail</span></div>').join("");
+  $("rStart").textContent = TRACK.segs[0].start; TRACK.sel = null; $("trDetail").hidden = true;
+  $("ribbon").onclick = e => { const el = e.target.closest(".rs"); if (el) onSeg(+el.dataset.i, el); };
+  const win = new Date(start); win.setDate(win.getDate()-30);
+  const prior = segs.slice(0,-1).filter(s => new Date(s.start) >= win), pv = $("trPrev");
+  if (prior.length >= 2) { const a = prior[0].start, z = prior[prior.length-1].end; pv.innerHTML = '<div class="t">Previous stretch — choppy</div><div class="v">'+a+' → '+z+' <span class="dim" style="font-weight:400">('+Math.round((new Date(z)-new Date(a))/864e5)+' days)</span></div><div class="s">'+prior.length+' trend flips inside 30 days — no clean direction</div>'; }
+  else if (prior.length === 1) { const p = prior[0]; pv.innerHTML = '<div class="t">Previous trend</div><div class="v">'+TL[p.type]+' · '+Math.round((new Date(p.end)-new Date(p.start))/864e5)+' days</div><div class="s">'+p.start+' → '+p.end+'</div>'; }
+  else pv.innerHTML = '<div class="t">Previous trend</div><div class="v dim">Outside the 30-day lookback</div>';
+}
+function onSeg(i, el){
+  if (TRACK.sel === i) { const s = TRACK.segs[i]; go("Indices", [{key:TRACK.idx, start:s.start, end:s.end, type:s.type}]); return; }
+  TRACK.sel = i; document.querySelectorAll(".rs").forEach(x => x.classList.remove("sel")); el.classList.add("sel");
+  const s = TRACK.segs[i], p = (s.c1/s.c0-1)*100, ok = (s.type==="up"&&p>=0) || (s.type==="down"&&p<=0), d = $("trDetail"); d.hidden = false;
+  d.innerHTML = '<div class="h"><b>'+s.start+' → '+s.end+'</b><span class="'+(s.type==="up"?"up":"down")+'" style="font-weight:700">'+TL[s.type]+' state</span></div><div class="g"><div><div class="k">Duration</div><div class="v">'+s.dur+' days</div></div><div><div class="k">Close on '+s.start+'</div><div class="v mono">'+s.c0.toFixed(0)+'</div></div><div><div class="k">Close on '+s.end+'</div><div class="v mono">'+s.c1.toFixed(0)+'</div></div></div><div class="g" style="margin-top:8px"><div><div class="k">Net change</div><div class="v '+(p>=0?"up":"down")+'">'+pct(p,2)+'</div></div></div>'+
+    '<div class="n">'+(ok?'Price moved '+(p>=0?"up":"down")+' through this whole state, consistent with a clean '+TL[s.type].toLowerCase()+'.':'Net price moved the <i>opposite</i> way of the label — normal for a state defined by the 20 EMA relationship, not raw direction.')+'</div><div class="go">Click this bar again to open Indices &rarr;</div>';
+}
+
+// ---------- QQQ / SPY ----------
+function renderRatio(){
+  const r = H.qqqSpy, el = $("cardRatio");
+  if (!r || r.error || !r.dates) { el.hidden = true; return; }
+  el.hidden = false;
+  const n = r.close.length, last = r.close[n-1], w = (last/r.close[n-6]-1)*100;
+  el.innerHTML = '<div class="top"><div><div class="name">QQQ / SPY — who\'s leading</div><div class="sub">Rising = Nasdaq/growth leading; falling = S&amp;P/broad market leading</div></div><div class="sub"><b class="mono" style="color:var(--text);font-size:13px">'+last.toFixed(4)+'</b> <span class="'+(w>=0?"up":"down")+'">'+pct(w,2)+' 1W</span></div></div><div id="ratioC" style="height:200px"></div><div class="legend"><span><i style="background:#f0b429"></i>EMA 10</span><span><i style="background:#8b5cf6"></i>EMA 20</span><span><i style="background:#38bdf8"></i>EMA 50</span></div>';
+  if (!window.LightweightCharts) return;
+  const box = $("ratioC"), ch = LightweightCharts.createChart(box, {width:box.clientWidth, height:200, layout:{background:{color:"transparent"}, textColor:css("--dim"), fontFamily:"IBM Plex Mono, monospace", fontSize:10}, grid:{vertLines:{color:css("--line")}, horzLines:{color:css("--line")}}, rightPriceScale:{borderColor:css("--line")}, timeScale:{borderColor:css("--line")}, crosshair:{mode:0}});
+  const s = ch.addCandlestickSeries({upColor:css("--up"), downColor:css("--down"), borderUpColor:css("--up"), borderDownColor:css("--down"), wickUpColor:css("--up"), wickDownColor:css("--down")});
+  s.setData(r.dates.map((d,i)=>({time:d, open:r.open[i], high:r.high[i], low:r.low[i], close:r.close[i]})));
+  [["ema10","#f0b429"],["ema20","#8b5cf6"],["ema50","#38bdf8"]].forEach(([k,c]) => { const l = ch.addLineSeries({color:c, lineWidth:1.3, priceLineVisible:false, lastValueVisible:false, crosshairMarkerVisible:false}); l.setData(r.dates.map((d,i)=>({time:d, value:r[k][i]}))); });
+  ch.timeScale().fitContent(); new ResizeObserver(en => ch.applyOptions({width:en[0].contentRect.width})).observe(box);
+}
+
+// ---------- signals / portfolio ----------
+function renderRows(){
+  $("sigRow").innerHTML = '<div class="pcard signals compact" data-go="Signals"><div><div class="eyebrow3">Signals</div><div class="pv">Open</div></div><span class="dim">&rarr;</span></div><div class="pcard portfolio compact" data-go="Setups"><div><div class="eyebrow3">Setups</div><div class="pv">Open</div></div><span class="dim">&rarr;</span></div>';
+  const b = BOOK && BOOK.risk, riskLoading = !BOOK || BOOK.risk === undefined, hidden = (() => { try { return localStorage.getItem("home-hide-pnl") !== "0"; } catch(e){ return true; } })();
+  let lp = '<div class="eyebrow3">Live Portfolio <span class="dim" style="font-weight:400;font-size:9px">NG-IBKR</span></div>';
+  if (riskLoading) lp += '<div class="err">Loading&hellip;</div>';
+  else if (!b || b.error) lp += '<div class="err">Unavailable: '+esc(b?b.error:"")+'</div>';
+  else lp += '<div style="display:flex;align-items:center;gap:8px;margin-top:6px"><div class="pv '+(b.unrealized>=0?"up":"down")+(hidden?" blur":"")+'" id="lpU" style="margin-top:0">'+(b.unrealized>=0?"+":"")+money(b.unrealized)+' <span style="font-size:12px;font-weight:500">('+pct(b.unrealizedPct,2)+')</span></div><button class="eyebtn" id="lpEye" title="Show / hide">&#128065;</button></div><div class="psub">Unrealized &middot; '+(hidden?"click the eye to reveal":"click the eye to hide")+'</div>'+
+    '<div style="margin-top:10px;padding-top:9px;border-top:1px solid var(--line)"><div class="psub" style="font-weight:700;color:var(--text);font-size:11px">Value at risk, if every stop hits</div><div class="pv down" style="font-size:16px;margin-top:3px">&minus;'+money(b.riskToStops)+' <span style="font-size:11px;font-weight:500;color:var(--dim)">('+(b.riskPctOfBook==null?"—":b.riskPctOfBook.toFixed(1))+'% of book)</span></div><div class="psub" style="color:var(--warn)">Only '+b.positionsWithStop+' of '+b.positions+' positions have a real stop logged &mdash; the other '+(100-(b.bookCoveredByStopPct||0)).toFixed(0)+'% of the book isn\'t covered by this number</div></div>';
+  let tj = '<div class="eyebrow3">Trade Journal</div>';
+  const j = BOOK && BOOK.journal;
+  if (!BOOK || BOOK.journal === undefined) tj += '<div class="err">Loading&hellip;</div>';
+  else if (!j || j.error) tj += '<div class="err">Unavailable: '+esc(j?j.error:"")+'</div>';
+  else { tj += '<div class="pv" style="margin-top:4px">'+j.pending+' <span style="font-size:12px;font-weight:500;color:var(--dim)">need a chart or thesis</span></div>'; const NAME = {"NG-IBKR":"IBKR"};
+    Object.keys(j.accounts).forEach(k => { const a = j.accounts[k]; tj += '<div class="acct"><span class="n">'+esc(NAME[k]||k)+'</span><span><b>'+a.open+'</b> open</span><span class="warn"><b>'+a.pending+'</b> need chart/thesis</span><span class="down"><b>'+a.noSetup+'</b> no setup</span></div>'; }); }
+  $("pfRow").innerHTML = '<div class="pcard portfolio" id="cardLP" data-go="Live Portfolio">'+lp+'</div><div class="pcard portfolio" id="cardTJ" data-go="Trade Journal">'+tj+'</div>';
+  const eye = $("lpEye"); if (eye) eye.onclick = e => { e.stopPropagation(); try { localStorage.setItem("home-hide-pnl", hidden ? "0" : "1"); } catch(x){} renderRows(); };
+}
+
+// ---------- trend chart + leaders ----------
+let RANGE = 63, LB = "1w";
+let trendChart = null, trendRaw = null, trendSm = null;
+function drawTrend(){
+  const e = H.environment; if (e.error) return;
+  const el = $("trendCv"); if (!el || !window.LightweightCharts) return;
+  let s = e.series.filter(x => x.v != null);
+  if (RANGE) s = s.slice(-RANGE); else { const y = new Date().getFullYear()+"-01-01"; s = s.filter(x => x.d >= y); }
+  if (s.length < 2) return;
+  const raw = s.map(x => x.v), tot = e.trend.total || 9;
+  const sm = raw.map((_,i) => { const a = raw.slice(Math.max(0,i-9), i+1); return a.reduce((p,q)=>p+q,0)/a.length; });
+  if (!trendChart) {
+    trendChart = LightweightCharts.createChart(el, chartOpts(el, 190));
+    const fixed = () => ({priceRange:{minValue:0, maxValue:tot}});
+    trendRaw = trendChart.addLineSeries({color:css("--dim"), lineWidth:1, priceLineVisible:false, lastValueVisible:false, crosshairMarkerVisible:false, autoscaleInfoProvider:fixed});
+    trendSm = trendChart.addLineSeries({color:css("--accent"), lineWidth:3, priceLineVisible:false, autoscaleInfoProvider:fixed, priceFormat:{type:"custom", formatter:v => v.toFixed(1)+" / "+tot}});
+    [[0,"weak"],[tot/3,""],[tot*2/3,"strong"]].forEach(([v,t]) => trendSm.createPriceLine({price:v, color:css("--line"), lineWidth:1, lineStyle:2, axisLabelVisible:true, title:t}));
+    trendSm.createPriceLine({price:tot, color:css("--line"), lineWidth:1, lineStyle:2, axisLabelVisible:true, title:""});
+    new ResizeObserver(en => { if (trendChart) trendChart.applyOptions({width:en[0].contentRect.width}); }).observe(el);
+  }
+  trendRaw.setData(s.map((x,i) => ({time:x.d, value:raw[i]})));
+  trendSm.setData(s.map((x,i) => ({time:x.d, value:sm[i]})));
+  trendChart.timeScale().fitContent();
+}
+function drawLeaders(){
+  const L = ((H.environment||{}).leaders||{})[LB]; if (!L) { $("leaders").innerHTML = ""; return; }
+  const list = (title, arr, cls) => '<div class="ch" style="'+(cls==="down"?"color:var(--down)":"")+'">'+title+'</div>'+(arr||[]).map(r => '<div class="lrow"><span class="link" data-go="Sector &amp; Industry">'+esc(r.name)+'</span><span class="num '+cls+'">'+pct(r.chg,2)+'</span></div>').join("");
+  $("leaders").innerHTML = list("Sector leaders", L.sectors.top, "up")+list("Sector laggards", L.sectors.bottom, "down")+list("Industry leaders", L.industries.top, "up")+list("Industry laggards", L.industries.bottom, "down");
+}
+
+// ---------- morning brief: every line is derived from the data above ----------
+function renderBrief(){
+  const items = [], e = H.environment, m = H.moneyFlows;
+  if (e && !e.error) {
+    const t = e.trend, part = e.participation || {};
+    items.push(["Trend", '<b>'+esc(cap(e.overall||""))+'</b> — trend '+t.favourable+'/'+t.total+(part.sectors_positive!=null?', but only <b>'+part.sectors_positive+'/'+part.sectors_total+' sectors</b> and '+part.industries_positive_pct+'% of industries are participating.':'.'), "topRow"]);
+    const L = e.leaders||{}, s1 = L["1m"]&&L["1m"].sectors.top[0], i1 = L["1w"]&&L["1w"].industries.top[0];
+    if (s1 && i1) items.push(["Leading", '<b>Leading the tape:</b> '+esc(s1.name)+' (sector, '+pct(s1.chg)+' 1M) and <b>'+esc(i1.name)+'</b> (industry, '+pct(i1.chg)+' 1W).', "topRow"]);
+  }
+  if (m && m.windows) { const los = ["w13","w26","w52"].map(w => m.windows[w].lo.leadSector); if (los.every(x => x && x===los[0])) items.push(["Weak", '<b>'+esc(los[0])+'</b> has the most S&amp;P 500 new lows in <b>every</b> window (13w, 26w, 52w).', "mfWrap"]); else items.push(["Weak", 'Most new lows: <b>'+esc(los[0]||"—")+'</b> (13w), <b>'+esc(los[1]||"—")+'</b> (26w), <b>'+esc(los[2]||"—")+'</b> (52w).', "mfWrap"]); }
+  const b = BOOK && BOOK.risk;
+  if (b && !b.error) items.push(["Book", 'Book is <b class="'+(b.unrealized>=0?"up":"down")+'">'+(b.unrealized>=0?"+":"")+money(b.unrealized)+' unrealized ('+pct(b.unrealizedPct)+')</b>, but only '+b.positionsWithStop+' of '+b.positions+' open positions carry a real stop — <b>'+(100-(b.bookCoveredByStopPct||0)).toFixed(0)+'% of the book has no defined exit</b>.', "cardLP"]);
+  const T = TICKER;
+  if (T && !T.error && T.rs.filter(x=>x!=null).length > 21) { const a = T.rs.filter(x=>x!=null), up = a[a.length-1] > a[a.length-21], r6 = T.relative.find(r=>r.window==="6M"), r3 = T.relative.find(r=>r.window==="3M");
+    items.push(["RS", "<b>"+esc(T.symbol)+"'s RS line is "+(up?"rising":"falling")+"</b>"+(r6?" — "+(r6.rel>=0?"+":"")+r6.rel.toFixed(1)+"pp vs "+esc(T.benchmark)+" over 6 months":"")+(r3?", "+(r3.rel>=0?"+":"")+r3.rel.toFixed(1)+"pp over the last 3.":"."), "cardScreener"]); }
+  const j = BOOK && BOOK.journal;
+  if (j && !j.error) Object.keys(j.accounts).forEach(k => { const a = j.accounts[k]; if (a.open > 0 && a.noSetup === a.open) items.push(["Journal", '<b>'+esc(k)+': '+a.open+' of '+a.open+'</b> open trades are missing an entry setup.', "cardTJ"]); });
+  $("briefList").innerHTML = items.map(i => '<li data-scroll="'+i[2]+'"><span>&bull;</span><span>'+i[1]+'</span></li>').join("") || '<li class="dim">No data yet.</li>';
+  const asOf = e && e.asOf ? new Date(e.asOf+"T00:00:00") : null;
+  $("briefDate").textContent = asOf ? "Data as of " + asOf.toLocaleDateString(undefined,{weekday:"long",year:"numeric",month:"long",day:"numeric"}) : "";
+}
+
+// ---------- command palette ----------
+const PANELS = ["Indices","Sector & Industry","Money Flows","Screener","Signals","Live Portfolio","Trade Journal","Setups","Market Replay","Stock Lookup"];
+let cmdSel = 0, cmdItems = [];
+function cmdRender(){
+  const q = $("cmdkIn").value.trim(); cmdItems = PANELS.filter(p => !q || p.toLowerCase().includes(q.toLowerCase())).map(p => ({label:p, panel:p}));
+  if (/^[A-Za-z][A-Za-z0-9.-]{0,9}$/.test(q)) cmdItems.push({label:"Show "+q.toUpperCase()+" on the Screener card", ticker:q});
+  if (cmdSel >= cmdItems.length) cmdSel = 0;
+  $("cmdkList").innerHTML = cmdItems.map((c,i) => '<div class="it'+(i===cmdSel?" sel":"")+'" data-i="'+i+'">'+esc(c.label)+'</div>').join("") || '<div class="it dim">No matches</div>';
+}
+function cmdChoose(i){ const c = cmdItems[i]; if (!c) return; $("cmdk").classList.remove("open"); if (c.panel) go(c.panel); else if (c.ticker) setTicker(c.ticker); }
+function cmdOpen(){ $("cmdk").classList.add("open"); $("cmdkIn").value = ""; cmdSel = 0; cmdRender(); setTimeout(() => $("cmdkIn").focus(), 30); }
+$("cmdkBtn").onclick = cmdOpen;
+$("kbd").textContent = /Mac/.test(navigator.platform) ? "⌘ K" : "Ctrl K";
+$("cmdk").addEventListener("click", e => { if (e.target === $("cmdk")) $("cmdk").classList.remove("open"); else { const it = e.target.closest(".it"); if (it && it.dataset.i != null) cmdChoose(+it.dataset.i); } });
+$("cmdkIn").addEventListener("input", () => { cmdSel = 0; cmdRender(); });
+document.addEventListener("keydown", e => {
+  if ((e.ctrlKey||e.metaKey) && e.key.toLowerCase()==="k") { e.preventDefault(); $("cmdk").classList.contains("open") ? $("cmdk").classList.remove("open") : cmdOpen(); return; }
+  if (!$("cmdk").classList.contains("open")) return;
+  if (e.key==="Escape") $("cmdk").classList.remove("open");
+  else if (e.key==="ArrowDown") { e.preventDefault(); cmdSel = Math.min(cmdItems.length-1, cmdSel+1); cmdRender(); }
+  else if (e.key==="ArrowUp") { e.preventDefault(); cmdSel = Math.max(0, cmdSel-1); cmdRender(); }
+  else if (e.key==="Enter") { e.preventDefault(); cmdChoose(cmdSel); }
+});
+
+// ---------- wiring ----------
+document.addEventListener("click", e => {
+  const g = e.target.closest("[data-go]"); if (g) { const lbl = g.dataset.go.replace(/&amp;/g,"&"); go(lbl, lbl === "Indices" ? currentStretches() : undefined); return; }
+  const s = e.target.closest("[data-scroll]"); if (s) scrollTo(s.dataset.scroll);
+});
+$("rangeSeg").onclick = e => { const b = e.target.closest("button"); if (!b) return; document.querySelectorAll("#rangeSeg button").forEach(x=>x.classList.remove("on")); b.classList.add("on"); RANGE = +b.dataset.n; drawTrend(); };
+$("lbSeg").onclick = e => { const b = e.target.closest("button"); if (!b) return; document.querySelectorAll("#lbSeg button").forEach(x=>x.classList.remove("on")); b.classList.add("on"); LB = b.dataset.k; drawLeaders(); };
+
+async function boot(){
+  H = await api("/api/home?country="+COUNTRY);
+  if (H.error) { $("briefList").innerHTML = '<li class="down">Could not load market data: '+esc(H.error)+'</li>'; return; }
+  renderTop(); renderMF(); renderTracker(); renderRatio(); drawTrend(); drawLeaders(); renderRows(); renderBrief();
+  let sym = null; try { sym = localStorage.getItem("home-ticker"); } catch(e){}
+  BOOK = {};
+  const riskP = api("/api/home/book?part=risk").then(r => { BOOK.risk = r.risk; renderRows(); renderBrief(); return r; });
+  const jourP = api("/api/home/book?part=journal").then(r => { BOOK.journal = r.journal; renderRows(); renderBrief(); });
+  if (!sym) { const r = await riskP; sym = (r.risk && r.risk.lastTicker) || "AAPL"; }
+  TICKER = await api("/api/home/ticker?country="+COUNTRY+"&symbol="+encodeURIComponent(sym));
+  renderScreener(); renderBrief();
+  await Promise.all([riskP, jourP]);
+}
+boot();
+})();
+</script></body></html>
