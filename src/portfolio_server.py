@@ -108,6 +108,8 @@ HUB_PANELS = [
     # reachable by direct URL, since it may still be embedded in Notion —
     # this only removes it from the hub's own navigation.
     {"label": "Screener", "path": "panel-screener.html"},
+    # Native (hub-only): scans the local price files, so it is not published.
+    {"label": "Movers", "native": "/movers"},
     {"label": "Market Replay", "path": "panel-replay.html"},
     {"label": "Stock Lookup", "path": "panel-stock.html"},
 ]
@@ -131,6 +133,7 @@ SYSTEM_PANELS = [
     {"label": "Data Freshness", "path": "panel-freshness.html"},
 ]
 
+MOVERS_PAGE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "movers_page.html")
 HOME_PAGE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "home_page.html")
 OUTPUT_DIR = os.path.join(os.path.dirname(config.ROOT_DIR), "Portfolio Local")
 STOPS_FILE = os.path.join(OUTPUT_DIR, "stops.json")
@@ -1026,6 +1029,32 @@ class Handler(BaseHTTPRequestHandler):
         if route.path in ("/", "/index.html"):
             page = HUB_PAGE.replace("%%NAV_JSON%%", _hub_nav_json())
             self._send(200, page, "text/html; charset=utf-8")
+            return
+        if route.path == "/movers":
+            with open(MOVERS_PAGE_FILE, encoding="utf-8") as f:
+                self._send(200, f.read(), "text/html; charset=utf-8")
+            return
+        if route.path == "/api/movers/sectors":
+            import movers
+            q = parse_qs(route.query)
+            code = (q.get("country") or ["US"])[0].upper()
+            self._send(200, json.dumps(movers.sectors(code if code in config.COUNTRIES else "US")),
+                       "application/json")
+            return
+        if route.path == "/api/movers":
+            import movers
+            q = parse_qs(route.query)
+            g = lambda k, d="": (q.get(k) or [d])[0]
+            code = g("country", "US").upper()
+            code = code if code in config.COUNTRIES else "US"
+            try:
+                picked = [s for s in g("sectors").split("|") if s] or None
+                res = movers.scan(code, int(float(g("days", "21"))), float(g("pct", "20")),
+                                  g("dir", "up") if g("dir", "up") in ("up", "down", "either") else "up",
+                                  picked, float(g("minPrice", "0")), float(g("minDv", "0")) * 1e6, g("unclassified") == "1")
+                self._send(200, json.dumps(res), "application/json")
+            except ValueError as error:
+                self._send(400, json.dumps({"error": str(error)}), "application/json")
             return
         if route.path == "/home":
             # Read per request so edits to the page show up on reload.
@@ -4576,6 +4605,8 @@ def main():
     # what each half of this actually does and why it is safe to automate.
     threading.Thread(target=_sync_loop, args=(log,), daemon=True).start()
 
+    import movers
+    threading.Thread(target=movers.warm, daemon=True).start()   # build the Movers table in the background
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     url = f"http://{HOST}:{PORT}/"
     log(f"  serving {url}")
@@ -4847,6 +4878,8 @@ const ICONS = {
     + '<path d="M7 17v-6"/><path d="M12 17v-10"/><path d="M17 17v-3"/>'),
   "Hi/Lo Counts & Screener": icon('<polyline points="17 11 12 6 7 11"/>'
     + '<polyline points="7 13 12 18 17 13"/>'),
+  "Movers": icon('<polyline points="3 17 9 11 13 15 21 7"/>'
+    + '<polyline points="15 7 21 7 21 13"/>'),
   "Screener": icon('<path d="M3 5h18l-7 8v6l-4 2v-8z"/>'
     + '<circle cx="12" cy="2.2" r="1.1" fill="currentColor" stroke="none"/>'),
   "Market Replay": icon('<circle cx="12" cy="12" r="9"/>'

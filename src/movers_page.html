@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Movers</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
+<style>
+  :root { --bg:#f5f6f8; --panel:#fff; --text:#1a1d24; --dim:#6b7280; --line:#e2e5ea; --up:#16a34a; --down:#dc2626; --warn:#ca8a04; --accent:#2563eb; --accent-a:rgba(37,99,235,.10); }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) { --bg:#10131a; --panel:#171b24; --text:#e7e9ee; --dim:#9096a3; --line:#262b36; --up:#2ecc71; --down:#f0554b; --warn:#facc15; --accent:#5b9dff; --accent-a:rgba(91,157,255,.12); } }
+  * { box-sizing:border-box; }
+  body { margin:0; background:var(--bg); color:var(--text); font:14px/1.45 "IBM Plex Sans",-apple-system,"Segoe UI",Roboto,sans-serif; font-variant-numeric:tabular-nums; }
+  main { max-width:1240px; margin:0 auto; padding:18px; }
+  h1 { font-size:18px; margin:0 0 3px; } .sub { font-size:12.5px; color:var(--dim); margin:0 0 14px; max-width:760px; line-height:1.5; }
+  .up { color:var(--up); } .down { color:var(--down); } .dim { color:var(--dim); }
+  .bar { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:12px 14px; margin-bottom:12px; display:flex; flex-wrap:wrap; gap:14px 18px; align-items:flex-end; }
+  .fld label { display:block; font-size:10px; text-transform:uppercase; letter-spacing:.03em; color:var(--dim); margin-bottom:4px; }
+  .fld input[type=number], .fld input[type=search] { width:92px; padding:7px 9px; font:600 13px "IBM Plex Mono",monospace; color:var(--text); background:var(--bg); border:1px solid var(--line); border-radius:8px; }
+  .fld input[type=search] { width:150px; font-family:inherit; font-weight:500; }
+  input:focus-visible, button:focus-visible, summary:focus-visible { outline:2px solid var(--accent); outline-offset:1px; }
+  .seg { display:inline-flex; border:1px solid var(--line); border-radius:8px; overflow:hidden; background:var(--bg); }
+  .seg button { font:600 12px inherit; font-family:inherit; padding:7px 11px; border:0; background:transparent; color:var(--dim); cursor:pointer; }
+  .seg button.on { background:var(--accent); color:#fff; }
+  .picker { position:relative; }
+  .picker summary { list-style:none; cursor:pointer; padding:7px 11px; border:1px solid var(--line); border-radius:8px; background:var(--bg); font-size:12.5px; font-weight:600; min-width:170px; }
+  .picker summary::-webkit-details-marker { display:none; }
+  .pop { position:absolute; z-index:20; top:110%; left:0; width:270px; max-height:320px; overflow:auto; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:8px; box-shadow:0 8px 24px rgba(0,0,0,.18); }
+  .pop .acts { display:flex; gap:10px; font-size:11.5px; margin-bottom:6px; } .pop .acts a { color:var(--accent); cursor:pointer; font-weight:600; }
+  .pop label { display:flex; align-items:center; gap:8px; padding:5px 4px; font-size:12.5px; cursor:pointer; border-radius:6px; } .pop label:hover { background:var(--accent-a); }
+  .pop .n { margin-left:auto; color:var(--dim); font-size:11px; }
+  .sum { display:flex; flex-wrap:wrap; gap:10px 22px; align-items:baseline; margin:4px 2px 10px; font-size:12.5px; color:var(--dim); }
+  .sum b { color:var(--text); font-size:16px; }
+  .chips { display:flex; flex-wrap:wrap; gap:6px; margin-bottom:12px; }
+  .chip { font-size:11.5px; font-weight:600; padding:4px 10px; border-radius:99px; border:1px solid var(--line); background:var(--panel); cursor:pointer; color:var(--text); }
+  .chip.on { background:var(--accent); border-color:var(--accent); color:#fff; } .chip span { opacity:.7; margin-left:5px; }
+  .tw { background:var(--panel); border:1px solid var(--line); border-radius:12px; overflow:auto; max-height:70vh; }
+  table { width:100%; border-collapse:collapse; font-size:12.5px; }
+  th { position:sticky; top:0; background:var(--panel); text-align:left; font-size:10.5px; text-transform:uppercase; letter-spacing:.03em; color:var(--dim); padding:8px 10px; border-bottom:1px solid var(--line); white-space:nowrap; cursor:pointer; user-select:none; }
+  th.r, td.r { text-align:right; } th:hover { color:var(--text); }
+  td { padding:8px 10px; border-bottom:1px solid var(--line); white-space:nowrap; }
+  tbody tr:hover td { background:var(--accent-a); }
+  .tk { display:inline-flex; align-items:center; gap:8px; font-weight:700; color:var(--text); text-decoration:none; }
+  .lg { width:18px; height:18px; border-radius:5px; color:#fff; font-size:8px; font-weight:800; display:inline-flex; align-items:center; justify-content:center; overflow:hidden; flex:none; }
+  .lg img { width:100%; height:100%; object-fit:cover; }
+  .msg { padding:26px; text-align:center; color:var(--dim); }
+  .mono { font-family:"IBM Plex Mono",monospace; }
+</style></head>
+<body>
+<main>
+  <h1>Movers</h1>
+  <p class="sub">Every name that moved at least your threshold over the period you pick, from the terminal's own daily prices. Change the numbers and the list updates. Click a sector chip or use the picker to narrow to the groups you care about. Very small, thinly traded names are filtered out by default so the list stays tradable.</p>
+
+  <div class="bar">
+    <div class="fld"><label>Period</label>
+      <div class="seg" id="per"><button data-d="1">1D</button><button data-d="5">1W</button><button data-d="21" class="on">1M</button><button data-d="63">3M</button><button data-d="126">6M</button></div></div>
+    <div class="fld"><label>or custom days</label><input type="number" id="days" min="1" max="126" value="21"></div>
+    <div class="fld"><label>Direction</label>
+      <div class="seg" id="dir"><button data-v="up" class="on">Up</button><button data-v="down">Down</button><button data-v="either">Either</button></div></div>
+    <div class="fld"><label>Move at least (%)</label><input type="number" id="pct" min="1" step="1" value="20"></div>
+    <div class="fld"><label>Sectors</label>
+      <details class="picker" id="picker"><summary id="picksum">All sectors</summary><div class="pop" id="pop"></div></details></div>
+    <div class="fld"><label id="lminp">Min price ($)</label><input type="number" id="minp" min="0" step="0.5" value="2"></div>
+    <div class="fld"><label id="lmindv">Min avg $ volume (M)</label><input type="number" id="mindv" min="0" step="0.5" value="1"></div>
+    <div class="fld"><label>&nbsp;</label><label style="display:flex;gap:6px;align-items:center;text-transform:none;letter-spacing:0;font-size:12px;color:var(--text);cursor:pointer;margin:0"><input type="checkbox" id="uncl"> include unclassified (ETFs, OTC, shells)</label></div>
+    <div class="fld"><label>Ticker</label><input type="search" id="q" placeholder="filter results"></div>
+  </div>
+
+  <div class="sum" id="sum"></div>
+  <div class="chips" id="chips"></div>
+  <div class="tw"><table><thead><tr id="hdr"></tr></thead><tbody id="rows"></tbody></table><div class="msg" id="msg" hidden></div></div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const COUNTRY = new URLSearchParams(location.search).get("country") === "IN" ? "IN" : "US";
+const CUR = COUNTRY === "IN" ? "₹" : "$";
+if (COUNTRY === "IN") { $("lminp").textContent = "Min price (₹)"; $("lmindv").textContent = "Min avg ₹ volume (M)"; $("minp").value = 20; $("mindv").value = 10; }
+const esc = s => { const d = document.createElement("div"); d.textContent = s == null ? "" : String(s); return d.innerHTML; };
+const hue = s => { let h = 0; for (const c of s || "") h = (h * 31 + c.charCodeAt(0)) % 360; return "hsl(" + h + ",42%,45%)"; };
+let DATA = null, SECTORS = [], picked = new Set(), sortKey = "move", sortDir = -1, dir = "up", days = 21, timer = null, allSectors = true;
+
+const COLS = [["t","Ticker"],["sector","Sector"],["industry","Industry"],["close","Close",1],["move","Move %",1],["d1","1D %",1],["adr","ADR %",1],["off","From 52w high",1],["dv","Avg $ vol (M)",1]];
+$("hdr").innerHTML = COLS.map(c => '<th data-k="' + c[0] + '"' + (c[2] ? ' class="r"' : "") + '></th>').join("");
+
+function params() {
+  const q = new URLSearchParams({country: COUNTRY, days: days, pct: +$("pct").value || 20, dir: dir, minPrice: +$("minp").value || 0, minDv: +$("mindv").value || 0, unclassified: $("uncl").checked ? 1 : 0});
+  if (!allSectors && picked.size) q.set("sectors", [...picked].join("|"));
+  return q.toString();
+}
+async function load() {
+  $("msg").hidden = false; $("msg").textContent = "Scanning…";
+  let d;
+  try { d = await (await fetch("/api/movers?" + params())).json(); } catch (e) { $("msg").textContent = "Could not reach the server."; return; }
+  if (d.building && !d.rows) { $("msg").textContent = "Building the price table for the first time (about a minute). This page will fill in by itself."; clearTimeout(timer); timer = setTimeout(load, 6000); return; }
+  DATA = d;
+  if (d.building) { clearTimeout(timer); timer = setTimeout(load, 15000); }   // stale table shown; refresh when the new one lands
+  draw();
+}
+function draw() {
+  if (!DATA) return;
+  const q = $("q").value.trim().toUpperCase();
+  let rows = DATA.rows.filter(r => !q || r.t.includes(q));
+  rows.sort((a, b) => {
+    const av = a[sortKey], bv = b[sortKey];
+    if (av == null && bv == null) return 0; if (av == null) return 1; if (bv == null) return -1;
+    return typeof av === "string" ? sortDir * av.localeCompare(bv) : sortDir * (av - bv);
+  });
+  document.querySelectorAll("#hdr th").forEach(h => { const c = COLS.find(x => x[0] === h.dataset.k); h.textContent = c[1] + (sortKey === c[0] ? (sortDir === -1 ? " ▼" : " ▲") : ""); });
+  const up = DATA.rows.filter(r => r.move > 0).length, dn = DATA.rows.length - up;
+  $("sum").innerHTML = '<span><b>' + rows.length + '</b> names</span><span class="up">' + up + ' up</span><span class="down">' + dn + ' down</span><span>' + DATA.universe.toLocaleString() + ' scanned &middot; as of ' + esc(DATA.asOf) + ' &middot; ' + DATA.days + '-session move</span>';
+  // sector chips = where the results are concentrated; clicking one narrows to it
+  const by = {}; DATA.rows.forEach(r => { const k = r.sector || "Unclassified"; by[k] = (by[k] || 0) + 1; });
+  $("chips").innerHTML = Object.keys(by).sort((a, b) => by[b] - by[a]).map(k => '<span class="chip' + (!allSectors && picked.has(k) ? " on" : "") + '" data-s="' + esc(k) + '">' + esc(k) + '<span>' + by[k] + '</span></span>').join("");
+  $("msg").hidden = rows.length > 0; if (!rows.length) $("msg").textContent = "No names match. Lower the threshold, widen the period, or loosen the filters.";
+  $("rows").innerHTML = rows.slice(0, 500).map(r => {
+    const logo = r.logo ? '<img src="https://s3-symbol-logo.tradingview.com/' + esc(r.logo) + '.svg" onerror="this.remove()">' : "";
+    const cls = v => v == null ? "" : v >= 0 ? "up" : "down", f = v => v == null ? "&mdash;" : (v >= 0 ? "+" : "") + v.toFixed(1) + "%";
+    return '<tr><td><a class="tk" target="_blank" rel="noopener" href="https://www.tradingview.com/chart/?symbol=' + encodeURIComponent(r.t) + '"><span class="lg" style="background:' + hue(r.t) + '">' + logo + esc(r.t.slice(0, 2)) + '</span>' + esc(r.t) + '</a></td>'
+      + '<td>' + esc(r.sector || "—") + '</td><td class="dim">' + esc(r.industry || "—") + '</td>'
+      + '<td class="r mono">' + CUR + r.close.toLocaleString() + '</td><td class="r mono ' + cls(r.move) + '" style="font-weight:700">' + f(r.move) + '</td><td class="r mono ' + cls(r.d1) + '">' + f(r.d1) + '</td>'
+      + '<td class="r mono">' + (r.adr == null ? "&mdash;" : r.adr.toFixed(1) + "%") + '</td><td class="r mono">' + (r.off == null ? "&mdash;" : r.off.toFixed(1) + "%") + '</td><td class="r mono">' + r.dv.toLocaleString() + '</td></tr>';
+  }).join("");
+  if (rows.length > 500) { $("msg").hidden = false; $("msg").textContent = "Showing the 500 biggest moves of " + rows.length + ". Narrow the filters to see the rest."; }
+}
+function drawPicker() {
+  $("pop").innerHTML = '<div class="acts"><a id="pa">Select all</a><a id="pn">Clear</a></div>' + SECTORS.map(s => '<label><input type="checkbox" value="' + esc(s) + '"' + (allSectors || picked.has(s) ? " checked" : "") + '>' + esc(s) + '</label>').join("");
+  $("picksum").textContent = allSectors ? "All sectors" : picked.size ? picked.size + " selected" : "None selected";
+  $("pa").onclick = () => { allSectors = true; picked.clear(); drawPicker(); load(); };
+  $("pn").onclick = () => { allSectors = false; picked.clear(); drawPicker(); load(); };
+  $("pop").querySelectorAll("input").forEach(i => i.onchange = () => {
+    if (allSectors) { allSectors = false; picked = new Set(SECTORS); }
+    i.checked ? picked.add(i.value) : picked.delete(i.value);
+    if (picked.size === SECTORS.length) { allSectors = true; picked.clear(); }
+    drawPicker(); load();
+  });
+}
+$("chips").onclick = e => { const c = e.target.closest(".chip"); if (!c) return; const s = c.dataset.s;
+  if (allSectors) { allSectors = false; picked = new Set([s]); } else { picked.has(s) ? picked.delete(s) : picked.add(s); if (!picked.size) allSectors = true; }
+  drawPicker(); load(); };
+$("per").onclick = e => { const b = e.target.closest("button"); if (!b) return; days = +b.dataset.d; $("days").value = days; document.querySelectorAll("#per button").forEach(x => x.classList.toggle("on", x === b)); load(); };
+$("days").oninput = () => { days = Math.max(1, Math.min(126, +$("days").value || 21)); document.querySelectorAll("#per button").forEach(x => x.classList.toggle("on", +x.dataset.d === days)); clearTimeout(timer); timer = setTimeout(load, 350); };
+$("dir").onclick = e => { const b = e.target.closest("button"); if (!b) return; dir = b.dataset.v; document.querySelectorAll("#dir button").forEach(x => x.classList.toggle("on", x === b)); load(); };
+$("uncl").onchange = load;
+["pct", "minp", "mindv"].forEach(id => $(id).oninput = () => { clearTimeout(timer); timer = setTimeout(load, 350); });
+$("q").oninput = draw;
+$("hdr").onclick = e => { const h = e.target.closest("th"); if (!h) return; const k = h.dataset.k; if (sortKey === k) sortDir *= -1; else { sortKey = k; sortDir = k === "t" || k === "sector" || k === "industry" ? 1 : -1; } draw(); };
+document.addEventListener("click", e => { const p = $("picker"); if (p.open && !p.contains(e.target)) p.open = false; });
+fetch("/api/movers/sectors?country=" + COUNTRY).then(r => r.json()).then(s => { SECTORS = s; drawPicker(); }).catch(() => {});
+load();
+</script>
+</body></html>
