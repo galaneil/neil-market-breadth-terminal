@@ -427,7 +427,7 @@ def sync_from_origin(log=print):
     noticed until the dates were badly behind."""
     try:
         result = subprocess.run(
-            ["git", "pull", "--ff-only", "origin", "main"],
+            ["git", "pull", "--rebase", "--autostash", "origin", "main"],   # rebase: local unpushed commits must not block data updates
             cwd=config.ROOT_DIR, capture_output=True, text=True, timeout=120)
         if result.returncode == 0:
             msg = result.stdout.strip() or "already up to date"
