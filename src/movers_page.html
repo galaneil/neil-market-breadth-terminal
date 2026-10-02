@@ -40,8 +40,19 @@
   td { padding:8px 10px; border-bottom:1px solid var(--line); white-space:nowrap; }
   tbody tr:hover td { background:var(--accent-a); }
   .tk { display:inline-flex; align-items:center; gap:8px; font-weight:700; color:var(--text); text-decoration:none; }
-  .lg { width:18px; height:18px; border-radius:5px; color:#fff; font-size:8px; font-weight:800; display:inline-flex; align-items:center; justify-content:center; overflow:hidden; flex:none; }
-  .lg img { width:100%; height:100%; object-fit:cover; }
+  .star { background:none; border:0; cursor:pointer; font-size:16px; line-height:1; color:var(--dim); padding:2px 4px; border-radius:6px; }
+  .star.on { color:#f5b301; } .star:hover { background:var(--accent-a); }
+  .wl { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:12px 14px; margin-bottom:12px; }
+  .wl[hidden] { display:none; }
+  .wl .r1 { display:flex; flex-wrap:wrap; gap:8px; align-items:center; }
+  .wl select, .wl textarea { font:600 12.5px "IBM Plex Sans",sans-serif; color:var(--text); background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:7px 9px; }
+  .wl textarea { width:100%; min-height:62px; font:500 12px "IBM Plex Mono",monospace; margin-top:8px; }
+  .btn { font:600 12px "IBM Plex Sans",sans-serif; padding:7px 12px; border-radius:8px; border:1px solid var(--line); background:var(--bg); color:var(--text); cursor:pointer; text-decoration:none; display:inline-block; }
+  .btn.p { background:var(--accent); border-color:var(--accent); color:#fff; } .btn:disabled { opacity:.45; cursor:not-allowed; }
+  .wl .hint { font-size:11.5px; color:var(--dim); margin:8px 0 0; line-height:1.5; }
+  .lg { width:26px; height:26px; border-radius:7px; color:#fff; font-size:9px; font-weight:800; display:inline-flex; align-items:center; justify-content:center; overflow:hidden; flex:none; }
+  .lg { position:relative; box-shadow:0 0 0 1px var(--line); }
+  .lg img { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; background:#fff; padding:2px; border-radius:7px; }
   .msg { padding:26px; text-align:center; color:var(--dim); }
   .mono { font-family:"IBM Plex Mono",monospace; }
 </style></head>
@@ -65,6 +76,16 @@
     <div class="fld"><label>Ticker</label><input type="search" id="q" placeholder="filter results"></div>
   </div>
 
+  <div class="seg" id="mode" style="margin-bottom:12px"><button data-m="scan" class="on">Scan results</button><button data-m="watch" id="modeW">Watchlist</button></div>
+  <div class="wl" id="wl" hidden>
+    <div class="r1"><select id="wlSel"></select>
+      <button class="btn" id="wlNew">New</button><button class="btn" id="wlRen">Rename</button><button class="btn" id="wlDel">Delete</button>
+      <span style="flex:1"></span>
+      <a class="btn p" id="wlExp" href="#" download>Download for TradingView</a><button class="btn" id="wlCopy">Copy symbols</button></div>
+    <p class="hint">Move to TradingView: in its watchlist menu choose <b>Import list</b> and pick the downloaded file, or paste the copied symbols into a list. TradingView has no public way for another program to write to a watchlist, so this is a one-click hand-off, not a live link. To bring a TradingView list back, use <b>Export list</b> there and paste it below.</p>
+    <textarea id="wlPaste" placeholder="Paste a TradingView watchlist export here (NASDAQ:AAPL,NYSE:MU ...)"></textarea>
+    <div style="margin-top:6px"><button class="btn" id="wlImp">Add pasted symbols to this list</button> <span class="dim" id="wlMsg" style="font-size:12px"></span></div>
+  </div>
   <div class="sum" id="sum"></div>
   <div class="chips" id="chips"></div>
   <div class="tw"><table><thead><tr id="hdr"></tr></thead><tbody id="rows"></tbody></table><div class="msg" id="msg" hidden></div></div>
@@ -78,8 +99,8 @@ const esc = s => { const d = document.createElement("div"); d.textContent = s ==
 const hue = s => { let h = 0; for (const c of s || "") h = (h * 31 + c.charCodeAt(0)) % 360; return "hsl(" + h + ",42%,45%)"; };
 let DATA = null, SECTORS = [], picked = new Set(), sortKey = "move", sortDir = -1, dir = "up", days = 21, timer = null, allSectors = true;
 
-const COLS = [["t","Ticker"],["sector","Sector"],["industry","Industry"],["close","Close",1],["move","Move %",1],["d1","1D %",1],["adr","ADR %",1],["off","From 52w high",1],["dv","Avg $ vol (M)",1]];
-$("hdr").innerHTML = COLS.map(c => '<th data-k="' + c[0] + '"' + (c[2] ? ' class="r"' : "") + '></th>').join("");
+const COLS = [["star",""],["t","Ticker"],["sector","Sector"],["industry","Industry"],["close","Close",1],["move","Move %",1],["d1","1D %",1],["adr","ADR %",1],["off","From 52w high",1],["dv","Avg $ vol (M)",1]];
+$("hdr").innerHTML = COLS.map(c => '<th data-k="' + c[0] + '"' + (c[2] ? ' class="r"' : "") + (c[0] === "star" ? ' style="width:34px"' : "") + '></th>').join("");
 
 function params() {
   const q = new URLSearchParams({country: COUNTRY, days: days, pct: +$("pct").value || 20, dir: dir, minPrice: +$("minp").value || 0, minDv: +$("mindv").value || 0, unclassified: $("uncl").checked ? 1 : 0});
@@ -92,9 +113,74 @@ async function load() {
   try { d = await (await fetch("/api/movers?" + params())).json(); } catch (e) { $("msg").textContent = "Could not reach the server."; return; }
   if (d.building && !d.rows) { $("msg").textContent = "Building the price table for the first time (about a minute). This page will fill in by itself."; clearTimeout(timer); timer = setTimeout(load, 6000); return; }
   DATA = d;
+  if (!WL.active) wlLoad();
   if (d.building) { clearTimeout(timer); timer = setTimeout(load, 15000); }   // stale table shown; refresh when the new one lands
   draw();
 }
+const cls = v => v == null ? "" : v >= 0 ? "up" : "down", fpct = v => v == null ? "&mdash;" : (v >= 0 ? "+" : "") + v.toFixed(1) + "%";
+function logoHtml(r) {
+  const img = r.logo ? '<img loading="lazy" src="/api/logo/' + encodeURIComponent(r.logo) + '" alt="" onerror="this.remove()">' : "";
+  return '<span class="lg" style="background:' + hue(r.t) + '">' + esc(r.t.slice(0, 2)) + img + '</span>';
+}
+function rowHtml(r) {
+  const on = WL.set.has(r.t);
+  const star = '<td><button class="star' + (on ? " on" : "") + '" data-t="' + esc(r.t) + '" title="' + (on ? "Remove from" : "Add to") + ' watchlist" aria-label="Toggle watchlist">' + (on ? "\u2605" : "\u2606") + '</button></td>';
+  const tk = '<td><a class="tk" target="_blank" rel="noopener" href="https://www.tradingview.com/chart/?symbol=' + encodeURIComponent(r.t) + '">' + logoHtml(r) + esc(r.t) + '</a></td>';
+  if (r.missing) return '<tr>' + star + tk + '<td class="dim" colspan="8">no price history stored for this symbol</td></tr>';
+  return '<tr>' + star + tk + '<td>' + esc(r.sector || "\u2014") + '</td><td class="dim">' + esc(r.industry || "\u2014") + '</td>'
+    + '<td class="r mono">' + CUR + r.close.toLocaleString() + '</td><td class="r mono ' + cls(r.move) + '" style="font-weight:700">' + fpct(r.move) + '</td><td class="r mono ' + cls(r.d1) + '">' + fpct(r.d1) + '</td>'
+    + '<td class="r mono">' + (r.adr == null ? "&mdash;" : r.adr.toFixed(1) + "%") + '</td><td class="r mono">' + (r.off == null ? "&mdash;" : r.off.toFixed(1) + "%") + '</td><td class="r mono">' + (r.dv == null ? "&mdash;" : r.dv.toLocaleString()) + '</td></tr>';
+}
+// ---- watchlist state (stored on this machine through the hub, so it follows you across browsers)
+const WL = { lists: {}, active: null, set: new Set(), rows: [] };
+let mode = "scan";
+async function wlPost(body) {
+  const r = await (await fetch("/api/movers/watch", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify(Object.assign({country: COUNTRY}, body))})).json();
+  if (r.error) { $("wlMsg").textContent = r.error; return null; }
+  WL.lists = r.lists; return r;
+}
+async function wlLoad(name) {
+  const q = new URLSearchParams({country: COUNTRY, days: days});
+  if (name || WL.active) q.set("list", name || WL.active);
+  const d = await (await fetch("/api/movers/watch?" + q)).json();
+  WL.lists = d.lists;
+  if (!d.name) { WL.active = Object.keys(d.lists)[0]; return wlLoad(WL.active); }
+  WL.active = d.name; WL.set = new Set(d.symbols); WL.rows = d.rows || [];
+  wlDraw();
+}
+function wlDraw() {
+  $("modeW").textContent = "Watchlist (" + (WL.set.size) + ")";
+  $("wlSel").innerHTML = Object.keys(WL.lists).map(k => '<option' + (k === WL.active ? " selected" : "") + '>' + esc(k) + '</option>').join("");
+  $("wlExp").href = "/api/movers/tv-export?country=" + COUNTRY + "&list=" + encodeURIComponent(WL.active || "");
+  $("wl").hidden = mode !== "watch";
+  if (mode === "watch") {
+    $("chips").innerHTML = "";
+    document.querySelectorAll("#hdr th").forEach(h => { const c = COLS.find(x => x[0] === h.dataset.k); h.textContent = c[1]; });
+    $("sum").innerHTML = '<span><b>' + WL.rows.length + '</b> names in ' + esc(WL.active) + '</span><span>' + days + '-session move shown</span>';
+    $("msg").hidden = WL.rows.length > 0; $("msg").textContent = "Empty list. Star names in Scan results, or paste a TradingView export above.";
+    $("rows").innerHTML = WL.rows.map(rowHtml).join("");
+  } else draw();
+}
+async function toggleStar(sym) {
+  const had = WL.set.has(sym);
+  const r = await wlPost({action: had ? "remove" : "add", list: WL.active, symbols: [sym]});
+  if (!r) return;
+  had ? WL.set.delete(sym) : WL.set.add(sym);
+  if (mode === "watch") WL.rows = WL.rows.filter(x => had ? x.t !== sym : true);
+  $("modeW").textContent = "Watchlist (" + WL.set.size + ")";
+  mode === "watch" ? wlDraw() : draw();
+}
+$("rows").addEventListener("click", e => { const b = e.target.closest(".star"); if (b) toggleStar(b.dataset.t); });
+$("mode").onclick = async e => { const b = e.target.closest("button"); if (!b) return; mode = b.dataset.m;
+  document.querySelectorAll("#mode button").forEach(x => x.classList.toggle("on", x === b));
+  if (mode === "watch") await wlLoad(); else { $("wl").hidden = true; draw(); } };
+$("wlSel").onchange = () => wlLoad($("wlSel").value);
+$("wlNew").onclick = async () => { const n = (prompt("Name for the new watchlist") || "").trim(); if (!n) return; if (await wlPost({action: "create", list: n})) wlLoad(n); };
+$("wlRen").onclick = async () => { const n = (prompt("New name", WL.active) || "").trim(); if (!n || n === WL.active) return; if (await wlPost({action: "rename", list: WL.active, newName: n})) wlLoad(n); };
+$("wlDel").onclick = async () => { if (!confirm("Delete the watchlist \"" + WL.active + "\"?")) return; if (await wlPost({action: "delete", list: WL.active})) { WL.active = null; wlLoad(); } };
+$("wlCopy").onclick = async () => { const txt = await (await fetch($("wlExp").href)).text(); try { await navigator.clipboard.writeText(txt); $("wlMsg").textContent = "Copied " + WL.set.size + " symbols."; } catch (e) { $("wlPaste").value = txt; $("wlPaste").select(); $("wlMsg").textContent = "Copy blocked: the symbols are in the box, press Ctrl+C."; } };
+$("wlImp").onclick = async () => { const r = await wlPost({action: "import", list: WL.active, text: $("wlPaste").value}); if (r) { $("wlPaste").value = ""; $("wlMsg").textContent = "Added " + r.added + " symbols."; wlLoad(); } };
+
 function draw() {
   if (!DATA) return;
   const q = $("q").value.trim().toUpperCase();
@@ -104,21 +190,14 @@ function draw() {
     if (av == null && bv == null) return 0; if (av == null) return 1; if (bv == null) return -1;
     return typeof av === "string" ? sortDir * av.localeCompare(bv) : sortDir * (av - bv);
   });
-  document.querySelectorAll("#hdr th").forEach(h => { const c = COLS.find(x => x[0] === h.dataset.k); h.textContent = c[1] + (sortKey === c[0] ? (sortDir === -1 ? " ▼" : " ▲") : ""); });
+  document.querySelectorAll("#hdr th").forEach(h => { const c = COLS.find(x => x[0] === h.dataset.k); if (c[0] === "star") { h.textContent = ""; return; } h.textContent = c[1] + (sortKey === c[0] ? (sortDir === -1 ? " ▼" : " ▲") : ""); });
   const up = DATA.rows.filter(r => r.move > 0).length, dn = DATA.rows.length - up;
   $("sum").innerHTML = '<span><b>' + rows.length + '</b> names</span><span class="up">' + up + ' up</span><span class="down">' + dn + ' down</span><span>' + DATA.universe.toLocaleString() + ' scanned &middot; as of ' + esc(DATA.asOf) + ' &middot; ' + DATA.days + '-session move</span>';
   // sector chips = where the results are concentrated; clicking one narrows to it
   const by = {}; DATA.rows.forEach(r => { const k = r.sector || "Unclassified"; by[k] = (by[k] || 0) + 1; });
   $("chips").innerHTML = Object.keys(by).sort((a, b) => by[b] - by[a]).map(k => '<span class="chip' + (!allSectors && picked.has(k) ? " on" : "") + '" data-s="' + esc(k) + '">' + esc(k) + '<span>' + by[k] + '</span></span>').join("");
   $("msg").hidden = rows.length > 0; if (!rows.length) $("msg").textContent = "No names match. Lower the threshold, widen the period, or loosen the filters.";
-  $("rows").innerHTML = rows.slice(0, 500).map(r => {
-    const logo = r.logo ? '<img src="https://s3-symbol-logo.tradingview.com/' + esc(r.logo) + '.svg" onerror="this.remove()">' : "";
-    const cls = v => v == null ? "" : v >= 0 ? "up" : "down", f = v => v == null ? "&mdash;" : (v >= 0 ? "+" : "") + v.toFixed(1) + "%";
-    return '<tr><td><a class="tk" target="_blank" rel="noopener" href="https://www.tradingview.com/chart/?symbol=' + encodeURIComponent(r.t) + '"><span class="lg" style="background:' + hue(r.t) + '">' + logo + esc(r.t.slice(0, 2)) + '</span>' + esc(r.t) + '</a></td>'
-      + '<td>' + esc(r.sector || "—") + '</td><td class="dim">' + esc(r.industry || "—") + '</td>'
-      + '<td class="r mono">' + CUR + r.close.toLocaleString() + '</td><td class="r mono ' + cls(r.move) + '" style="font-weight:700">' + f(r.move) + '</td><td class="r mono ' + cls(r.d1) + '">' + f(r.d1) + '</td>'
-      + '<td class="r mono">' + (r.adr == null ? "&mdash;" : r.adr.toFixed(1) + "%") + '</td><td class="r mono">' + (r.off == null ? "&mdash;" : r.off.toFixed(1) + "%") + '</td><td class="r mono">' + r.dv.toLocaleString() + '</td></tr>';
-  }).join("");
+  $("rows").innerHTML = rows.slice(0, 500).map(rowHtml).join("");
   if (rows.length > 500) { $("msg").hidden = false; $("msg").textContent = "Showing the 500 biggest moves of " + rows.length + ". Narrow the filters to see the rest."; }
 }
 function drawPicker() {
@@ -142,7 +221,7 @@ $("dir").onclick = e => { const b = e.target.closest("button"); if (!b) return; 
 $("uncl").onchange = load;
 ["pct", "minp", "mindv"].forEach(id => $(id).oninput = () => { clearTimeout(timer); timer = setTimeout(load, 350); });
 $("q").oninput = draw;
-$("hdr").onclick = e => { const h = e.target.closest("th"); if (!h) return; const k = h.dataset.k; if (sortKey === k) sortDir *= -1; else { sortKey = k; sortDir = k === "t" || k === "sector" || k === "industry" ? 1 : -1; } draw(); };
+$("hdr").onclick = e => { const h = e.target.closest("th"); if (!h) return; const k = h.dataset.k; if (k === "star" || mode === "watch") return; if (sortKey === k) sortDir *= -1; else { sortKey = k; sortDir = k === "t" || k === "sector" || k === "industry" ? 1 : -1; } draw(); };
 document.addEventListener("click", e => { const p = $("picker"); if (p.open && !p.contains(e.target)) p.open = false; });
 fetch("/api/movers/sectors?country=" + COUNTRY).then(r => r.json()).then(s => { SECTORS = s; drawPicker(); }).catch(() => {});
 load();

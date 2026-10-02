@@ -1030,6 +1030,71 @@ class Handler(BaseHTTPRequestHandler):
             page = HUB_PAGE.replace("%%NAV_JSON%%", _hub_nav_json())
             self._send(200, page, "text/html; charset=utf-8")
             return
+        if route.path.startswith("/api/logo/"):
+            # Logos are fetched from TradingView once and kept on disk, so the
+            # panel doesn't depend on a third-party host answering every row.
+            slug = os.path.basename(route.path[len("/api/logo/"):])
+            slug = "".join(ch for ch in slug if ch.isalnum() or ch in "-_")[:80]
+            folder = os.path.join(LOGO_DIR, "tv")
+            path = os.path.join(folder, slug + ".svg")
+            blob = None
+            if slug:
+                if os.path.isfile(path):
+                    with open(path, "rb") as f:
+                        blob = f.read()
+                else:
+                    try:
+                        import urllib.request
+                        req = urllib.request.Request("https://s3-symbol-logo.tradingview.com/" + slug + ".svg",
+                                                     headers={"User-Agent": "Mozilla/5.0"})
+                        blob = urllib.request.urlopen(req, timeout=8).read()
+                        os.makedirs(folder, exist_ok=True)
+                        with open(path, "wb") as f:
+                            f.write(blob)
+                    except Exception:
+                        blob = None
+            if blob:
+                self.send_response(200)
+                self.send_header("Content-Type", "image/svg+xml")
+                self.send_header("Cache-Control", "public, max-age=604800")
+                self.send_header("Content-Length", str(len(blob)))
+                self.end_headers()
+                self.wfile.write(blob)
+            else:
+                self._send(404, "no logo", "text/plain")
+            return
+        if route.path == "/api/movers/watch":
+            import movers
+            q = parse_qs(route.query)
+            code = (q.get("country") or ["US"])[0].upper()
+            code = code if code in config.COUNTRIES else "US"
+            days = int(float((q.get("days") or ["21"])[0]))
+            lists = movers.watch_lists(code)
+            name = (q.get("list") or [""])[0]
+            if name:
+                self._send(200, json.dumps({"lists": {k: len(v) for k, v in lists.items()},
+                                            "name": name, "symbols": lists.get(name, []),
+                                            "rows": movers.lookup(code, lists.get(name, []), days)}),
+                           "application/json")
+            else:
+                self._send(200, json.dumps({"lists": {k: len(v) for k, v in lists.items()}}), "application/json")
+            return
+        if route.path == "/api/movers/tv-export":
+            import movers
+            q = parse_qs(route.query)
+            code = (q.get("country") or ["US"])[0].upper()
+            code = code if code in config.COUNTRIES else "US"
+            name = (q.get("list") or [""])[0]
+            body = movers.tv_export(code, movers.watch_lists(code).get(name, []))
+            fname = "".join(ch if ch.isalnum() or ch in "-_ " else "_" for ch in name)[:40] or "watchlist"
+            data = body.encode("utf-8")
+            self.send_response(200)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Disposition", 'attachment; filename="' + fname + '.txt"')
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
         if route.path == "/movers":
             with open(MOVERS_PAGE_FILE, encoding="utf-8") as f:
                 self._send(200, f.read(), "text/html; charset=utf-8")
@@ -1583,6 +1648,25 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(400, json.dumps({"error": str(error)}), "application/json")
             return
 
+        if route.path == "/api/movers/watch":
+            import movers
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                body = json.loads(self.rfile.read(length) or b"{}")
+                code = (body.get("country") or "US").upper()
+                code = code if code in config.COUNTRIES else "US"
+                action = body.get("action")
+                symbols = body.get("symbols") or []
+                if action == "import":     # a pasted TradingView export
+                    symbols, action = movers.tv_parse(body.get("text") or ""), "add"
+                if action not in ("add", "remove", "create", "delete", "rename"):
+                    raise ValueError("unknown action")
+                lists = movers.watch_edit(code, action, body.get("list") or "My Watchlist", symbols, body.get("newName"))
+                self._send(200, json.dumps({"lists": {k: len(v) for k, v in lists.items()},
+                                            "added": len(symbols)}), "application/json")
+            except Exception as error:
+                self._send(400, json.dumps({"error": str(error)}), "application/json")
+            return
         if route.path == "/api/setups/stop":
             length = int(self.headers.get("Content-Length") or 0)
             try:

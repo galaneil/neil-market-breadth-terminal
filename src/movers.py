@@ -156,3 +156,127 @@ def scan(country, days=21, pct=20.0, direction="up", picked=None, min_price=0.0,
     out.sort(key=lambda x: -abs(x["move"]))
     return {"asOf": max((r["date"] for r in rows), default=None),
             "universe": len(rows), "days": days, "rows": out, "building": country in _BUILDING}
+
+
+# --------------------------------------------------------------------------
+# Watchlists (stored on this machine) and TradingView import/export
+# --------------------------------------------------------------------------
+
+def _out_dir():
+    out = os.path.join(os.path.dirname(config.ROOT_DIR), "Portfolio Local")
+    os.makedirs(out, exist_ok=True)
+    return out
+
+
+_WL_LOCK = threading.Lock()
+
+
+def _wl_path():
+    return os.path.join(_out_dir(), "movers_watchlists.json")
+
+
+def _wl_read():
+    try:
+        with open(_wl_path(), encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {}
+
+
+def watch_lists(country):
+    with _WL_LOCK:
+        data = _wl_read().get(country)
+    return data if data else {"My Watchlist": []}
+
+
+def watch_edit(country, action, name, symbols=None, new_name=None):
+    symbols = [s.strip().upper() for s in (symbols or []) if s and s.strip()]
+    with _WL_LOCK:
+        data = _wl_read()
+        lists = data.get(country) or {"My Watchlist": []}
+        if action == "create":
+            lists.setdefault(name, [])
+        elif action == "delete":
+            lists.pop(name, None)
+            if not lists:
+                lists = {"My Watchlist": []}
+        elif action == "rename" and new_name and name in lists and new_name not in lists:
+            lists[new_name] = lists.pop(name)
+        elif action in ("add", "remove"):
+            cur = lists.setdefault(name, [])
+            if action == "add":
+                cur.extend(s for s in symbols if s not in cur)
+            else:
+                lists[name] = [s for s in cur if s not in symbols]
+        data[country] = lists
+        with open(_wl_path(), "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=1)
+    return lists
+
+
+def lookup(country, symbols, days=21):
+    """Current move and basics for specific names, ignoring any threshold."""
+    rows = table(country)
+    if rows is None:
+        return None
+    by = {r["t"]: r for r in rows}
+    out = []
+    for s in symbols:
+        r = by.get(s)
+        if not r:
+            out.append({"t": s, "missing": True})
+            continue
+        c = r["c"]
+        d = max(1, min(int(days), KEEP - 1))
+        out.append({"t": s, "sector": r["sector"], "industry": r["industry"], "logo": r["logo"],
+                    "close": round(r["close"], 2),
+                    "move": round((c[-1] / c[-1 - d] - 1) * 100, 1) if len(c) > d and c[-1 - d] else None,
+                    "d1": round((c[-1] / c[-2] - 1) * 100, 1) if len(c) > 1 and c[-2] else None})
+    return out
+
+
+def tv_symbols(country):
+    """{"AAPL": "NASDAQ:AAPL"} from TradingView's own scanner, cached on disk for a week."""
+    path = os.path.join(_out_dir(), "tv_symbols_" + country + ".json")
+    try:
+        if os.path.getmtime(path) > __import__("time").time() - 7 * 86400:
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+    except (OSError, ValueError):
+        pass
+    try:
+        from tradingview_screener import Query, col
+        cfg = config.COUNTRIES[country]
+        _, df = (Query().set_markets(cfg["tv_market"]).select("name")
+                 .where(col("type") == "stock", col("exchange").isin(cfg["exchanges"]))
+                 .limit(10000).get_scanner_data())
+        out = {}
+        for tk, nm in zip(df["ticker"], df["name"]):
+            out.setdefault(str(nm).upper(), tk)
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(out, f)
+        return out
+    except Exception:
+        try:
+            with open(path, encoding="utf-8") as f:
+                return json.load(f)
+        except (OSError, ValueError):
+            return {}
+
+
+def tv_export(country, symbols):
+    m = tv_symbols(country)
+    return ",".join(m.get(s, s) for s in symbols)
+
+
+def tv_parse(text):
+    """Symbols out of a TradingView watchlist export: 'NASDAQ:AAPL,NYSE:MU' and ###section lines."""
+    out = []
+    for tok in __import__("re").split(r"[,\s]+", text or ""):
+        tok = tok.strip()
+        if not tok or tok.startswith("###"):
+            continue
+        sym = tok.split(":")[-1].upper()
+        if sym and sym.replace(".", "").replace("-", "").isalnum() and sym not in out:
+            out.append(sym)
+    return out
