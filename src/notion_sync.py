@@ -35,6 +35,7 @@ Usage:
 import json
 import os
 import sys
+import time
 import urllib.error
 import urllib.request
 
@@ -108,7 +109,7 @@ def token():
         "(create the integration at notion.so/my-integrations)")
 
 
-def _call(method, path, body=None):
+def _call(method, path, body=None, _attempt=0):
     request = urllib.request.Request(
         f"{API}{path}",
         method=method,
@@ -124,6 +125,15 @@ def _call(method, path, body=None):
             return json.loads(response.read().decode())
     except urllib.error.HTTPError as error:
         detail = error.read().decode("utf-8", "replace")
+        if error.code == 429 and _attempt < 3:
+            # Rate limited: wait as long as Notion asks (capped) and try again, rather
+            # than failing the whole panel for a limit that clears in seconds.
+            try:
+                wait = float(error.headers.get("Retry-After") or 0)
+            except ValueError:
+                wait = 0
+            time.sleep(min(max(wait, 2 * (_attempt + 1)), 20))
+            return _call(method, path, body, _attempt + 1)
         # The two failures worth naming, because both have a specific fix and
         # the raw API message ("Could not find database") does not say so.
         if error.code == 404:
@@ -621,6 +631,9 @@ SETUP_ENTRY_EDITABLE = {
 }
 
 
+_LAST_TYPES = []
+
+
 def fetch_setup_types(log=print):
     """The setup-type gallery — {id, name} per row of the Setups Database,
     sorted by name. This is what the folder picker is built from."""
@@ -640,6 +653,7 @@ def fetch_setup_types(log=print):
             types.append({"id": page["id"], "name": name})
     types.sort(key=lambda t: t["name"].lower())
     log(f"  setup types: {len(types)}")
+    _LAST_TYPES[:] = types
     return types
 
 
@@ -648,7 +662,7 @@ def create_setup_type(name, log=print):
     name = (name or "").strip()
     if not name:
         raise NotionError("a setup name is required")
-    existing = fetch_setup_types(log=lambda *a: None)
+    existing = fetch_setup_types(log=lambda *a: None) or _LAST_TYPES
     if not existing:
         # fetch_setup_types swallows errors (e.g. Notion rate limits) and returns [],
         # which would let a duplicate through, so an empty read is a refusal, not a pass.
@@ -711,6 +725,7 @@ def fetch_setup_entries(log=print):
                     types.append({"id": page["id"], "name": name})
                 break
     types.sort(key=lambda t: t["name"].lower())
+    _LAST_TYPES[:] = types      # the create-setup duplicate check falls back on this
     types_by_id = {t["id"]: t["name"] for t in types}
     try:
         pages = query(SETUP_ENTRIES_DB)
