@@ -643,6 +643,26 @@ def fetch_setup_types(log=print):
     return types
 
 
+def create_setup_type(name, log=print):
+    """A new setup folder: one new row in the Setups Database, named `name`."""
+    name = (name or "").strip()
+    if not name:
+        raise NotionError("a setup name is required")
+    existing = fetch_setup_types(log=lambda *a: None)
+    if not existing:
+        # fetch_setup_types swallows errors (e.g. Notion rate limits) and returns [],
+        # which would let a duplicate through, so an empty read is a refusal, not a pass.
+        raise NotionError("could not read the existing setups just now (Notion busy); try again in a minute")
+    if any(t["name"].lower() == name.lower() for t in existing):
+        raise NotionError(f"a setup called {name!r} already exists")
+    db = _call("GET", f"/databases/{SETUP_TYPES_DB}")
+    title_prop = next((k for k, v in db.get("properties", {}).items() if v.get("type") == "title"), "Name")
+    page = _call("POST", "/pages", {"parent": {"database_id": SETUP_TYPES_DB},
+                                    "properties": {title_prop: title(name)}})
+    log(f"  created setup folder {name!r}")
+    return {"id": page["id"], "name": name}
+
+
 def _setup_entry_from_page(page, types_by_id):
     p = page.get("properties", {})
     setup_ids = _relation_ids(p.get("Setup"))

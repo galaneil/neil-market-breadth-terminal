@@ -1312,6 +1312,13 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as error:
                 self._send(500, json.dumps({"error": str(error)}), "application/json")
             return
+        if route.path == "/api/setups/info":
+            import symbol_info
+            q = parse_qs(route.query)
+            code = (q.get("country") or ["US"])[0].upper()
+            code = "IN" if code in ("IN", "INDIA") else "US"
+            self._send(200, json.dumps(symbol_info.info(code, (q.get("ticker") or [""])[0])), "application/json")
+            return
         if route.path == "/api/setups/prices":
             import journal_mfe
             q = parse_qs(route.query)
@@ -1593,6 +1600,16 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(400, json.dumps({"error": str(error)}), "application/json")
             return
 
+        if route.path == "/api/setups/type":
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                body = json.loads(self.rfile.read(length) or b"{}")
+                import notion_sync
+                self._send(200, json.dumps(notion_sync.create_setup_type(body.get("name"), log=log)),
+                           "application/json")
+            except Exception as error:
+                self._send(400, json.dumps({"error": str(error)}), "application/json")
+            return
         if route.path == "/api/setups/create":
             length = int(self.headers.get("Content-Length") or 0)
             try:
@@ -3007,6 +3024,18 @@ SETUPS_PAGE = r"""<!doctype html>
   .overlay[hidden] { display:none; }
   .sheet { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:20px;
     max-width:780px; width:100%; max-height:90vh; overflow-y:auto; }
+  .sh-head { display:flex; align-items:center; gap:12px; margin-bottom:4px; }
+  .sh-logo { width:44px; height:44px; border-radius:11px; flex:none; display:flex; align-items:center; justify-content:center; color:#fff; font-weight:800; font-size:14px; position:relative; overflow:hidden; box-shadow:0 0 0 1px var(--line); }
+  .sh-logo img { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; background:#fff; padding:5px; }
+  .sh-tk { font-size:19px; font-weight:800; line-height:1.1; } .sh-nm { font-size:12.5px; color:var(--dim); }
+  .sh-tags { display:flex; flex-wrap:wrap; gap:5px; margin:2px 0 8px; } .sh-tags span { font-size:10.5px; font-weight:700; padding:2px 8px; border-radius:99px; background:var(--bg); border:1px solid var(--line); color:var(--dim); }
+  .mc-bar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:6px 0; }
+  .mc-seg { display:inline-flex; border:1px solid var(--line); border-radius:8px; overflow:hidden; background:var(--bg); }
+  .mc-seg button { font:600 11.5px "IBM Plex Sans",sans-serif; padding:5px 10px; border:0; background:transparent; color:var(--dim); cursor:pointer; }
+  .mc-seg button.on { background:var(--accent); color:#fff; }
+  #mc { height:330px; border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+  #mc iframe { width:100%; height:100%; border:0; }
+  .mc-leg { display:flex; flex-wrap:wrap; gap:12px; font-size:11px; color:var(--dim); margin:5px 0 10px; } .mc-leg i { display:inline-block; width:12px; height:0; border-top:2px solid; vertical-align:middle; margin-right:5px; }
   .btbox { border-top:1px solid var(--line); margin-top:6px; padding-top:14px; }
   .btbox h4 { margin:0 0 2px; font-size:13.5px; } .btbox .bsub { font-size:11.5px; color:var(--dim); margin:0 0 10px; line-height:1.5; }
   .bt-in { display:grid; grid-template-columns:repeat(4,1fr); gap:9px; margin-bottom:9px; }
@@ -3194,10 +3223,20 @@ function renderGallery(elId, activeKey, onPick){
     return '<button class="fcard'+(STATE[activeKey]&&STATE[activeKey].name===t.name?' active':'')+'" data-id="'+esc(t.id)+'" data-nm="'+esc(t.name)+'">'
       +'<span class="art">'+emoji(t.name)+'</span><span class="body"><span class="nm">'+esc(t.name)+'</span>'
       +'<span class="ct">'+n+' logged</span></span></button>';
-  }).join("");
-  el.querySelectorAll(".fcard").forEach(function(c){
+  }).join("")
+  + '<button class="fcard newfolder" id="'+elId+'-new" style="border-style:dashed"><span class="art">+</span><span class="body"><span class="nm">New setup</span><span class="ct">create a folder</span></span></button>';
+  el.querySelectorAll(".fcard:not(.newfolder)").forEach(function(c){
     c.onclick=function(){ onPick({ id:c.dataset.id, name:c.dataset.nm }); };
   });
+  document.getElementById(elId+"-new").onclick=function(){
+    var name=(prompt("Name for the new setup (it becomes a folder in your Setups Database)")||"").trim();
+    if(!name) return;
+    fetch("/api/setups/type",{ method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({name:name}) })
+    .then(function(r){return r.json();}).then(function(res){
+      if(res.error){ alert(res.error); return; }
+      loadData().then(function(){ onPick({ id:res.id, name:res.name }); });
+    });
+  };
 }
 
 function pickLog(s){ STATE.logSetup=s; document.getElementById("log-steps").hidden=false;
@@ -3588,12 +3627,81 @@ function mountBacktest(e, patch){
   }).catch(function(){ host.innerHTML='<h4>Backtest this setup</h4><p class="bsub">Could not load prices.</p>'; });
 }
 
+// ---- detail sheet header chart ----
+function hueOf(s){ var h=0; for(var i=0;i<(s||"").length;i++) h=(h*31+s.charCodeAt(i))%360; return "hsl("+h+",42%,45%)"; }
+var MC = { chart:null };
+function mountMainChart(e){
+  var code = e.country==="India" ? "IN" : "US", box=document.getElementById("mc");
+  if(MC.chart){ try{ MC.chart.remove(); }catch(x){} MC.chart=null; }
+  Promise.all([
+    fetch("/api/setups/info?country="+code+"&ticker="+encodeURIComponent(e.ticker)).then(function(r){return r.json();}).catch(function(){return {};}),
+    fetch("/api/setups/prices?country="+code+"&ticker="+encodeURIComponent(e.ticker)).then(function(r){return r.json();}),
+    fetch("/api/setups/stop?pageId="+encodeURIComponent(e.pageId)).then(function(r){return r.json();}).catch(function(){return {};})
+  ]).then(function(res){
+    var I=res[0]||{}, D=res[1], S=res[2]||{};
+    if(I.name) document.getElementById("sh-nm").textContent=I.name;
+    if(I.mcap){ var m=document.getElementById("sh-mc"); m.hidden=false; m.textContent="mkt cap "+(I.mcap>=1e12?(I.mcap/1e12).toFixed(2)+"T":(I.mcap/1e9).toFixed(1)+"B"); }
+    var tvSym = I.tv || e.ticker;
+    document.getElementById("sh-tv").href="https://www.tradingview.com/chart/?symbol="+encodeURIComponent(tvSym);
+    if(D.error){ box.innerHTML='<div class="chart-empty" style="padding:20px">'+esc(D.error)+'</div>'; return; }
+    var N=D.dates.length, cs=getComputedStyle(document.documentElement), css=function(n){ return cs.getPropertyValue(n).trim(); };
+    function ema(a,n){ var k=2/(n+1), o=[]; a.forEach(function(v,i){ o.push(i? v*k+o[i-1]*(1-k) : v); }); return o; }
+    var view="t", tf="buy";
+    function idxFor(d){ for(var i=0;i<N;i++){ if(D.dates[i]>=d) return i; } return N-1; }
+    function drawTerminal(){
+      box.innerHTML="";
+      var chart=LightweightCharts.createChart(box,{width:box.clientWidth,height:330,
+        layout:{background:{color:"transparent"},textColor:css("--dim"),fontSize:10},grid:{vertLines:{color:css("--line")},horzLines:{color:css("--line")}},
+        rightPriceScale:{borderColor:css("--line")},timeScale:{borderColor:css("--line")},crosshair:{mode:0}});
+      MC.chart=chart;
+      var c=chart.addCandlestickSeries({upColor:css("--up"),downColor:css("--down"),borderUpColor:css("--up"),borderDownColor:css("--down"),wickUpColor:css("--up"),wickDownColor:css("--down")});
+      c.setData(D.dates.map(function(d,i){ return {time:d,open:D.open[i],high:D.high[i],low:D.low[i],close:D.close[i]}; }));
+      [["#f0b429",10],["#8b5cf6",20],["#38bdf8",50]].forEach(function(p){
+        var l=chart.addLineSeries({color:p[0],lineWidth:1.3,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false}), v=ema(D.close,p[1]);
+        l.setData(D.dates.map(function(d,i){ return {time:d,value:v[i]}; })); });
+      var bi=e.buyDate?idxFor(e.buyDate):null;
+      if(bi!=null){
+        var entry=S.entryPrice||D.close[bi];
+        c.createPriceLine({price:entry,color:"#2563eb",lineWidth:1,lineStyle:2,title:"entry"});
+        if(S.stop) c.createPriceLine({price:+S.stop,color:"#dc2626",lineWidth:1,lineStyle:2,title:"stop"});
+        c.setMarkers([{time:D.dates[bi],position:"belowBar",color:"#2563eb",shape:"arrowUp",text:"buy"}]);
+      }
+      var last=N-1, bars={"1M":22,"3M":63,"6M":126,"1Y":252,"2Y":504}[tf];
+      var from = tf==="all" ? 0 : tf==="buy" ? Math.max(0,(bi!=null?bi:last-126)-25) : Math.max(0,last-bars);
+      chart.timeScale().setVisibleRange({from:D.dates[from],to:D.dates[last]});
+      new ResizeObserver(function(en){ if(MC.chart===chart) chart.applyOptions({width:en[0].contentRect.width}); }).observe(box);
+    }
+    function drawTV(){
+      if(MC.chart){ try{ MC.chart.remove(); }catch(x){} MC.chart=null; }
+      var dark=window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches;
+      box.innerHTML='<iframe src="https://s.tradingview.com/widgetembed/?symbol='+encodeURIComponent(tvSym)+'&interval=D&theme='+(dark?"dark":"light")
+        +'&style=1&timezone=exchange&withdateranges=1&hide_side_toolbar=0&allow_symbol_change=1&saveimage=1" title="TradingView chart"></iframe>';
+    }
+    var tfs=[["buy","Since buy"],["1M","1M"],["3M","3M"],["6M","6M"],["1Y","1Y"],["2Y","2Y"],["all","All"]];
+    var bar=document.getElementById("mc-tf");
+    function drawBar(){ bar.innerHTML=tfs.map(function(t){ return '<button data-t="'+t[0]+'"'+(t[0]===tf?' class="on"':'')+'>'+t[1]+'</button>'; }).join(""); bar.style.display=view==="t"?"":"none"; }
+    bar.onclick=function(ev){ var b=ev.target.closest("button"); if(!b) return; tf=b.dataset.t; drawBar(); drawTerminal(); };
+    document.getElementById("mc-view").onclick=function(ev){ var b=ev.target.closest("button"); if(!b) return; view=b.dataset.v;
+      Array.prototype.forEach.call(document.querySelectorAll("#mc-view button"),function(x){ x.classList.toggle("on",x===b); });
+      drawBar(); view==="t" ? drawTerminal() : drawTV(); };
+    drawBar(); drawTerminal();
+  }).catch(function(){ box.innerHTML='<div class="chart-empty" style="padding:20px">Could not load the chart.</div>'; });
+}
+
 // ---- detail sheet ----
 function openSheet(e){
   var opts=exitRuleOptions();
   document.getElementById("sheet").innerHTML =
-    '<h3><span class="tk-cell">'+logoImg(e.ticker,e.logoid,22)+esc(e.ticker)+'</span></h3>'
-    +'<div class="meta">'+esc(e.setup||"")+' · bought '+fmtDate(e.buyDate)+' · '+esc(e.country||"")+'</div>'
+    '<div class="sh-head"><span class="sh-logo" style="background:'+hueOf(e.ticker)+'">'+esc((e.ticker||"").slice(0,2))
+      +(e.logoid?'<img src="/api/logo/'+encodeURIComponent(e.logoid)+'" alt="" onerror="this.remove()">':'')+'</span>'
+      +'<div style="flex:1;min-width:0"><div class="sh-tk" id="sh-tk">'+esc(e.ticker)+'</div><div class="sh-nm" id="sh-nm">&nbsp;</div></div>'
+      +'<a class="nlink" id="sh-tv" href="https://www.tradingview.com/chart/?symbol='+encodeURIComponent(e.ticker)+'" target="_blank" rel="noopener">Open in TradingView ↗</a></div>'
+    +'<div class="sh-tags"><span>'+esc(e.setup||"")+'</span><span>bought '+fmtDate(e.buyDate)+'</span><span>'+esc(e.country||"")+'</span>'
+      +(e.sector?'<span>'+esc(e.sector)+'</span>':'')+(e.industry?'<span>'+esc(e.industry)+'</span>':'')+'<span id="sh-mc" hidden></span></div>'
+    +'<div class="mc-bar"><div class="mc-seg" id="mc-tf"></div><div class="mc-seg" id="mc-view"><button data-v="t" class="on">Terminal chart</button><button data-v="tv">TradingView</button></div></div>'
+    +'<div id="mc"></div>'
+    +'<div class="mc-leg"><span><i style="border-color:#f0b429"></i>EMA 10</span><span><i style="border-color:#8b5cf6"></i>EMA 20</span><span><i style="border-color:#38bdf8"></i>EMA 50</span><span><i style="border-color:#2563eb"></i>entry</span><span><i style="border-color:#dc2626"></i>stop</span></div>'
+    +'<div class="meta" style="margin:8px 0 4px">Your annotated chart</div>'
     +'<div class="chart-box" id="s-chart"><div class="chart-loading">Loading chart…</div></div>'
     +'<div class="paste-zone" id="s-paste" tabindex="0">Paste a chart (Ctrl/Cmd+V) or click to choose an image</div>'
     +'<input type="file" id="s-file" accept="image/*" hidden>'
@@ -3632,6 +3740,7 @@ function openSheet(e){
   document.getElementById("s-resync").onclick=function(){ patch({ entryThesis:document.getElementById("s-thesis").value||null }, true); };
   document.getElementById("s-close").onclick=function(){ document.getElementById("overlay").hidden=true; };
   mountBacktest(e, patch);
+  mountMainChart(e);
 
   // ---- chart: load, then paste / pick to upload ----
   function renderCharts(files){
