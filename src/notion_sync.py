@@ -657,6 +657,13 @@ def fetch_setup_types(log=print):
     return types
 
 
+def _cover_url(page):
+    """The page's Notion cover image (the gallery art), or None. File covers are
+    signed links that expire in about an hour, so this is read fresh on each load."""
+    cover = page.get("cover") or {}
+    return (cover.get(cover.get("type") or "") or {}).get("url")
+
+
 def create_setup_type(name, log=print):
     """A new setup folder: one new row in the Setups Database, named `name`."""
     name = (name or "").strip()
@@ -722,7 +729,7 @@ def fetch_setup_entries(log=print):
             if prop.get("type") == "title":
                 name = _text_of(prop)
                 if name:
-                    types.append({"id": page["id"], "name": name})
+                    types.append({"id": page["id"], "name": name, "cover": _cover_url(page)})
                 break
     types.sort(key=lambda t: t["name"].lower())
     _LAST_TYPES[:] = types      # the create-setup duplicate check falls back on this

@@ -2899,7 +2899,7 @@ SETUPS_PAGE = r"""<!doctype html>
   .gallery { display:grid; grid-template-columns:repeat(auto-fill,minmax(122px,1fr)); gap:9px; margin-bottom:15px; }
   .fcard { font:inherit; text-align:left; border:1.5px solid var(--line); background:var(--panel); color:var(--text);
     border-radius:10px; padding:0; overflow:hidden; cursor:pointer; }
-  .fcard .art { height:50px; display:flex; align-items:center; justify-content:center; font-size:20px;
+  .fcard .art { height:78px; overflow:hidden; display:flex; align-items:center; justify-content:center; font-size:20px;
     background:linear-gradient(135deg,rgba(124,58,237,.16),rgba(37,99,235,.10)); }
   .fcard .body { padding:7px 9px; }
   .fcard .nm { display:block; font-weight:700; font-size:12px; line-height:1.25; }
@@ -3221,10 +3221,13 @@ function renderGallery(elId, activeKey, onPick){
   el.innerHTML = STATE.types.map(function(t){
     var n=countFor(t.name);
     return '<button class="fcard'+(STATE[activeKey]&&STATE[activeKey].name===t.name?' active':'')+'" data-id="'+esc(t.id)+'" data-nm="'+esc(t.name)+'">'
-      +'<span class="art">'+emoji(t.name)+'</span><span class="body"><span class="nm">'+esc(t.name)+'</span>'
+      +'<span class="art">'+(t.cover?'<img src="'+esc(t.cover)+'" alt="" style="width:100%;height:100%;object-fit:cover;display:block"">':emoji(t.name))+'</span><span class="body"><span class="nm">'+esc(t.name)+'</span>'
       +'<span class="ct">'+n+' logged</span></span></button>';
   }).join("")
   + '<button class="fcard newfolder" id="'+elId+'-new" style="border-style:dashed"><span class="art">+</span><span class="body"><span class="nm">New setup</span><span class="ct">create a folder</span></span></button>';
+  el.querySelectorAll(".art img").forEach(function(img){
+    img.onerror=function(){ var nm=img.closest(".fcard").dataset.nm; img.replaceWith(document.createTextNode(emoji(nm))); };
+  });
   el.querySelectorAll(".fcard:not(.newfolder)").forEach(function(c){
     c.onclick=function(){ onPick({ id:c.dataset.id, name:c.dataset.nm }); };
   });
