@@ -569,6 +569,15 @@ def close_trade(page_id, date_closed, exit_price, log=print):
     log(f"  closed {page_id}: {date_closed} @ {exit_price}")
 
 
+def detach_from_parent(page_id, clear_pyramid_label=False, log=print):
+    """Make a row that was wrongly linked as a pyramid add a standalone position."""
+    props = {PARENT_FIELD: {"relation": []}}
+    if clear_pyramid_label:
+        props["Entry Setup"] = {"select": None}
+    _call("PATCH", f"/pages/{page_id}", {"properties": props})
+    log(f"  detached {page_id} from its parent")
+
+
 def update_stop(page_id, stop, log=print):
     _call("PATCH", f"/pages/{page_id}",
           {"properties": {STOP_FIELD: number(stop)}})

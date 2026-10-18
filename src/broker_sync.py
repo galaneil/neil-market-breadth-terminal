@@ -34,20 +34,26 @@ that already has a Date Closed, and nothing here ever writes Entry Setup,
 Exit Setup, Buy/Sell Quality, Entry Thesis, or a chart — those stay entirely
 the human's.
 
-ONLY THE MOST RECENT ROUND TRIP PER TICKER EVER GETS TOUCHED
+EVERY ROUND TRIP IS MATCHED TO ITS OWN ROW
 -----------------------------------------------------------------------------
-A report can carry more than one full round trip for the same ticker (e.g.
-MU closed in August, then reopened in September, both inside one 30-day Flex
-window). Only the last of those legs is ever live-relevant -- anything
-earlier already has its own Notion row from before this system existed, or
-from an earlier day's sync. Matching every leg against "the account's one
-open row for this ticker" (as an earlier version of this file did) breaks
-the moment a ticker has more than one leg in the window: the first, already-
-resolved leg would grab the wrong row and close it with stale data, then a
-duplicate row would get created for the leg that's actually still open --
-and since older legs stay inside the window for weeks, this replayed on
-*every single sync*, corrupting the same ticker daily. Only ever looking at
-legs[-1] makes a rerun a no-op once a ticker's current state is logged.
+A report can carry several full round trips for one ticker (DELL: bought
+Sep 24, sold Oct 14, bought again Oct 15, sold Oct 16). Each round trip ("leg")
+is matched to the Notion row with the same open date and entry price, never to
+"the one open row for this ticker". An earlier version looked only at the
+latest leg and applied it to whichever row was open, so when two legs landed in
+one sync the second leg's buy became a "pyramid add" of the first position and
+its exit closed that position at the wrong date and price (a -1.3% trade
+showed as -14.4%).
+
+The rules now are:
+  * A leg that matches a row: an open row gets its adds (leg still open) or its
+    close (leg closed). A row that already has a Date Closed is never touched.
+  * A leg with no row is a NEW position and gets its own row (a pyramid add is
+    only ever a buy inside a leg that was already open). Legs older than the
+    newest row already logged for that ticker are history and are not
+    resurrected; with no rows at all, only the latest leg is logged.
+  * A position that predates the report window matches no leg by date; the
+    old single-leg fallback applies only when exactly one leg exists.
 
 _RECONCILE_LOCK exists because the exact same corruption can happen from a
 single run, too: a manual "Sync from brokers" click racing the automatic
@@ -58,6 +64,7 @@ written, both trying to resolve the same leg.
 import os
 import sys
 import threading
+from datetime import date as _date
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -117,6 +124,117 @@ def _sync_adds(account, symbol, core, leg, result, log):
                                                "shares": ev["shares"], **created})
 
 
+def _core_rows(database_id, since):
+    """Every core (non-add) row opened on/after `since`, open or closed, as
+    {id, ticker, opened, closed, entry, page}."""
+    pages = notion_sync.query(database_id, {
+        "filter": {"property": "Date Opened", "date": {"on_or_after": since}}})
+    out = []
+    for page in pages:
+        props = page.get("properties", {})
+        if notion_sync._relation_ids(props.get(notion_sync.PARENT_FIELD)):
+            continue
+        out.append({"id": page["id"], "page": page,
+                    "ticker": (notion_sync._text_of(props.get("Ticker")) or "").upper(),
+                    "opened": (notion_sync._date_of(props.get("Date Opened")) or "")[:10],
+                    "closed": (notion_sync._date_of(props.get("Date Closed")) or "")[:10] or None,
+                    "entry": notion_sync._number_of(props.get("Entry Price"))})
+    return out
+
+
+def _days_apart(a, b):
+    return abs((_date.fromisoformat(a) - _date.fromisoformat(b)).days)
+
+
+def _row_gap(row, leg):
+    """How far a row is from being this leg (None if it cannot be): same open
+    date (a day of slack for time zones), and an entry price within 1% of the
+    leg's first buy. Smaller is closer."""
+    events = _add_events(leg)
+    opened = (leg.get("opened") or "")[:10]
+    if not row["opened"] or not opened or _days_apart(row["opened"], opened) > 1:
+        return None
+    if events and row["entry"]:
+        gap = abs(row["entry"] - events[0]["price"]) / events[0]["price"]
+        return gap if gap <= 0.01 else None
+    return 0.0
+
+
+def _assign(legs, rows):
+    """{leg index: row}. Every row goes to at most one leg and every leg gets at
+    most one row; the closest pairs are settled first, so two same-day round
+    trips (a quick scalp, then a bigger buy) each find their own row."""
+    pairs = sorted((g, i, k) for i, leg in enumerate(legs) for k, row in enumerate(rows)
+                   if (g := _row_gap(row, leg)) is not None)
+    out, used_rows = {}, set()
+    for g, i, k in pairs:
+        if i in out or k in used_rows:
+            continue
+        out[i] = rows[k]; used_rows.add(k)
+    return out
+
+
+def plan_leg_actions(legs, rows, open_row=None):
+    """Decide what to do for one ticker. `legs` are its round trips, oldest
+    first; `rows` its core rows from Notion (any state); `open_row` the single
+    open row for the ticker, used only by the pre-window fallback. Returns a
+    list of {"do": "adds" | "close" | "create", "leg": leg, "row": row-or-None}.
+    Pure function so the rules can be tested without Notion."""
+    actions = []
+    matched = _assign(legs, rows)
+    newest = max((r["opened"] for r in rows if r["opened"]), default=None)
+    for i, leg in enumerate(legs):
+        row = matched.get(i)
+        opened = (leg.get("opened") or "")[:10]
+        if row:
+            if row["closed"]:
+                continue                       # resolved already: never touched
+            actions.append({"do": "adds" if leg["open"] else "close", "leg": leg, "row": row})
+        elif (newest is None and i == len(legs) - 1) or (newest is not None and opened and opened > newest):
+            actions.append({"do": "create", "leg": leg, "row": None})
+            newest = opened if newest is None else max(newest, opened)
+    if not matched and open_row is not None and len(legs) == 1:
+        # Position opened before the report window: the legacy single-leg rule.
+        leg = legs[0]
+        actions = [{"do": "adds" if leg["open"] else "close", "leg": leg,
+                    "row": {"id": open_row["id"], "page": open_row, "closed": None}}]
+    return actions
+
+
+def _apply_actions(account, symbol, actions, result, log):
+    for act in actions:
+        leg, row = act["leg"], act["row"]
+        closed = (leg["closed"] or "")[:10]
+        if act["do"] == "adds":
+            _sync_adds(account, symbol, row["page"], leg, result, log)
+        elif act["do"] == "close":
+            if not closed or leg["exitPrice"] is None:
+                continue
+            notion_sync.close_trade(row["id"], closed, leg["exitPrice"], log=log)
+            _close_children(account, row["page"], closed, leg["exitPrice"], log)
+            result["closed"].append({"ticker": symbol, "pageId": row["id"],
+                                     "notionUrl": row["page"].get("url"),
+                                     "exitPrice": leg["exitPrice"], "dateClosed": closed})
+        elif act["do"] == "create":
+            events = _add_events(leg)
+            first = events[0] if events else {"date": (leg["opened"] or "")[:10],
+                                              "shares": leg["shares"], "price": leg["entryPrice"]}
+            if not first["date"]:
+                continue
+            created = notion_sync.create_trade(account, symbol, first["date"], first["price"],
+                                               first["shares"], log=log)
+            result["created"].append({"ticker": symbol, **created})
+            core = {"id": created["pageId"], "url": created.get("notionUrl"),
+                    "properties": {"Date Opened": {"type": "date", "date": {"start": first["date"]}}}}
+            _sync_adds(account, symbol, core, leg, result, log)
+            if closed and leg["exitPrice"] is not None:
+                notion_sync.close_trade(created["pageId"], closed, leg["exitPrice"], log=log)
+                _close_children(account, core, closed, leg["exitPrice"], log)
+                result["closed"].append({"ticker": symbol, "pageId": created["pageId"],
+                                         "notionUrl": created.get("notionUrl"),
+                                         "exitPrice": leg["exitPrice"], "dateClosed": closed})
+
+
 def _close_children(account, core, closed, exit_price, log):
     for child in notion_sync.child_rows(account["id"], core["id"]):
         if not notion_sync._date_of(child.get("properties", {}).get("Date Closed")):
@@ -166,35 +284,17 @@ def reconcile_ibkr(log=print):
         } for t in statement.get("trades", [])]
 
         handled = set()  # tickers whose open/close state came from a real fill
-        for symbol, legs in _legs_from_fills(fills).items():
+        all_legs = _legs_from_fills(fills)
+        stamps = [(l["opened"] or "")[:10] for ls in all_legs.values() for l in ls if l.get("opened")]
+        rows = _core_rows(account["id"], _days_before(min(stamps), 3)) if stamps else []
+        for symbol, legs in all_legs.items():
             if not legs:
                 continue
-            leg = legs[-1]  # only the current round trip is live-relevant --
-                             # see the module docstring for why earlier legs
-                             # must never be reprocessed.
-            existing = open_notion.get(symbol)
-            opened = (leg["opened"] or "")[:10]
-            if leg["open"]:
+            actions = plan_leg_actions(legs, [r for r in rows if r["ticker"] == symbol],
+                                       open_notion.get(symbol))
+            if legs[-1]["open"] or any(a["do"] in ("close", "create") for a in actions):
                 handled.add(symbol)
-                if existing:
-                    _sync_adds(account, symbol, existing, leg, result, log)
-                    continue
-                if not opened:
-                    continue
-                created = notion_sync.create_trade(
-                    account, symbol, opened, leg["entryPrice"], leg["shares"], log=log)
-                result["created"].append({"ticker": symbol, **created})
-            elif existing:
-                closed = (leg["closed"] or "")[:10]
-                if not closed or leg["exitPrice"] is None:
-                    continue
-                handled.add(symbol)
-                notion_sync.close_trade(existing["id"], closed, leg["exitPrice"], log=log)
-                _close_children(account, existing, closed, leg["exitPrice"], log)
-                result["closed"].append({
-                    "ticker": symbol, "pageId": existing["id"],
-                    "notionUrl": existing.get("url"), "exitPrice": leg["exitPrice"],
-                    "dateClosed": closed})
+            _apply_actions(account, symbol, actions, result, log)
 
         for ticker, pos in current_positions.items():
             if ticker in open_notion or ticker in handled:
@@ -215,6 +315,11 @@ def reconcile_ibkr(log=print):
             for t, row in open_notion.items()
             if t not in current_positions and t not in handled]
         return result
+
+
+def _days_before(iso, n):
+    from datetime import timedelta
+    return (_date.fromisoformat(iso) - timedelta(days=n)).isoformat()
 
 
 def _legs_from_fills(fills):
@@ -267,7 +372,7 @@ def _legs_from_fills(fills):
                 exit_price = sum(q * p for q, p, _ in leg["sells"]) / sell_qty
                 closed = max((d for _, _, d in leg["sells"] if d), default=None)
             parsed.append({
-                "shares": buy_qty, "entryPrice": entry_price, "opened": opened,
+                "shares": buy_qty, "sellShares": sell_qty, "entryPrice": entry_price, "opened": opened,
                 "closed": closed, "exitPrice": exit_price,
                 "open": closed is None, "buys": leg["buys"],
             })
@@ -298,28 +403,62 @@ def reconcile_angelone(token, api_key, account_label, log=print):
     with _RECONCILE_LOCK:
         legs_by_symbol = _legs_from_fills(fills)
         open_notion = _open_rows(account["id"])
-
+        stamps = [(l["opened"] or "")[:10] for ls in legs_by_symbol.values() for l in ls if l.get("opened")]
+        rows = _core_rows(account["id"], _days_before(min(stamps), 3)) if stamps else []
         for symbol, legs in legs_by_symbol.items():
-            if not legs:
-                continue
-            leg = legs[-1]  # only the current round trip is live-relevant --
-                             # see the module docstring for why earlier legs
-                             # must never be reprocessed.
-            existing = open_notion.get(symbol)
-            opened = (leg["opened"] or "")[:10]
-            if leg["open"]:
-                if existing or not opened:
-                    continue  # already logged, or too little data to log
-                created = notion_sync.create_trade(
-                    account, symbol, opened, leg["entryPrice"], leg["shares"], log=log)
-                result["created"].append({"ticker": symbol, **created})
-            elif existing:
-                closed = (leg["closed"] or "")[:10]
-                if not closed or leg["exitPrice"] is None:
-                    continue
-                notion_sync.close_trade(existing["id"], closed, leg["exitPrice"], log=log)
-                result["closed"].append({
-                    "ticker": symbol, "pageId": existing["id"],
-                    "notionUrl": existing.get("url"), "exitPrice": leg["exitPrice"],
-                    "dateClosed": closed})
+            if legs:
+                _apply_actions(account, symbol, plan_leg_actions(
+                    legs, [r for r in rows if r["ticker"] == symbol], open_notion.get(symbol)),
+                    result, log)
         return result
+
+
+def repair_ibkr_legs(apply=False, log=print):
+    """Find and (with apply=True) fix NG-IBKR rows that an older sync tangled
+    across round trips: a core row closed with a LATER leg's date and price, and
+    a later position wrongly linked as a pyramid add of an earlier one.
+    Returns the list of changes, one dict each. Nothing else is touched."""
+    import ibkr_flex
+    account = next(a for a in notion_sync.TRADE_DATABASES if a["label"] == "NG-IBKR")
+    statement = ibkr_flex.parse(ibkr_flex.fetch_statement(log=lambda *a: None))
+    fills = [{"symbol": (t.get("symbol") or "").upper(), "quantity": abs(t["quantity"]) if t.get("quantity") is not None else None,
+              "price": t.get("price"), "side": "BUY" if t.get("side") == "BUY" else "SELL",
+              "datetime": t.get("datetime")} for t in statement.get("trades", [])]
+    legs_by_symbol = _legs_from_fills(fills)
+    trades = [t for t in notion_sync.fetch_trades(log=lambda *a: None) if t["account"] == "NG-IBKR"]
+    as_row = lambda t: {"id": t["pageId"], "ticker": t["ticker"], "opened": (t.get("dateOpened") or "")[:10],
+                        "closed": (t.get("dateClosed") or "")[:10] or None, "entry": t.get("entryPrice")}
+    changes = []
+    by_id = {t["pageId"]: t for t in trades}
+    for symbol, legs in legs_by_symbol.items():
+        cores = [as_row(t) for t in trades if t["ticker"] == symbol and not t.get("parentId")]
+        kids = [t for t in trades if t["ticker"] == symbol and t.get("parentId")]
+        core_leg = {}
+        # Only round trips that net to flat inside the report can be trusted:
+        # a leg that sells more than it bought started before the window.
+        clean = [l for l in legs if not l["open"] and l["exitPrice"] is not None and abs(l["sellShares"] - l["shares"]) <= 0.01]
+        for idx, row in _assign(legs, cores).items():
+            leg = legs[idx]
+            if leg not in clean:
+                continue
+            core_leg[row["id"]] = leg
+            t = by_id[row["id"]]
+            closed = (leg["closed"] or "")[:10]
+            if (t.get("dateClosed") or "")[:10] != closed or abs((t.get("exitPrice") or 0) - leg["exitPrice"]) > 0.02:
+                changes.append({"ticker": symbol, "pageId": t["pageId"], "opened": t.get("dateOpened"), "kind": "core closed at the wrong date/price",
+                                "close": {"from": [t.get("dateClosed"), t.get("exitPrice")], "to": [closed, round(leg["exitPrice"], 4)]}})
+        # an "add" opened after its parent's own round trip had already ended is a new position
+        for k in kids:
+            parent_leg = core_leg.get(k["parentId"])
+            if parent_leg is None or not parent_leg["closed"]:
+                continue
+            if (k.get("dateOpened") or "") >= (parent_leg["closed"] or "")[:10]:
+                changes.append({"ticker": symbol, "pageId": k["pageId"], "opened": k.get("dateOpened"), "kind": "new position wrongly linked as a pyramid add",
+                                "detach": True, "pyramid_label": k.get("entrySetup") == "Pyramid Add"})
+    if apply:
+        for c in changes:
+            if c.get("detach"):
+                notion_sync.detach_from_parent(c["pageId"], clear_pyramid_label=c["pyramid_label"], log=log)
+            if c.get("close"):
+                notion_sync.close_trade(c["pageId"], c["close"]["to"][0], c["close"]["to"][1], log=log)
+    return changes
