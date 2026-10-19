@@ -1768,6 +1768,7 @@ JOURNAL_PAGE = r"""<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Trade Journal</title>
 <script src="/docs/vendor/lightweight-charts.js"></script>
+<script src="/docs/std_chart.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
@@ -1916,7 +1917,7 @@ JOURNAL_PAGE = r"""<!doctype html>
   .mfe-bar{position:relative; height:8px; background:var(--line); border-radius:4px; min-width:90px;}
   .mfe-bar i{position:absolute; left:0; top:0; bottom:0; border-radius:4px; background:var(--up); opacity:.85;}
   .mfe-bar i.low{background:var(--warn);}
-  #d-path{height:190px; margin:4px 0 12px; border:1px solid var(--line); border-radius:9px; overflow:hidden;}
+  #d-path{margin:4px 0 12px; border:1px solid var(--line); border-radius:9px; padding:8px 10px 4px;}
   #d-path[hidden]{display:none;}
 </style></head><body>
 <main>
@@ -2425,32 +2426,24 @@ function drawMfe(trades) {
 }
 
 let pathChart = null;
+// The trade's chart: the standard chart (candles, EMA 10/20/50, volume with its 30-day average,
+// 52-week lines as of the entry date) with the buy and sell arrows running out into empty space.
 function drawPath(t) {
   const box = document.getElementById("d-path");
-  if (pathChart) { pathChart.remove(); pathChart = null; }
-  box.hidden = true;
-  if (!t.dateClosed || !t.dateOpened || !window.LightweightCharts) return;
+  if (pathChart) { pathChart.destroy(); pathChart = null; }
+  box.hidden = true; box.innerHTML = "";
+  if (!t.dateClosed || !t.dateOpened || !window.StdChart) return;
   fetch("/api/journal/path?country=" + encodeURIComponent(t.country || "US") + "&symbol=" + encodeURIComponent(t.ticker || "")
         + "&from=" + t.dateOpened + "&to=" + t.dateClosed).then(r => r.json()).then(d => {
-    if (!d.candles || currentTrade !== t) return;
+    if (!d.series || currentTrade !== t) return;
+    const s = d.series, entryIdx = Math.max(0, s.dates.findIndex(x => x >= t.dateOpened));
+    const lines = [], m = MFE[t.pageId];
+    if (t.initialStop) lines.push({p: t.initialStop, color: "#dc2626", title: "stop"});
+    if (m) lines.push({p: m.peak, color: "#16a34a", title: "peak"});
     box.hidden = false;
-    const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
-    pathChart = LightweightCharts.createChart(box, { width: box.clientWidth, height: 190,
-      layout: { background: { color: "transparent" }, textColor: css("--dim"), fontSize: 10 },
-      grid: { vertLines: { color: css("--line") }, horzLines: { color: css("--line") } },
-      rightPriceScale: { borderColor: css("--line") }, timeScale: { borderColor: css("--line") } });
-    const s = pathChart.addCandlestickSeries({ upColor: css("--up"), downColor: css("--down"),
-      borderUpColor: css("--up"), borderDownColor: css("--down"), wickUpColor: css("--up"), wickDownColor: css("--down") });
-    s.setData(d.candles);
-    if (t.entryPrice) s.createPriceLine({ price: t.entryPrice, color: css("--accent"), lineWidth: 1, lineStyle: 2, title: "entry" });
-    if (t.exitPrice) s.createPriceLine({ price: t.exitPrice, color: css("--warn"), lineWidth: 1, lineStyle: 2, title: "exit" });
-    const m = MFE[t.pageId];
-    if (m) s.createPriceLine({ price: m.peak, color: css("--up"), lineWidth: 1, lineStyle: 2, title: "peak" });
-    const marks = [{ time: t.dateOpened, position: "belowBar", color: css("--accent"), shape: "arrowUp", text: "in" },
-                   { time: t.dateClosed, position: "aboveBar", color: css("--warn"), shape: "arrowDown", text: "out" }]
-      .filter(x => d.candles.some(c => c.time === x.time));
-    s.setMarkers(marks);
-    pathChart.timeScale().fitContent();
+    pathChart = StdChart.mount(box, {t: t.ticker, name: t.name || t.ticker, d: s.dates, o: s.open, h: s.high, l: s.low, c: s.close, v: s.volume,
+      logoUrl: t.logoid ? "/api/logo/" + encodeURIComponent(t.logoid) : "", ht: 340, tf: "Trade", entryIdx: entryIdx, lines: lines,
+      trades: [{d: t.dateOpened, a: "Buy", p: t.entryPrice, q: t.shares}, {d: t.dateClosed, a: "Sell", p: t.exitPrice, q: t.shares}].filter(x => x.p)});
   }).catch(() => {});
 }
 
@@ -3684,14 +3677,14 @@ function mountMainChart(e){
     function drawBar(){ bar.innerHTML=tfs.map(function(t){ return '<button data-t="'+t[0]+'"'+(t[0]===tf?' class="on"':'')+'>'+t[1]+'</button>'; }).join(""); bar.style.display=view==="t"?"":"none"; }
     bar.onclick=function(ev){ var b=ev.target.closest("button"); if(!b) return; tf=b.dataset.t; drawBar(); drawTerminal(); };
     document.getElementById("mc-view").onclick=function(ev){ var b=ev.target.closest("button"); if(!b||b.disabled) return; view=b.dataset.v;
-      if(window.TVE) TVE.setEngine(view==="tv"?"tv":"terminal");
+      if(window.TVE) TVE.setEngine(view==="tv"?"tv":"terminal", box.clientWidth);
       Array.prototype.forEach.call(document.querySelectorAll("#mc-view button"),function(x){ x.classList.toggle("on",x===b); });
       drawBar(); view==="t" ? drawTerminal() : drawTV(); };
     // TradingView is the default chart. NSE data cannot be embedded, so India entries stay on the Terminal chart.
     var tvOk = window.TVE ? TVE.stockSymbol(e.ticker, code, I.tv) : null;
     var tvBtn = document.querySelector('#mc-view [data-v="tv"]');
     if(!tvOk){ tvBtn.disabled=true; tvBtn.title="TradingView does not allow NSE data in embedded charts"; }
-    view = (tvOk && TVE.engine()==="tv") ? "tv" : "t";
+    view = (tvOk && TVE.engine(box.clientWidth)==="tv") ? "tv" : "t";
     Array.prototype.forEach.call(document.querySelectorAll("#mc-view button"),function(x){ x.classList.toggle("on",x.dataset.v===view); });
     drawBar(); view==="t" ? drawTerminal() : drawTV();
   }).catch(function(){ box.innerHTML='<div class="chart-empty" style="padding:20px">Could not load the chart.</div>'; });

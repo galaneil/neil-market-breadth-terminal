@@ -93,8 +93,17 @@ def path(country, symbol, start, end, pad=15):
     if not idx:
         return {"error": "no bars in the trade window"}
     lo, hi = max(0, idx[0] - pad), min(len(hist["dates"]), idx[-1] + pad + 1)
+    # `series` is the longer run the standard chart needs: enough bars before the entry for the
+    # 50 EMA to settle and for a 52-week range, plus volume. Rows with a gap are dropped.
+    s0 = max(0, idx[0] - 300)
+    vol = hist.get("volume") or [None] * len(hist["dates"])
+    keep = [i for i in range(s0, hi) if None not in (hist["open"][i], hist["high"][i], hist["low"][i], hist["close"][i])]
+    series = {"dates": [hist["dates"][i] for i in keep], "open": [hist["open"][i] for i in keep],
+              "high": [hist["high"][i] for i in keep], "low": [hist["low"][i] for i in keep],
+              "close": [hist["close"][i] for i in keep], "volume": [vol[i] or 0 for i in keep]}
     return {"candles": [{"time": hist["dates"][i], "open": hist["open"][i], "high": hist["high"][i],
-                         "low": hist["low"][i], "close": hist["close"][i]} for i in range(lo, hi)]}
+                         "low": hist["low"][i], "close": hist["close"][i]} for i in range(lo, hi)],
+            "series": series}
 
 
 # --------------------------------------------------------------------------

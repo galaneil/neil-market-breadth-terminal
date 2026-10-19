@@ -22,8 +22,16 @@
     index_sensex: ["BSE:SENSEX", "BSE Sensex"],
   };
 
-  function engine() { try { return localStorage.getItem(KEY) || "tv"; } catch (e) { return "tv"; } }
-  function setEngine(v) { try { localStorage.setItem(KEY, v); } catch (e) {} }
+  // The default depends on room: in a tight space (a card, a side sheet) the embedded TradingView
+  // chart is cramped, so the Terminal chart is the default there; with room to spare it is
+  // TradingView. A choice you make is remembered separately for each size.
+  function sizeClass(w) { return w && w < 760 ? "tight" : "wide"; }
+  function engine(w) {
+    var c = sizeClass(w);
+    try { var v = localStorage.getItem(KEY + "." + c); if (v) return v; } catch (e) {}
+    return c === "tight" ? "terminal" : "tv";
+  }
+  function setEngine(v, w) { try { localStorage.setItem(KEY + "." + sizeClass(w), v); } catch (e) {} }
 
   function isDark() {
     var bg = getComputedStyle(document.body).backgroundColor || "", m = bg.match(/\d+(\.\d+)?/g);
@@ -93,8 +101,9 @@
     var note = document.createElement("span"); note.className = "tve-note";
     o.bar.appendChild(seg); o.bar.appendChild(note);
     var tvBtn = seg.querySelector('[data-e="tv"]');
+    var width = o.bar.clientWidth || (o.host.parentNode && o.host.parentNode.clientWidth) || 0;
     function apply() {
-      var can = !!o.symbol, tv = engine() === "tv" && can;
+      var can = !!o.symbol, tv = engine(width) === "tv" && can;
       tvBtn.disabled = !can; tvBtn.title = can ? "" : "TradingView does not allow this market in embedded charts";
       seg.querySelector('[data-e="tv"]').classList.toggle("on", tv);
       seg.querySelector('[data-e="terminal"]').classList.toggle("on", !tv);
@@ -104,7 +113,7 @@
       if (tv) mount(o.host, o.symbol, o.height); else o.host.innerHTML = "";
       if (o.onApply) o.onApply(tv);
     }
-    seg.onclick = function (ev) { var b = ev.target.closest("button"); if (!b || b.disabled) return; setEngine(b.dataset.e); apply(); };
+    seg.onclick = function (ev) { var b = ev.target.closest("button"); if (!b || b.disabled) return; setEngine(b.dataset.e, width); apply(); };
     apply();
     return { refresh: apply, setSymbol: function (s) { o.symbol = s; apply(); } };
   }

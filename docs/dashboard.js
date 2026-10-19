@@ -206,11 +206,16 @@
     }
     tveQueue.push(cb);
   }
-  function tvPreferred() { try { return localStorage.getItem("chartEngine") !== "terminal"; } catch (e) { return true; } }
+  // Same rule as tv_embed.js: Terminal by default in tight spaces, TradingView with room to spare.
+  function tvPreferred(el) {
+    const w = el && el.clientWidth || 0, cls = w && w < 760 ? "tight" : "wide";
+    try { const v = localStorage.getItem("chartEngine." + cls); if (v) return v === "tv"; } catch (e) { /* fall through */ }
+    return cls === "wide";
+  }
   // Adds the TradingView | Terminal switch and chart host above an existing Terminal chart.
   // o: { bar, host, hide:[els], symbol (resolved by TVE), canTV (known before TVE loads), height, note }
   function tvAttach(o) {
-    if (tvPreferred() && o.canTV) (o.hide || []).forEach(function (el) { if (el) el.style.display = "none"; });
+    if (tvPreferred(o.bar) && o.canTV) (o.hide || []).forEach(function (el) { if (el) el.style.display = "none"; });
     withTVE(function () { o.symbol = o.symbolFn(); if (o.noteFn) o.note = o.noteFn(); TVE.attach(o); });
   }
 
