@@ -702,6 +702,7 @@
       return { time: r.date, open: prevClose, high: r.high, low: r.low, close: r.close };
     }
 
+    const rng52 = {};
     function draw(tf) {
       drawnTf = tf;
       // Rebuilt every draw, not once outside — MBT_EXTEND unshifts older
@@ -730,6 +731,15 @@
           .filter(function (r) { return r.avg_vol30 !== undefined && r.avg_vol30 !== null; })
           .map(function (r) { return { time: r.date, value: r.avg_vol30 }; }));
       }
+      // 52-week high and low as of the latest session: flat dotted lines with how far the
+      // close is from each. Measured on the full history, not the timeframe on screen.
+      if (rng52.hi) { try { barSeries.removePriceLine(rng52.hi); barSeries.removePriceLine(rng52.lo); } catch (e) {} }
+      const yr = rows.slice(-252), hi52 = Math.max.apply(null, yr.map(function (r) { return r.high; })),
+            lo52 = Math.min.apply(null, yr.map(function (r) { return r.low; })), last52 = rows[rows.length - 1].close;
+      rng52.hi = barSeries.createPriceLine({ price: hi52, color: cssVar("--text"), lineWidth: 1, lineStyle: 1, axisLabelVisible: true,
+        title: "52w high " + fmtSignedPct((last52 / hi52 - 1) * 100) });
+      rng52.lo = barSeries.createPriceLine({ price: lo52, color: cssVar("--text"), lineWidth: 1, lineStyle: 1, axisLabelVisible: true,
+        title: "52w low " + fmtSignedPct((last52 / lo52 - 1) * 100) });
       chart.timeScale().fitContent();
       if (window.MBT_FOCUS && window.MBT_FOCUS.length) applyFocus();
     }
@@ -2123,6 +2133,51 @@
       document.getElementById("sig-chg-val").textContent = chgMin <= -20 ? "Any" : (chgMin > 0 ? "+" : "") + chgMin + "%";
       draw();
     });
+    // ---- Saved filters: name the current combination of every filter on the rail and
+    // bring it back in one click. Kept in this browser, per market.
+    (function savedFilters() {
+      const KEY = "mbt-signal-presets-" + (DATA.country || "US");
+      const read = function () { try { return JSON.parse(localStorage.getItem(KEY) || "{}"); } catch (e) { return {}; } };
+      const write = function (o) { try { localStorage.setItem(KEY, JSON.stringify(o)); } catch (e) {} };
+      const box = document.createElement("div");
+      box.innerHTML = '<div class="rail-h">Saved filters</div>' +
+        '<div class="filter-row"><select class="filt-select" id="sig-preset"></select></div>' +
+        '<div class="filter-row" style="display:flex;gap:6px"><input class="industry-search" id="sig-preset-name" placeholder="Name this filter" autocomplete="off" style="flex:1;min-width:0">' +
+        '<button class="tf-btn" id="sig-preset-save" type="button">Save</button><button class="tf-btn" id="sig-preset-del" type="button">Delete</button></div>';
+      railEl.insertBefore(box, railEl.firstChild);
+      const sel = document.getElementById("sig-preset"), nameIn = document.getElementById("sig-preset-name"), del = document.getElementById("sig-preset-del");
+      const fill = function (picked) {
+        const names = Object.keys(read()).sort();
+        sel.innerHTML = '<option value="">Pick a saved filter…</option>' + names.map(function (n) {
+          return '<option value="' + n.replace(/"/g, "&quot;") + '"' + (n === picked ? " selected" : "") + ">" + n + "</option>";
+        }).join("");
+        del.disabled = !picked;
+      };
+      const chgLabel = function () { document.getElementById("sig-chg-val").textContent = chgMin <= -20 ? "Any" : (chgMin > 0 ? "+" : "") + chgMin + "%"; };
+      sel.addEventListener("change", function () {
+        del.disabled = !sel.value;
+        const q = read()[sel.value]; if (!q) return;
+        activeSig = q.sig || activeSig; adrMin = q.adr; turnMin = q.turn; mcapMin = q.mcap; chgMin = q.chg;
+        hideExtended = !!q.hide; gapMin = q.gap; volMultMin = q.vol; corrMin = q.cmin; corrMax = q.cmax;
+        searchTerm = q.search || ""; sigSector = q.sector || ""; sigIndustry = q.industry || "";
+        [["sig-adr-slider", adrMin], ["sig-turn-slider", turnMin], ["sig-mcap-slider", mcapMin], ["sig-chg-slider", chgMin]].forEach(function (x) {
+          document.getElementById(x[0]).value = x[1];
+        });
+        document.getElementById("sig-search").value = searchTerm;
+        document.querySelectorAll("#signals-rail .sig-item[data-sig]").forEach(function (i) { i.classList.toggle("active", i.dataset.sig === activeSig); });
+        chgLabel(); drawTypeFilters(); drawSectorIndustryFilters(); draw();
+      });
+      document.getElementById("sig-preset-save").addEventListener("click", function () {
+        const name = nameIn.value.trim();
+        if (!name) { nameIn.focus(); return; }
+        const all = read();
+        all[name] = { sig: activeSig, adr: adrMin, turn: turnMin, mcap: mcapMin, chg: chgMin, hide: hideExtended, gap: gapMin,
+                      vol: volMultMin, cmin: corrMin, cmax: corrMax, search: searchTerm, sector: sigSector, industry: sigIndustry };
+        write(all); nameIn.value = ""; fill(name);
+      });
+      del.addEventListener("click", function () { const all = read(); delete all[sel.value]; write(all); fill(""); });
+      fill("");
+    })();
     drawSectorIndustryFilters();
     // Sync the rail's highlighted item to whatever activeSig actually
     // defaulted to — the markup always marks "breakout" active, which is
