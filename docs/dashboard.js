@@ -2602,6 +2602,74 @@
   // names. Doing all three windows at once, each independently drillable,
   // plus a log of whatever's currently drilled in each, removes the need to
   // hold the chain in your head (or a notepad) between windows.
+  // ---------- Chart wall: the actual charts behind a list of tickers ----------
+  // Used by Money Flows: once an industry is picked, its stocks are shown as real
+  // charts (candles, EMA 10/20/50, volume) instead of just names. Each card has an
+  // Expand button that opens the full TradingView chart in a modal.
+  const wallCache = {};
+  function loadTicker(sym) {
+    if (!wallCache[sym]) {
+      wallCache[sym] = fetch((DATA.tickerDir || "tickers") + "/" + encodeURIComponent(sym) + ".json")
+        .then(function (r) { if (!r.ok) throw new Error("404"); return r.json(); });
+    }
+    return wallCache[sym];
+  }
+  function tvModal(sym) {
+    const m = document.createElement("div");
+    m.className = "tv-modal";
+    m.innerHTML = '<div class="tv-modal-box"><div class="tv-modal-head"><b>' + sym + '</b><button class="tf-btn" type="button">Close</button></div><div class="tv-modal-body"></div></div>';
+    document.body.appendChild(m);
+    const close = function () { m.remove(); };
+    m.querySelector("button").addEventListener("click", close);
+    m.addEventListener("click", function (e) { if (e.target === m) close(); });
+    withTVE(function () {
+      const symbol = TVE.stockSymbol(sym, DATA.country);
+      if (!symbol) { m.querySelector(".tv-modal-body").innerHTML = '<div class="empty-note" style="padding:20px">TradingView does not allow this market in embedded charts.</div>'; return; }
+      TVE.mount(m.querySelector(".tv-modal-body"), symbol, Math.max(420, Math.round(window.innerHeight * 0.7)));
+    });
+  }
+  function renderChartWall(el, tickers, context) {
+    el.innerHTML = '<div class="mf-wall-grid">' + tickers.map(function (t) {
+      return '<div class="mf-wcard" data-t="' + t + '"><div class="mf-wcard-head"><span class="mf-wcard-t">' + t + '</span>' +
+        '<span class="mf-wcard-px"></span><button type="button" class="mf-wcard-x" title="Open the full TradingView chart">Expand</button></div>' +
+        '<div class="mf-wcard-chart"></div></div>';
+    }).join("") + '</div>';
+    const th = lwTheme();
+    el.querySelectorAll(".mf-wcard").forEach(function (card) {
+      const sym = card.dataset.t, box = card.querySelector(".mf-wcard-chart");
+      card.querySelector(".mf-wcard-x").addEventListener("click", function () { tvModal(sym); });
+      card.querySelector(".mf-wcard-t").addEventListener("click", function () { Sync.publish({ ticker: sym }); openStockPin(sym, context || ""); });
+      loadTicker(sym).then(function (p) {
+        const n = p.dates.length, start = Math.max(0, n - 130);
+        const last = p.close[n - 1], prev = p.close[n - 2], chg = prev ? (last / prev - 1) * 100 : null;
+        card.querySelector(".mf-wcard-px").innerHTML = fmtNum(last, 2) + (chg === null ? "" :
+          ' <span class="' + (chg >= 0 ? "up" : "down") + '">' + (chg >= 0 ? "+" : "") + fmtNum(chg, 2) + "%</span>");
+        const hasVol = !!(p.volume && p.volume.some(function (v) { return v != null; }));
+        const chart = LightweightCharts.createChart(box, {
+          height: 220, width: box.clientWidth,
+          layout: { background: { type: "solid", color: th.bg }, textColor: th.text, fontSize: 10 },
+          grid: { vertLines: { color: th.grid }, horzLines: { color: th.grid } },
+          rightPriceScale: { borderColor: th.border, scaleMargins: { top: 0.06, bottom: hasVol ? 0.26 : 0.06 } },
+          timeScale: { borderColor: th.border, rightOffset: 2 },
+        });
+        const candles = chart.addCandlestickSeries({ upColor: th.up, downColor: th.down, borderUpColor: th.up, borderDownColor: th.down, wickUpColor: th.up, wickDownColor: th.down, priceLineVisible: false });
+        candles.setData(p.dates.slice(start).map(function (d, i) { const k = start + i; return { time: d, open: p.open[k], high: p.high[k], low: p.low[k], close: p.close[k] }; }));
+        [[10, EMA_COLORS.ema10], [20, EMA_COLORS.ema20], [50, EMA_COLORS.ema50]].forEach(function (spec) {
+          const full = emaSeries(p.close, spec[0]);
+          const line = chart.addLineSeries({ color: spec[1], lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+          line.setData(p.dates.slice(start).map(function (d, i) { return { time: d, value: full[start + i] }; }).filter(function (x) { return x.value != null; }));
+        });
+        if (hasVol) {
+          const vol = chart.addHistogramSeries({ priceFormat: { type: "volume" }, priceScaleId: "vol", priceLineVisible: false, lastValueVisible: false });
+          chart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.78, bottom: 0 } });
+          vol.setData(p.dates.slice(start).map(function (d, i) { const k = start + i; return { time: d, value: p.volume[k] || 0, color: p.close[k] >= p.open[k] ? "rgba(34,197,94,0.55)" : "rgba(239,68,68,0.55)" }; }));
+        }
+        chart.timeScale().fitContent();
+        if (window.ResizeObserver) new ResizeObserver(function () { chart.applyOptions({ width: box.clientWidth }); chart.timeScale().fitContent(); }).observe(box);
+      }).catch(function () { box.innerHTML = '<div class="empty-note">No price history.</div>'; });
+    });
+  }
+
   function renderMoneyFlows() {
     const host = document.getElementById("mf-blocks");
     if (!host) return;
@@ -2624,6 +2692,7 @@
 
     let state = { index: indexes[0].code, side: "hi" };
     const sel = {}; // sel["w13"] = {sector, industry}
+    const wallOpen = {}; // which window blocks have their chart wall open
 
     function unionHits(win, side) {
       const recent = namesData.slice(-LOOKBACK_SESSIONS);
@@ -2769,8 +2838,11 @@
                 '<div class="mf-hbar-list">' + industryRows + '</div>' +
                 '<div class="mf-trend-panel" id="' + trendId + '"></div>' +
               '</div>' +
-              '<div class="mf-level"><div class="mf-level-label">Stocks, within <b>' + industry.name + '</b></div><div class="mf-stock-chips">' + chips + '</div></div>' +
+              '<div class="mf-level"><div class="mf-level-label">Stocks, within <b>' + industry.name + '</b>' +
+                '<button class="mf-trend-btn" type="button" data-wall="' + win + '">' + (wallOpen[win] ? "hide charts" : "show charts") + '</button></div>' +
+                '<div class="mf-stock-chips">' + chips + '</div></div>' +
             '</div>' +
+            '<div class="mf-wall" id="mf-wall-' + win + '"></div>' +
           '</div>'
         );
       });
@@ -2820,6 +2892,16 @@
       });
       host.querySelectorAll("[data-trend-toggle]").forEach(function (btn) {
         btn.addEventListener("click", function () { toggleIndustryTrend(btn); });
+      });
+      // Chart wall per window block: stays open while you pick other sectors/industries.
+      host.querySelectorAll("[data-wall]").forEach(function (btn) {
+        const win = btn.dataset.wall;
+        btn.addEventListener("click", function () { wallOpen[win] = !wallOpen[win]; draw(); });
+        if (!wallOpen[win]) return;
+        const picked = sel[state.index + state.side + win], tree = buildTree(win);
+        const sec = tree.sectors.find(function (x) { return x.name === picked.sector; });
+        const ind = sec && sec.industries.find(function (x) { return x.name === picked.industry; });
+        if (ind) renderChartWall(document.getElementById("mf-wall-" + win), ind.tickers.slice(0, 12), idxLabel);
       });
     }
 

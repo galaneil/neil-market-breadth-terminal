@@ -831,3 +831,17 @@ header h1 { display: flex; align-items: center; }
 .fr-summary-detail{color:var(--text-dim); font-size:12.5px;}
 .fr-summary-note{font-size:12px; line-height:1.5; margin-bottom:14px;}
 .fr-actions-row{margin-bottom:8px;}
+
+/* Money Flows chart wall + TradingView modal */
+.mf-wall { margin-top: 10px; }
+.mf-wall-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; }
+.mf-wcard { border: 1px solid var(--border); border-radius: 10px; background: var(--panel-bg); overflow: hidden; }
+.mf-wcard-head { display: flex; align-items: center; gap: 8px; padding: 7px 10px 0; font-size: 12px; }
+.mf-wcard-t { font-weight: 700; cursor: pointer; }
+.mf-wcard-px { flex: 1; color: var(--text-dim); }
+.mf-wcard-x { font: inherit; font-size: 11px; padding: 2px 8px; border: 1px solid var(--border); border-radius: 6px; background: transparent; color: var(--text-dim); cursor: pointer; }
+.mf-wcard-x:hover { color: var(--text); border-color: var(--accent); }
+.mf-wcard-chart { height: 220px; }
+.tv-modal { position: fixed; inset: 0; z-index: 100; background: rgba(10, 12, 16, 0.55); display: flex; align-items: center; justify-content: center; padding: 3vh 3vw; }
+.tv-modal-box { background: var(--panel-bg); border: 1px solid var(--border); border-radius: 12px; width: min(1280px, 96vw); padding: 12px 14px; }
+.tv-modal-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
