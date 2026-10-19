@@ -385,6 +385,9 @@ def run_country(code, client=None):
     # carry. Computed here rather than in a second pass because the OHLC is
     # already in hand at this point and would otherwise be re-fetched.
     adr_by_ticker = {}
+    # 20-session average DOLLAR volume ($M), for the screener's liquidity filter. India's volume is
+    # unreliable through this pipeline, so a name without usable volume simply has no value.
+    adv_by_ticker = {}
     want_tmle = cfg.get("run_tmle")
     for i, ticker in enumerate(lookup_tickers):
         try:
@@ -400,6 +403,9 @@ def run_country(code, client=None):
                                    [r.get("low") for r in ordered])
             if adr is not None:
                 adr_by_ticker[ticker] = adr
+            tail = [r for r in ordered[-20:] if r.get("close") and r.get("volume")]
+            if len(tail) >= 15:
+                adv_by_ticker[ticker] = round(sum(r["close"] * r["volume"] for r in tail) / len(tail) / 1e6, 2)
         if store.write_ticker_ohlc(code, ticker, all_rows[:config.TICKER_HISTORY_DAYS],
                                    rs_ratings.get(ticker)):
             written += 1
@@ -422,7 +428,7 @@ def run_country(code, client=None):
     hilo_counts, hilo_names = hilo.compute(price_cache, screener_tickers, n_days,
                                            ticker_to_sector)
     store.write_hilo(code, hilo_counts, hilo_names,
-                     hilo.last_quotes(price_cache, screener_tickers, adr_by_ticker))
+                     hilo.last_quotes(price_cache, screener_tickers, adr_by_ticker, adv_by_ticker))
     if hilo_counts:
         last = hilo_counts[-1]
         log("  " + " · ".join(

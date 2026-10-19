@@ -138,14 +138,15 @@ def adr_percent(highs, lows, window=None):
     return round(100 * sum(h / l - 1 for h, l in pairs) / len(pairs), 2)
 
 
-def last_quotes(price_cache, tickers, adr_by_ticker=None):
-    """{ticker: [last_close, pct_change_1d, adr_percent]} — the screener's row.
+def last_quotes(price_cache, tickers, adr_by_ticker=None, adv_by_ticker=None):
+    """{ticker: [last_close, pct_change_1d, adr_percent, avg_dollar_volume_millions]} — the screener's row.
 
     Close and change come from the price cache rather than a quote call: it is
     already loaded, already current as of the run, and costs no API budget.
     ADR is passed in, since it needs the OHLC the cache does not hold.
     """
     adr_by_ticker = adr_by_ticker or {}
+    adv_by_ticker = adv_by_ticker or {}
     out = {}
     for t in tickers:
         s = cache_mod.to_series(price_cache, t)
@@ -154,7 +155,7 @@ def last_quotes(price_cache, tickers, adr_by_ticker=None):
         last = float(s.iloc[-1])
         prev = float(s.iloc[-2]) if len(s) > 1 else None
         chg = round((last / prev - 1) * 100, 2) if prev else None
-        out[t] = [round(last, 2), chg, adr_by_ticker.get(t)]
+        out[t] = [round(last, 2), chg, adr_by_ticker.get(t), adv_by_ticker.get(t)]
     return out
 
 

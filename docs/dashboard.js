@@ -3016,6 +3016,7 @@
     let tf = "1M";
     let indexFilter = "";
     let adrBand = "";
+    let minCap = 0, minAdv = 0;   // market cap in dollars, average daily dollar volume in $M
     let rows = [];
     let chartView = "cumulative";
 
@@ -3082,6 +3083,7 @@
         const q = quotes[t] || [null, null];
         return { ticker: t, sector: tags[0] || "—", industry: tags[1] || "—",
                  close: q[0], chg: q[1], adr: q[2] === undefined ? null : q[2],
+                 cap: tags[3] || null, adv: q[3] === undefined ? null : q[3],
                  hits: hits[t], last: lastSeen[t] };
       });
     }
@@ -3109,6 +3111,9 @@
         // A name with no ADR is dropped by an ADR filter rather than passed
         // through it — "unknown" is not "matches".
         if (band && (r.adr === null || r.adr < band[0] || r.adr >= band[1])) return false;
+        // Same rule for the liquidity filters: unknown is not "matches".
+        if (minCap && !(r.cap && r.cap >= minCap)) return false;
+        if (minAdv && !(r.adv !== null && r.adv >= minAdv)) return false;
         return true;
       });
     }
@@ -3687,6 +3692,82 @@
     [sectorSel, industrySel].forEach(function (el) {
       if (el) el.addEventListener("change", redrawAll);
     });
+
+    // ---- Liquidity filters and saved presets (presets live in this browser) ----
+    const CAP_OPTS = [[0, "Any market cap"], [300e6, "Market cap ≥ $300M"], [1e9, "≥ $1B"], [2e9, "≥ $2B"], [10e9, "≥ $10B"], [50e9, "≥ $50B"]];
+    const ADV_OPTS = [[0, "Any $ volume"], [5, "$ volume ≥ $5M/day"], [10, "≥ $10M/day"], [20, "≥ $20M/day"], [50, "≥ $50M/day"], [100, "≥ $100M/day"]];
+    const PRESET_KEY = "hiloScreenerPresets";
+    function readPresets() { try { return JSON.parse(localStorage.getItem(PRESET_KEY) || "{}"); } catch (e) { return {}; } }
+    function writePresets(o) { try { localStorage.setItem(PRESET_KEY, JSON.stringify(o)); } catch (e) {} }
+    function rebuildToggles() {
+      buildToggle("hilo-window", HILO_WINDOWS, function () { return win; }, function (v) { win = v; });
+      buildToggle("hilo-side", [["hi", "New highs"], ["lo", "New lows"]], function () { return side; }, function (v) { side = v; });
+      buildToggle("hilo-timeframe", TIMEFRAMES.map(function (t) { return [t, t === "ALL" ? "Since Inception" : t]; }),
+                  function () { return tf; }, function (v) { tf = v; });
+      buildToggle("hilo-adr", [["", "Any"], ["low", "Low <3%"], ["mid", "Tradeable 3-7%"], ["high", "High >7%"]],
+                  function () { return adrBand; }, function (v) { adrBand = v; });
+      if ((DATA.screenerIndexes || []).length) {
+        buildToggle("hilo-index", DATA.screenerIndexes.map(function (s) { return [s.code, s.label]; }),
+                    function () { return indexFilter; }, function (v) { indexFilter = v; });
+      }
+    }
+    const filterBar = sectorSel ? sectorSel.parentNode : null;
+    if (filterBar) {
+      const mkSel = function (id, opts, title) {
+        const el = document.createElement("select");
+        el.id = id; el.title = title;
+        el.innerHTML = opts.map(function (o) { return '<option value="' + o[0] + '">' + o[1] + "</option>"; }).join("");
+        return el;
+      };
+      const capSel = mkSel("hilo-cap", CAP_OPTS, "Minimum market cap");
+      const advSel = mkSel("hilo-adv", ADV_OPTS, "Minimum average daily dollar volume (20 sessions). Fills in after the next data refresh.");
+      capSel.addEventListener("change", function () { minCap = +capSel.value; redrawAll(); });
+      advSel.addEventListener("change", function () { minAdv = +advSel.value; redrawAll(); });
+      filterBar.insertBefore(capSel, sectorSel);
+      filterBar.insertBefore(advSel, sectorSel);
+
+      const preSel = document.createElement("select");
+      preSel.id = "hilo-preset";
+      const saveBtn = document.createElement("button"), delBtn = document.createElement("button");
+      const nameIn = document.createElement("input");
+      nameIn.type = "text"; nameIn.placeholder = "Preset name"; nameIn.style.width = "120px";
+      saveBtn.type = delBtn.type = "button"; saveBtn.className = delBtn.className = "tf-btn";
+      saveBtn.textContent = "Save preset"; delBtn.textContent = "Delete";
+      const fillPresets = function (selected) {
+        const names = Object.keys(readPresets()).sort();
+        preSel.innerHTML = '<option value="">Saved presets…</option>' + names.map(function (n) {
+          return '<option value="' + n.replace(/"/g, "&quot;") + '"' + (n === selected ? " selected" : "") + ">" + n + "</option>";
+        }).join("");
+        delBtn.disabled = !selected;
+      };
+      preSel.addEventListener("change", function () {
+        const p = readPresets()[preSel.value]; delBtn.disabled = !preSel.value;
+        if (!p) return;
+        win = p.win || win; side = p.side || side; tf = p.tf || tf; adrBand = p.adr || "";
+        if (p.index !== undefined) indexFilter = p.index;
+        minCap = p.cap || 0; minAdv = p.adv || 0;
+        capSel.value = String(minCap); advSel.value = String(minAdv);
+        searchEl.value = p.search || "";
+        rebuildToggles();
+        refresh();
+        sectorSel.value = p.sector || ""; sectorSel.dispatchEvent(new Event("change"));
+        industrySel.value = p.industry || ""; industrySel.dispatchEvent(new Event("change"));
+      });
+      saveBtn.addEventListener("click", function () {
+        const name = nameIn.value.trim();
+        if (!name) { nameIn.focus(); return; }
+        nameIn.value = "";
+        const all = readPresets();
+        all[name] = { index: indexFilter, win: win, side: side, tf: tf, adr: adrBand, cap: minCap, adv: minAdv,
+                      sector: sectorSel.value, industry: industrySel.value, search: searchEl.value };
+        writePresets(all); fillPresets(name);
+      });
+      delBtn.addEventListener("click", function () {
+        const all = readPresets(); delete all[preSel.value]; writePresets(all); fillPresets("");
+      });
+      filterBar.appendChild(preSel); filterBar.appendChild(nameIn); filterBar.appendChild(saveBtn); filterBar.appendChild(delBtn);
+      fillPresets("");
+    }
     if (searchEl) searchEl.addEventListener("input", redrawAll);
     if (table) {
       table.querySelectorAll("th[data-sort]").forEach(function (th) {
