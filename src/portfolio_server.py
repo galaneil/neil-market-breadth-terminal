@@ -2855,6 +2855,7 @@ SETUPS_PAGE = r"""<!doctype html>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Setups Database</title>
 <script src="/docs/vendor/lightweight-charts.js"></script>
+<script src="/docs/tv_embed.js"></script>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
@@ -3676,18 +3677,23 @@ function mountMainChart(e){
     }
     function drawTV(){
       if(MC.chart){ try{ MC.chart.remove(); }catch(x){} MC.chart=null; }
-      var dark=window.matchMedia&&window.matchMedia("(prefers-color-scheme: dark)").matches;
-      box.innerHTML='<iframe src="https://s.tradingview.com/widgetembed/?symbol='+encodeURIComponent(tvSym)+'&interval=D&theme='+(dark?"dark":"light")
-        +'&style=1&timezone=exchange&withdateranges=1&hide_side_toolbar=0&allow_symbol_change=1&saveimage=1" title="TradingView chart"></iframe>';
+      TVE.mount(box, tvOk, 430);   // candles + volume + EMA 10/20/50, the same chart everywhere
     }
     var tfs=[["buy","Since buy"],["1M","1M"],["3M","3M"],["6M","6M"],["1Y","1Y"],["2Y","2Y"],["all","All"]];
     var bar=document.getElementById("mc-tf");
     function drawBar(){ bar.innerHTML=tfs.map(function(t){ return '<button data-t="'+t[0]+'"'+(t[0]===tf?' class="on"':'')+'>'+t[1]+'</button>'; }).join(""); bar.style.display=view==="t"?"":"none"; }
     bar.onclick=function(ev){ var b=ev.target.closest("button"); if(!b) return; tf=b.dataset.t; drawBar(); drawTerminal(); };
-    document.getElementById("mc-view").onclick=function(ev){ var b=ev.target.closest("button"); if(!b) return; view=b.dataset.v;
+    document.getElementById("mc-view").onclick=function(ev){ var b=ev.target.closest("button"); if(!b||b.disabled) return; view=b.dataset.v;
+      if(window.TVE) TVE.setEngine(view==="tv"?"tv":"terminal");
       Array.prototype.forEach.call(document.querySelectorAll("#mc-view button"),function(x){ x.classList.toggle("on",x===b); });
       drawBar(); view==="t" ? drawTerminal() : drawTV(); };
-    drawBar(); drawTerminal();
+    // TradingView is the default chart. NSE data cannot be embedded, so India entries stay on the Terminal chart.
+    var tvOk = window.TVE ? TVE.stockSymbol(e.ticker, code, I.tv) : null;
+    var tvBtn = document.querySelector('#mc-view [data-v="tv"]');
+    if(!tvOk){ tvBtn.disabled=true; tvBtn.title="TradingView does not allow NSE data in embedded charts"; }
+    view = (tvOk && TVE.engine()==="tv") ? "tv" : "t";
+    Array.prototype.forEach.call(document.querySelectorAll("#mc-view button"),function(x){ x.classList.toggle("on",x.dataset.v===view); });
+    drawBar(); view==="t" ? drawTerminal() : drawTV();
   }).catch(function(){ box.innerHTML='<div class="chart-empty" style="padding:20px">Could not load the chart.</div>'; });
 }
 

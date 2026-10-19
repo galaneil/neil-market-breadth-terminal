@@ -169,6 +169,51 @@
   function cssVar(name) {
     return getComputedStyle(root).getPropertyValue(name).trim();
   }
+  // Gentle smoothing for rank trend lines: a centred, triangle-weighted
+  // average over +/-2 sessions (so no lag, unlike a trailing average), with
+  // the window shrinking at the ends so the first and last points stay put.
+  // Ranks jump a place or two day to day; without this the line zig-zags and
+  // its up/down segment colouring flickers.
+  function smoothRank(vals, half) {
+    half = half == null ? 2 : half;
+    return vals.map(function (v, i) {
+      if (v == null) return v;
+      let sum = 0, wsum = 0;
+      for (let k = -half; k <= half; k++) {
+        const x = vals[i + k];
+        if (x == null) continue;
+        const w = half + 1 - Math.abs(k);
+        sum += x * w; wsum += w;
+      }
+      return wsum ? Math.round(sum / wsum * 100) / 100 : v;
+    });
+  }
+
+  // TradingView chart engine (see tv_embed.js). Loaded on first use from the same
+  // folder as this file, so every page that has a price chart gets it with no
+  // template changes. The Terminal chart stays as the fallback and as a choice.
+  const TVE_SRC = (document.currentScript && document.currentScript.src || "").replace(/dashboard\.js/, "tv_embed.js");
+  let tveQueue = null;
+  function withTVE(cb) {
+    if (window.TVE) return cb();
+    if (!TVE_SRC) return;
+    if (!tveQueue) {
+      tveQueue = [];
+      const sc = document.createElement("script");
+      sc.src = TVE_SRC;
+      sc.onload = function () { const q = tveQueue; tveQueue = null; q.forEach(function (f) { f(); }); };
+      document.head.appendChild(sc);
+    }
+    tveQueue.push(cb);
+  }
+  function tvPreferred() { try { return localStorage.getItem("chartEngine") !== "terminal"; } catch (e) { return true; } }
+  // Adds the TradingView | Terminal switch and chart host above an existing Terminal chart.
+  // o: { bar, host, hide:[els], symbol (resolved by TVE), canTV (known before TVE loads), height, note }
+  function tvAttach(o) {
+    if (tvPreferred() && o.canTV) (o.hide || []).forEach(function (el) { if (el) el.style.display = "none"; });
+    withTVE(function () { o.symbol = o.symbolFn(); if (o.noteFn) o.note = o.noteFn(); TVE.attach(o); });
+  }
+
   function themeColors() {
     return {
       grid: cssVar("--grid-line"),
@@ -579,6 +624,7 @@
         badge("EMA20 " + (last.above_ema20 ? "above" : "below"), last.above_ema20 ? "up" : "down") +
         badge("EMA50 " + (last.above_ema50 ? "above" : "below"), last.above_ema50 ? "up" : "down") +
       "</div>" +
+      '<div class="tve-row" style="margin:6px 0"></div><div class="tve-host" style="display:none"></div>' +
       '<div class="tf-toggle"></div>' +
       '<div class="lw-chart' + (hasVolume ? " lw-chart-vol" : "") + '" id="' + chartId + '"></div>' +
       (hasVolume
@@ -587,6 +633,15 @@
 
     const container = document.getElementById(chartId);
     const th = lwTheme();
+    // TradingView chart (volume + EMA 10/20/50) is the default; the Terminal chart below keeps the
+    // measure tool and focus shading. US indices show via their ETFs; NSE indices cannot be embedded.
+    tvAttach({
+      bar: card.querySelector(".tve-row"), host: card.querySelector(".tve-host"),
+      hide: [card.querySelector(".tf-toggle"), container, card.querySelector(".vol-sub")],
+      canTV: ["index_nasdaq", "index_sp500", "index_russell2000", "index_sensex"].indexOf(seriesKey) >= 0,
+      symbolFn: function () { return TVE.indexSymbol(seriesKey); }, height: 440,
+      noteFn: function () { return TVE.indexLabel(seriesKey) === "BSE Sensex" ? "" : "Shown as " + TVE.indexLabel(seriesKey).split(" via ")[1] + ", the ETF that tracks it: TradingView does not embed the index itself, and the ETF has real volume"; },
+    });
 
     const chart = LightweightCharts.createChart(container, {
       height: container.clientHeight || 380,
@@ -1464,7 +1519,7 @@
       chart = new Chart(canvas, {
         type: "line",
         data: { labels: chartDates, datasets: [{
-          data: chartVals, borderWidth: 1.8, pointRadius: dotRadius(chartVals.length), tension: 0.15,
+          data: smoothRank(chartVals), borderWidth: 1.8, pointRadius: dotRadius(chartVals.length), tension: 0, cubicInterpolationMode: "monotone",
           segment: {
             borderColor: function (ctx) {
               return (ctx.p1.parsed.y <= ctx.p0.parsed.y) ? th.up : th.down;
@@ -2794,7 +2849,7 @@
       new Chart(document.getElementById(panel.id + "-canvas"), {
         type: "line",
         data: { labels: tail.map(function (r) { return r.date; }), datasets: [{
-          data: tail.map(function (r) { return r.rank; }), borderWidth: 1.6, pointRadius: 0, tension: 0.15,
+          data: smoothRank(tail.map(function (r) { return r.rank; })), borderWidth: 1.6, pointRadius: 0, tension: 0, cubicInterpolationMode: "monotone",
           segment: { borderColor: function (ctx) { return (ctx.p1.parsed.y <= ctx.p0.parsed.y) ? th.up : th.down; } },
         }] },
         options: {
@@ -3657,7 +3712,7 @@
         const colors = themeColors();
         const dotR = dotRadius(filtered.length);
         lineChart(canvasId, filtered.map(function (r) { return r.date; }), [
-          { label: name + " rank", data: filtered.map(function (r) { return r.rank; }), borderColor: colors.accent, borderWidth: 1.5, pointRadius: dotR || 2, pointBackgroundColor: colors.accent, tension: 0.15 },
+          { label: name + " rank (smoothed)", data: smoothRank(filtered.map(function (r) { return r.rank; })), borderColor: colors.accent, borderWidth: 1.8, pointRadius: dotR || 2, tension: 0, cubicInterpolationMode: "monotone", pointBackgroundColor: colors.accent },
         ], { yReverse: true });
       });
     }
@@ -4079,6 +4134,7 @@
               '<div class="card-sub">close on ' + d.dates[end] + "</div></div>" +
           "</div>" +
           rsRatingBlock(d, end) +
+          '<div class="tve-row" id="stock-tve-bar" style="margin:6px 0"></div><div class="tve-host" id="stock-tve" style="display:none"></div>' +
           '<div class="tf-toggle stock-tf">' +
             RANGES.map(function (r) {
               // A range longer than the stored history would just render the
@@ -4106,6 +4162,12 @@
           "</div>" +
         "</div>";
 
+      tvAttach({
+        bar: document.getElementById("stock-tve-bar"), host: document.getElementById("stock-tve"),
+        hide: [body.querySelector(".stock-tf"), document.getElementById("stock-chart")],
+        canTV: DATA.country !== "IN", symbolFn: function () { return TVE.stockSymbol(sym, DATA.country); }, height: 460,
+        note: "",
+      });
       body.querySelectorAll(".stock-tf button").forEach(function (btn) {
         btn.addEventListener("click", function () {
           rangeBars = Number(btn.dataset.bars);
@@ -4669,6 +4731,7 @@
           '<div class="chart-wrap"><canvas id="tmle-canvas"></canvas></div>' +
           '<div class="env-chart-title">Price</div>' +
           '<div class="env-block-sub">daily bars with EMA10/20/50 &middot; the same chart the Stock Context panel draws</div>' +
+          '<div class="tve-row" id="tmle-tve-bar" style="margin:6px 0"></div><div class="tve-host" id="tmle-tve" style="display:none"></div>' +
           '<div class="lw-chart" id="tmle-price-chart"></div>' +
         "</div>";
 
@@ -4703,6 +4766,10 @@
 
       if (priceChart) { priceChart.remove(); priceChart = null; }
       const priceEl = document.getElementById("tmle-price-chart");
+      tvAttach({
+        bar: document.getElementById("tmle-tve-bar"), host: document.getElementById("tmle-tve"), hide: [priceEl],
+        canTV: DATA.country !== "IN", symbolFn: function () { return TVE.stockSymbol(data.ticker, DATA.country); }, height: 420,
+      });
       const cachedPrice = priceCache[data.ticker];
       if (cachedPrice) {
         drawPriceChart(priceEl, cachedPrice);
