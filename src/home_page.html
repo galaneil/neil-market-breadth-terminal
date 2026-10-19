@@ -196,7 +196,8 @@ function renderScreener(){
     T.relative.map(r=>'<tr><td>'+r.window+'</td><td class="r num">'+pct(r.stock)+'</td><td class="r num dim">'+pct(r.bench)+'</td><td class="r num '+(r.rel>=0?"up":"down")+'" style="font-weight:700">'+(r.rel>=0?"+":"")+r.rel.toFixed(1)+'pp</td></tr>').join("")+'</tbody></table></div></div>';
   $("scrGo").onclick = () => go("Screener");
   wireTicker(); drawCandles(); drawRs();
-  if (window.TVE) TVE.attach({bar:$("cTveBar"), host:$("cTveHost"), hide:[$("candle"), el.querySelector(".legend")], symbol:TVE.stockSymbol(T.symbol, COUNTRY), height:300});
+  if (window.TVE) TVE.attach({bar:$("cTveBar"), host:$("cTveHost"), hide:[$("candle"), el.querySelector(".legend")], symbol:TVE.stockSymbol(T.symbol, COUNTRY), height:300, tf:"1Y",
+    data:() => ({t:T.symbol, name:T.symbol, d:T.dates, o:T.open, h:T.high, l:T.low, c:T.close, v:T.volume||null, logoUrl:T.logoid ? "/api/logo/"+encodeURIComponent(T.logoid) : ""})});
   $("cLast").textContent = T.close[T.close.length-1].toFixed(2)+" as of "+T.dates[T.dates.length-1];
 }
 function wireTicker(){

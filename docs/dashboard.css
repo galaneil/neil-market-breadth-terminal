@@ -845,3 +845,6 @@ header h1 { display: flex; align-items: center; }
 .tv-modal { position: fixed; inset: 0; z-index: 100; background: rgba(10, 12, 16, 0.55); display: flex; align-items: center; justify-content: center; padding: 3vh 3vw; }
 .tv-modal-box { background: var(--panel-bg); border: 1px solid var(--border); border-radius: 12px; width: min(1280px, 96vw); padding: 12px 14px; }
 .tv-modal-head { display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px; }
+.mf-wall-bar { display: flex; align-items: center; margin-bottom: 8px; }
+.tv-modal-head .tve-seg { margin: 0 auto 0 14px; }
+.tv-modal-box { max-height: 94vh; overflow: auto; }

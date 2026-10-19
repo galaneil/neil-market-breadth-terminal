@@ -1328,8 +1328,9 @@ class Handler(BaseHTTPRequestHandler):
             if not hist:
                 self._send(200, json.dumps({"error": "no price history for that ticker"}), "application/json")
             else:
-                self._send(200, json.dumps({k: hist[k] for k in ("dates", "open", "high", "low", "close")}),
-                           "application/json")
+                out = {k: hist[k] for k in ("dates", "open", "high", "low", "close")}
+                out["volume"] = hist.get("volume")
+                self._send(200, json.dumps(out), "application/json")
             return
         if route.path == "/api/setups/stop":
             q = parse_qs(route.query)
@@ -1868,7 +1869,7 @@ JOURNAL_PAGE = r"""<!doctype html>
   .overlay{position:fixed; inset:0; background:rgba(0,0,0,.5); display:flex; align-items:flex-start; justify-content:center;
     padding:40px 20px; z-index:50; overflow-y:auto;}
   .overlay[hidden]{display:none;}
-  .detail-page{background:var(--panel); border:1px solid var(--line); border-radius:14px; max-width:620px; width:100%;}
+  .detail-page{background:var(--panel); border:1px solid var(--line); border-radius:14px; max-width:clamp(620px, 56vw, 1040px); width:100%;}
   .detail-head{padding:18px 22px; border-bottom:1px solid var(--line); display:flex; align-items:center; justify-content:space-between;}
   .detail-head b{font-size:16px;}
   .detail-close{background:none; border:none; font-size:20px; color:var(--dim); cursor:pointer;}
@@ -2442,7 +2443,7 @@ function drawPath(t) {
     if (m) lines.push({p: m.peak, color: "#16a34a", title: "peak"});
     box.hidden = false;
     pathChart = StdChart.mount(box, {t: t.ticker, name: t.name || t.ticker, d: s.dates, o: s.open, h: s.high, l: s.low, c: s.close, v: s.volume,
-      logoUrl: t.logoid ? "/api/logo/" + encodeURIComponent(t.logoid) : "", ht: 340, tf: "Trade", entryIdx: entryIdx, lines: lines,
+      logoUrl: t.logoid ? "/api/logo/" + encodeURIComponent(t.logoid) : "", ht: Math.round(Math.max(340, Math.min(620, innerHeight * 0.44))), tf: "Trade", entryIdx: entryIdx, lines: lines,
       trades: [{d: t.dateOpened, a: "Buy", p: t.entryPrice, q: t.shares}, {d: t.dateClosed, a: "Sell", p: t.exitPrice, q: t.shares}].filter(x => x.p)});
   }).catch(() => {});
 }
@@ -3672,21 +3673,32 @@ function mountMainChart(e){
       if(MC.chart){ try{ MC.chart.remove(); }catch(x){} MC.chart=null; }
       TVE.mount(box, tvOk, 430);   // candles + volume + EMA 10/20/50, the same chart everywhere
     }
+    function drawStd(){
+      if(MC.chart){ try{ MC.chart.remove(); }catch(x){} MC.chart=null; }
+      var bi=e.buyDate?idxFor(e.buyDate):null, entry=S.entryPrice||(bi!=null?D.close[bi]:null), lines=[];
+      if(S.stop) lines.push({p:+S.stop,color:"#dc2626",title:"stop"});
+      TVE.mountStd(box,{t:e.ticker,name:I.name||e.ticker,d:D.dates,o:D.open,h:D.high,l:D.low,c:D.close,v:D.volume||null,
+        logoUrl:e.logoid?"/api/logo/"+encodeURIComponent(e.logoid):"",entryDate:bi!=null?e.buyDate:undefined,lines:lines,
+        trades:(bi!=null&&entry)?[{d:e.buyDate,a:"Buy",p:entry}]:[]},{ht:400,tf:bi!=null?"Trade":"6M"});
+    }
     var tfs=[["buy","Since buy"],["1M","1M"],["3M","3M"],["6M","6M"],["1Y","1Y"],["2Y","2Y"],["all","All"]];
     var bar=document.getElementById("mc-tf");
     function drawBar(){ bar.innerHTML=tfs.map(function(t){ return '<button data-t="'+t[0]+'"'+(t[0]===tf?' class="on"':'')+'>'+t[1]+'</button>'; }).join(""); bar.style.display=view==="t"?"":"none"; }
+    function redraw(){ view==="t" ? drawTerminal() : view==="tv" ? drawTV() : drawStd(); }
     bar.onclick=function(ev){ var b=ev.target.closest("button"); if(!b) return; tf=b.dataset.t; drawBar(); drawTerminal(); };
     document.getElementById("mc-view").onclick=function(ev){ var b=ev.target.closest("button"); if(!b||b.disabled) return; view=b.dataset.v;
-      if(window.TVE) TVE.setEngine(view==="tv"?"tv":"terminal", box.clientWidth);
+      if(window.TVE) TVE.setEngine(view==="tv"?"tv":view==="s"?"std":"terminal", box.clientWidth);
       Array.prototype.forEach.call(document.querySelectorAll("#mc-view button"),function(x){ x.classList.toggle("on",x===b); });
-      drawBar(); view==="t" ? drawTerminal() : drawTV(); };
+      drawBar(); redraw(); };
     // TradingView is the default chart. NSE data cannot be embedded, so India entries stay on the Terminal chart.
     var tvOk = window.TVE ? TVE.stockSymbol(e.ticker, code, I.tv) : null;
     var tvBtn = document.querySelector('#mc-view [data-v="tv"]');
     if(!tvOk){ tvBtn.disabled=true; tvBtn.title="TradingView does not allow NSE data in embedded charts"; }
-    view = (tvOk && TVE.engine(box.clientWidth)==="tv") ? "tv" : "t";
+    var eng = window.TVE ? TVE.engine(box.clientWidth) : "terminal";
+    if(eng==="tv" && !tvOk) eng = "std";
+    view = eng==="tv" ? "tv" : eng==="std" ? "s" : "t";
     Array.prototype.forEach.call(document.querySelectorAll("#mc-view button"),function(x){ x.classList.toggle("on",x.dataset.v===view); });
-    drawBar(); view==="t" ? drawTerminal() : drawTV();
+    drawBar(); redraw();
   }).catch(function(){ box.innerHTML='<div class="chart-empty" style="padding:20px">Could not load the chart.</div>'; });
 }
 
@@ -3700,7 +3712,7 @@ function openSheet(e){
       +'<a class="nlink" id="sh-tv" href="https://www.tradingview.com/chart/?symbol='+encodeURIComponent(e.ticker)+'" target="_blank" rel="noopener">Open in TradingView ↗</a></div>'
     +'<div class="sh-tags"><span>'+esc(e.setup||"")+'</span><span>bought '+fmtDate(e.buyDate)+'</span><span>'+esc(e.country||"")+'</span>'
       +(e.sector?'<span>'+esc(e.sector)+'</span>':'')+(e.industry?'<span>'+esc(e.industry)+'</span>':'')+'<span id="sh-mc" hidden></span></div>'
-    +'<div class="mc-bar"><div class="mc-seg" id="mc-tf"></div><div class="mc-seg" id="mc-view"><button data-v="t" class="on">Terminal chart</button><button data-v="tv">TradingView</button></div></div>'
+    +'<div class="mc-bar"><div class="mc-seg" id="mc-tf"></div><div class="mc-seg" id="mc-view"><button data-v="s">Chart</button><button data-v="t">Terminal chart</button><button data-v="tv">TradingView</button></div></div>'
     +'<div id="mc"></div>'
     +'<div class="mc-leg"><span><i style="border-color:#f0b429"></i>EMA 10</span><span><i style="border-color:#8b5cf6"></i>EMA 20</span><span><i style="border-color:#38bdf8"></i>EMA 50</span><span><i style="border-color:#2563eb"></i>entry</span><span><i style="border-color:#dc2626"></i>stop</span></div>'
     +'<div class="meta" style="margin:8px 0 4px">Your annotated chart</div>'

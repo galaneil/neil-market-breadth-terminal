@@ -169,7 +169,7 @@ def asset_version():
     URL and stays cached.
     """
     h = hashlib.md5()
-    for name in ("dashboard.css", "dashboard.js", "tv_embed.js"):
+    for name in ("dashboard.css", "dashboard.js", "tv_embed.js", "std_chart.js"):
         path = os.path.join(config.DOCS_DIR, name)
         if os.path.exists(path):
             with open(path, "rb") as f:

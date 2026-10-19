@@ -3,7 +3,9 @@
    trade arrows that sit in empty space, and TradingView-style drawing tools saved per ticker. */
 (function () {
   const KEY = 'std:', MEM = {};
-  const cv = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  // Colour tokens: the hub pages and the published panels name them differently, so each has aliases.
+  const ALIAS = { '--line': ['--line', '--grid-line', '--border'], '--dim': ['--dim', '--text-dim'], '--panel': ['--panel', '--panel-bg'], '--bg': ['--bg', '--panel-bg'] };
+  const cv = n => { const cs = getComputedStyle(document.documentElement); for (const k of (ALIAS[n] || [n])) { const v = cs.getPropertyValue(k).trim(); if (v) return v; } return n === '--text' ? '#888' : '#8b93a3'; };
   const esc = s => String(s == null ? '' : s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
   const sma = (a, n) => a.map((_, i) => i < n - 1 ? null : a.slice(i - n + 1, i + 1).reduce((x, y) => x + y, 0) / n);
   const ema = (a, n) => { const k = 2 / (n + 1), o = []; let p = null; a.forEach(v => { p = p == null ? v : v * k + p * (1 - k); o.push(p); }); return o; };
@@ -17,20 +19,21 @@
   function save(t, o) { MEM[t] = o; try { localStorage.setItem(KEY + t, JSON.stringify(o)); } catch (e) {} document.dispatchEvent(new CustomEvent('tv-saved', { detail: t })); }
   function listSaved() { const out = {}; try { for (let i = 0; i < localStorage.length; i++) { const k = localStorage.key(i); if (k.indexOf(KEY) === 0) { const o = JSON.parse(localStorage.getItem(k)); if (o && o.draw && o.draw.length) out[k.slice(KEY.length)] = o.draw.length; } } } catch (e) { Object.keys(MEM).forEach(t => { if (MEM[t].draw.length) out[t] = MEM[t].draw.length; }); } return out; }
 
-  const CSS = '.tv{position:relative}.tv-bar{display:flex;flex-wrap:wrap;gap:6px 8px;align-items:center;margin-bottom:6px}.tv-seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--bg)}' +
-    '.tv-seg button,.tv-b{border:0;background:transparent;color:var(--dim);font-weight:600;font-size:11.5px;padding:5px 9px;cursor:pointer;white-space:nowrap;font-family:inherit}.tv-seg button.on,.tv-b.on{background:var(--accent);color:#fff}.tv-seg button:hover:not(.on),.tv-b:hover:not(.on){color:var(--text)}' +
-    '.tv-b{border:1px solid var(--line);border-radius:8px;background:var(--bg)}.tv-b.pri{background:var(--accent);color:#fff;border-color:var(--accent)}.tv-sw{width:16px;height:16px;border-radius:50%;border:2px solid var(--panel);box-shadow:0 0 0 1px var(--line);cursor:pointer;display:inline-block}.tv-sw.on{box-shadow:0 0 0 2px var(--text)}' +
+  const CSS = '.tv{position:relative}.tv-bar{display:flex;flex-wrap:wrap;gap:6px 8px;align-items:center;margin-bottom:6px}.tv-seg{display:inline-flex;border:1px solid var(--line,var(--border,#d0d4dc));border-radius:8px;overflow:hidden;background:var(--bg,#fff)}' +
+    '.tv-seg button,.tv-b{border:0;background:transparent;color:var(--dim,var(--text-dim,#667085));font-weight:600;font-size:11.5px;padding:5px 9px;cursor:pointer;white-space:nowrap;font-family:inherit}.tv-seg button.on,.tv-b.on{background:var(--accent);color:#fff}.tv-seg button:hover:not(.on),.tv-b:hover:not(.on){color:var(--text)}' +
+    '.tv-b{border:1px solid var(--line,var(--border,#d0d4dc));border-radius:8px;background:var(--bg,#fff)}.tv-b.pri{background:var(--accent);color:#fff;border-color:var(--accent)}.tv-sw{width:16px;height:16px;border-radius:50%;border:2px solid var(--panel,var(--panel-bg,#fff));box-shadow:0 0 0 1px var(--line,var(--border,#d0d4dc));cursor:pointer;display:inline-block}.tv-sw.on{box-shadow:0 0 0 2px var(--text)}' +
     '.tv-leg{font:11.5px "IBM Plex Mono",ui-monospace,monospace;display:flex;flex-wrap:wrap;gap:3px 12px;min-height:18px;margin-bottom:2px}.tv-wrap{position:relative}.tv-ov{position:absolute;left:0;top:0;pointer-events:none}' +
-    '.tv-in{position:absolute;z-index:5;border:1px solid var(--accent);background:var(--panel);color:var(--text);padding:4px 7px;border-radius:6px;font-size:12px;min-width:150px}.tv-st{font-size:11px;color:var(--dim)}.tv-sep{width:1px;height:18px;background:var(--line)}' +
-    '.tv-modal{position:fixed;inset:0;z-index:80;background:rgba(10,12,16,.55);display:flex;align-items:center;justify-content:center;padding:3vh 3vw}.tv-modal>div{background:var(--panel);border:1px solid var(--line);border-radius:14px;width:min(1280px,96vw);max-height:94vh;overflow:auto;padding:14px 16px;box-shadow:var(--shadow)}';
+    '.tv-in{position:absolute;z-index:5;border:1px solid var(--accent);background:var(--panel,var(--panel-bg,#fff));color:var(--text);padding:4px 7px;border-radius:6px;font-size:12px;min-width:150px}.tv-st{font-size:11px;color:var(--dim,var(--text-dim,#667085))}.tv-sep{width:1px;height:18px;background:var(--line,var(--border,#d0d4dc))}' +
+    '.tv-modal{position:fixed;inset:0;z-index:80;background:rgba(10,12,16,.55);display:flex;align-items:center;justify-content:center;padding:3vh 3vw}.tv-modal>div{background:var(--panel,var(--panel-bg,#fff));border:1px solid var(--line,var(--border,#d0d4dc));border-radius:14px;width:min(1280px,96vw);max-height:94vh;overflow:auto;padding:14px 16px;box-shadow:var(--shadow)}';
   if (!document.getElementById('tv-css')) { const s = document.createElement('style'); s.id = 'tv-css'; s.textContent = CSS; document.head.appendChild(s); }
 
   const COLORS = ['#2563eb', '#f59e0b', '#16a34a', '#dc2626', '#8b5cf6', '#e5e7eb'];
   const TOOLS = [['cursor', 'Cursor'], ['trend', 'Trend line'], ['ray', 'Ray'], ['hline', 'Horizontal'], ['rect', 'Box'], ['fib', 'Fib'], ['text', 'Note']];
-  const TFS = ['1M', '3M', '6M', '1Y', 'All'], TFN = { '1M': 21, '3M': 63, '6M': 126, '1Y': 252 };
+  const TFS = ['1M', '3M', '6M', '1Y', '2Y', 'All'], TFN = { '1M': 21, '3M': 63, '6M': 126, '1Y': 252, '2Y': 504 };
 
   function mount(el, S) {
     if (!S.v) { S.v = S.d.map(() => 0); S.novol = true; }
+    if (S.entryIdx == null && S.entryDate) S.entryIdx = Math.max(0, S.d.findIndex(x => x >= S.entryDate));
     const n = S.d.length, compact = !!S.compact, H = S.ht || (compact ? 230 : 440), t = S.t;
     const st = load(t), L = Object.assign({ ma: true, vol: true, w52: true, log: false, magnet: true, tf: S.tf || (compact ? '6M' : '6M'), at: S.entryIdx != null ? 'entry' : 'today', dist: false, trades: true }, st.layout); if (S.novol) L.vol = false;
     if (S.tf && !st.layout.tf) L.tf = S.tf;
@@ -41,7 +44,16 @@
     const chart = LightweightCharts.createChart(cd, { width: wrap.clientWidth, height: H, layout: { background: { color: 'transparent' }, textColor: cv('--dim'), fontFamily: 'IBM Plex Mono, monospace', fontSize: 10 }, grid: { vertLines: { color: cv('--line') }, horzLines: { color: cv('--line') } }, rightPriceScale: { borderColor: cv('--line'), mode: L.log ? 1 : 0 }, timeScale: { borderColor: cv('--line'), rightOffset: 4 }, crosshair: { mode: 0 }, handleScale: { axisPressedMouseMove: true } });
     const hasTr = !!(S.trades && S.trades.length);
     const topM = hasTr ? .15 : .06, botM = hasTr ? .37 : (L.vol ? .26 : .06);
-    const cs = chart.addCandlestickSeries({ upColor: cv('--up'), downColor: cv('--down'), borderUpColor: cv('--up'), borderDownColor: cv('--down'), wickUpColor: cv('--up'), wickDownColor: cv('--down'), priceLineVisible: false });
+    // Autoscale to the candles on screen (plus your own lines). The 52-week high/low lines must not stretch
+    // the scale: a 52w low far below today's price would squash the whole move into the top of the chart.
+    const visRange = () => {
+      const r = chart.timeScale().getVisibleLogicalRange(); if (!r) return null;
+      const a = Math.max(0, Math.floor(r.from)), b = Math.min(S.d.length - 1, Math.ceil(r.to)); if (b < a) return null;
+      let lo = Infinity, hi = -Infinity; for (let i = a; i <= b; i++) { if (S.l[i] < lo) lo = S.l[i]; if (S.h[i] > hi) hi = S.h[i]; }
+      (S.lines || []).forEach(x => { if (x.p < lo) lo = x.p; if (x.p > hi) hi = x.p; });
+      return { priceRange: { minValue: lo, maxValue: hi } };
+    };
+    const cs = chart.addCandlestickSeries({ autoscaleInfoProvider: visRange, upColor: cv('--up'), downColor: cv('--down'), borderUpColor: cv('--up'), borderDownColor: cv('--down'), wickUpColor: cv('--up'), wickDownColor: cv('--down'), priceLineVisible: false });
     cs.setData(S.d.map((d, i) => ({ time: d, open: S.o[i], high: S.h[i], low: S.l[i], close: S.c[i] })));
     const MAS = [['10', '#2962FF', ema(S.c, 10), 'EMA'], ['20', '#F23645', ema(S.c, 20), 'EMA'], ['50', '#FF9800', ema(S.c, 50), 'EMA']];
     const maS = MAS.map(([nm, col, v]) => { const l = chart.addLineSeries({ color: col, lineWidth: 1.3, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }); l.setData(S.d.map((d, i) => v[i] == null ? null : { time: d, value: v[i] }).filter(Boolean)); return l; });
@@ -49,7 +61,7 @@
     const vs = chart.addHistogramSeries({ priceScaleId: 'v', priceFormat: { type: 'volume' }, priceLineVisible: false, lastValueVisible: false });
     const vavg = chart.addLineSeries({ priceScaleId: 'v', color: cv('--text'), lineWidth: 1.5, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
     vavg.setData(S.d.map((d, i) => avg30[i] == null ? null : { time: d, value: avg30[i] }).filter(Boolean));
-    chart.priceScale('v').applyOptions({ scaleMargins: { top: .82, bottom: 0 } });
+    chart.priceScale('v').applyOptions({ scaleMargins: { top: .82, bottom: 0 }, visible: false });
     const paintVol = () => vs.setData(S.d.map((d, i) => { let col = S.c[i] >= S.o[i] ? 'rgba(34,197,94,.55)' : 'rgba(239,68,68,.55)';
       if (L.dist && i) { const dn = S.c[i] < S.c[i - 1] && S.v[i] > S.v[i - 1], up = S.c[i] > S.c[i - 1] && S.v[i] > S.v[i - 1]; col = dn ? 'rgba(185,28,28,.98)' : up ? 'rgba(21,128,61,.98)' : 'rgba(140,148,165,.4)'; } return { time: d, value: S.v[i], color: col }; }));
     // 52-week high / low: a plain horizontal line, measured on the chosen date (today, or the entry date on a journal chart)
@@ -73,7 +85,7 @@
     setTF(L.tf);
     // ---- legend
     const lg = i => { const up = S.c[i] >= S.o[i]; const wide = wrap.clientWidth >= 640, nm = S.name && S.name !== t ? S.name : '';
-      q('lg').innerHTML = (wide && S.logoUrl ? '<img src="' + esc(S.logoUrl) + '" alt="" style="width:18px;height:18px;border-radius:4px;vertical-align:middle" onerror="this.remove()">' : '') + '<b>' + esc(t) + '</b>' + (wide && nm ? '<span style="color:var(--dim)">' + esc(nm) + ' &middot; 1D</span>' : '') + '<span style="color:var(--dim)">' + S.d[i] + '</span><span>O <b>' + fmtP(S.o[i]) + '</b></span><span>H <b>' + fmtP(S.h[i]) + '</b></span><span>L <b>' + fmtP(S.l[i]) + '</b></span><span>C <b style="color:var(--' + (up ? 'up' : 'down') + ')">' + fmtP(S.c[i]) + '</b></span>' + (i ? '<span style="color:var(--' + (S.c[i] >= S.c[i - 1] ? 'up' : 'down') + ')">' + (S.c[i] >= S.c[i - 1] ? '+' : '') + ((S.c[i] / S.c[i - 1] - 1) * 100).toFixed(2) + '%</span>' : '') +
+      q('lg').innerHTML = (wide && S.logoUrl ? '<img src="' + esc(S.logoUrl) + '" alt="" style="width:18px;height:18px;border-radius:4px;vertical-align:middle" onerror="this.remove()">' : '') + '<b>' + esc(t) + '</b>' + (wide && nm ? '<span style="color:var(--dim,var(--text-dim,#667085))">' + esc(nm) + ' &middot; 1D</span>' : '') + '<span style="color:var(--dim,var(--text-dim,#667085))">' + S.d[i] + '</span><span>O <b>' + fmtP(S.o[i]) + '</b></span><span>H <b>' + fmtP(S.h[i]) + '</b></span><span>L <b>' + fmtP(S.l[i]) + '</b></span><span>C <b style="color:var(--' + (up ? 'up' : 'down') + ')">' + fmtP(S.c[i]) + '</b></span>' + (i ? '<span style="color:var(--' + (S.c[i] >= S.c[i - 1] ? 'up' : 'down') + ')">' + (S.c[i] >= S.c[i - 1] ? '+' : '') + ((S.c[i] / S.c[i - 1] - 1) * 100).toFixed(2) + '%</span>' : '') +
       (L.vol ? '<span>Vol <b>' + fmtV(S.v[i]) + '</b></span>' + (avg30[i] ? '<span>Vol avg 30 <b>' + fmtV(avg30[i]) + '</b></span>' : '') : '') + (L.ma ? MAS.map(m => m[2][i] == null ? '' : '<span style="color:' + m[1] + '">' + m[0] + m[3][0] + ' <b>' + fmtP(m[2][i]) + '</b></span>').join('') : ''); };
     lg(n - 1);
     chart.subscribeCrosshairMove(p => { if (p.time) { const i = idxOf[p.time]; if (i != null) lg(i); } else lg(n - 1); });
@@ -178,7 +190,7 @@
     }
     renderBar();
     if (compact) { const o = document.createElement('button'); o.className = 'tv-b'; o.textContent = 'Expand'; o.style.cssText = 'position:absolute;right:66px;top:2px;z-index:4;padding:2px 8px;font-size:11px'; o.onclick = () => TV.open(t); wrap.appendChild(o);
-      if (st.draw.length) { const bd = document.createElement('span'); bd.className = 'tv-st'; bd.style.cssText = 'position:absolute;left:8px;top:4px;z-index:4;background:var(--panel);padding:1px 6px;border-radius:6px;border:1px solid var(--line)'; bd.textContent = st.draw.length + ' note' + (st.draw.length > 1 ? 's' : ''); wrap.appendChild(bd); } }
+      if (st.draw.length) { const bd = document.createElement('span'); bd.className = 'tv-st'; bd.style.cssText = 'position:absolute;left:8px;top:4px;z-index:4;background:var(--panel,var(--panel-bg,#fff));padding:1px 6px;border-radius:6px;border:1px solid var(--line,var(--border,#d0d4dc))'; bd.textContent = st.draw.length + ' note' + (st.draw.length > 1 ? 's' : ''); wrap.appendChild(bd); } }
     return { destroy() { dead = true; cancelAnimationFrame(raf); document.removeEventListener('keydown', onKey); document.removeEventListener('tv-saved', onSaved); try { chart.remove(); } catch (e) {} }, chart, series: cs };
   }
 

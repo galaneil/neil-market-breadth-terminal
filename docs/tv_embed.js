@@ -1,18 +1,20 @@
-/* TVE: the standard TradingView chart, used on every page that shows a price chart.
+/* TVE: picks and draws the price chart on every page that has one.
  *
- * Candles, volume, and the same three EMAs as the rest of the app (10, 20, 50).
- * One shared "chart engine" choice (TradingView / Terminal) is remembered in the
- * browser, so switching on one page applies everywhere.
+ * Three charts, one switch:
+ *   Chart       our standard chart (std_chart.js): candles, 10 EMA blue / 20 EMA red / 50 EMA orange, volume with its
+ *               30-day average, 52-week lines, drawing tools. Default when there is room.
+ *   TradingView the embedded TradingView chart. Its free embed cannot colour each moving average separately and does
+ *               not remember changes, so it is an option, not the default.
+ *   Terminal    the compact chart each page already had. Default in tight spaces (cards, side sheets).
  *
- * Two things TradingView's free embed cannot do, so they fall back to the
- * Terminal chart automatically:
- *   - NSE data (India) is not allowed in embeds; only BSE:SENSEX works.
- *   - The raw US index symbols (SPX, IXIC, RUT) are blocked; the matching ETFs
- *     (SPY, QQQ, IWM) are allowed and also carry real volume, which an index lacks.
- * Annotations drawn inside the embed are not saved by us (TradingView keeps them).
+ * TradingView's free embed also refuses NSE data and the raw US index symbols (SPX, IXIC, RUT); the matching ETFs
+ * (SPY, QQQ, IWM) work and carry real volume, which an index lacks. Where it cannot show a symbol the button is off.
+ * The choice is remembered separately for tight and wide spaces.
  */
 (function () {
-  var KEY = "chartEngine", uid = 0, loader = null;
+  var KEY = "chartEngine", uid = 0, loader = null, stdLoader = null;
+  var BASE = (document.currentScript && document.currentScript.src || "").replace(/tv_embed\.js.*$/, "");
+  var QS = (document.currentScript && document.currentScript.src || "").replace(/^[^?]*/, "");
 
   // index panel key -> [TradingView symbol, label shown to the user]
   var INDEX = {
@@ -22,14 +24,11 @@
     index_sensex: ["BSE:SENSEX", "BSE Sensex"],
   };
 
-  // The default depends on room: in a tight space (a card, a side sheet) the embedded TradingView
-  // chart is cramped, so the Terminal chart is the default there; with room to spare it is
-  // TradingView. A choice you make is remembered separately for each size.
   function sizeClass(w) { return w && w < 760 ? "tight" : "wide"; }
   function engine(w) {
     var c = sizeClass(w);
-    try { var v = localStorage.getItem(KEY + "." + c); if (v) return v; } catch (e) {}
-    return c === "tight" ? "terminal" : "tv";
+    try { var v = localStorage.getItem(KEY + "." + c); if (v === "std" || v === "tv" || v === "terminal") return v; } catch (e) {}
+    return c === "tight" ? "terminal" : "std";
   }
   function setEngine(v, w) { try { localStorage.setItem(KEY + "." + sizeClass(w), v); } catch (e) {} }
 
@@ -39,17 +38,31 @@
     return (0.299 * m[0] + 0.587 * m[1] + 0.114 * m[2]) < 128;
   }
 
+  function loadScript(src, ready, done) {
+    if (ready()) return done();
+    var s = document.createElement("script"); s.src = src;
+    s.onload = function () { done(); }; s.onerror = function () { done(true); };
+    document.head.appendChild(s);
+  }
   function loadTV(cb) {
     if (window.TradingView && window.TradingView.widget) return cb();
     if (!loader) {
       loader = [];
-      var s = document.createElement("script");
-      s.src = "https://s3.tradingview.com/tv.js";
-      s.onload = function () { var q = loader; loader = null; q.forEach(function (f) { f(); }); };
-      s.onerror = function () { var q = loader; loader = null; q.forEach(function (f) { f(true); }); };
-      document.head.appendChild(s);
+      loadScript("https://s3.tradingview.com/tv.js", function () { return false; }, function (failed) {
+        var q = loader; loader = null; q.forEach(function (f) { f(failed); });
+      });
     }
     loader.push(cb);
+  }
+  function loadStd(cb) {
+    if (window.StdChart) return cb();
+    if (!stdLoader) {
+      stdLoader = [];
+      loadScript(BASE + "std_chart.js" + QS, function () { return false; }, function (failed) {
+        var q = stdLoader; stdLoader = null; q.forEach(function (f) { f(failed); });
+      });
+    }
+    stdLoader.push(cb);
   }
 
   var STYLE =
@@ -89,34 +102,64 @@
     });
   }
 
-  /* attach({ bar, host, symbol, height, hide, note, onApply })
-   *   bar    element that receives the TradingView | Terminal switch
-   *   host   empty element where the TradingView chart is drawn
-   *   hide   elements belonging to the Terminal chart (hidden while TradingView shows)
-   *   symbol TradingView symbol, or null when it cannot be embedded (Terminal only)
+  // Our standard chart. `data` is {d,o,h,l,c,v,name,logoUrl,t,...} or a promise of it; null/missing volume is fine.
+  var stdHandles = new WeakMap();
+  function mountStd(host, data, opt) {
+    var prev = stdHandles.get(host); if (prev) { try { prev.destroy(); } catch (e) {} stdHandles.delete(host); }
+    host.innerHTML = '<div class="tve-msg">Loading chart…</div>'; host.style.height = "";
+    Promise.resolve(data).then(function (D) {
+      if (!D || !D.d || !D.d.length) { host.innerHTML = '<div class="tve-msg">No price history for this symbol.</div>'; return; }
+      loadStd(function (failed) {
+        if (failed || !window.StdChart) { host.innerHTML = '<div class="tve-msg">Could not load the chart.</div>'; return; }
+        host.innerHTML = "";
+        var clean = Object.assign({}, D);
+        // drop any bar with a missing price so the arrays stay aligned
+        var ok = []; for (var i = 0; i < clean.d.length; i++) if (clean.o[i] != null && clean.h[i] != null && clean.l[i] != null && clean.c[i] != null) ok.push(i);
+        if (ok.length !== clean.d.length) {
+          ["d", "o", "h", "l", "c", "v"].forEach(function (k) { if (clean[k]) clean[k] = ok.map(function (j) { return clean[k][j]; }); });
+        }
+        if (clean.v && clean.v.every(function (x) { return x == null; })) clean.v = null;
+        else if (clean.v) clean.v = clean.v.map(function (x) { return x || 0; });
+        var h = window.StdChart.mount(host, Object.assign(clean, opt || {}));
+        stdHandles.set(host, h);
+      });
+    });
+  }
+
+  /* attach({ bar, host, symbol, data, height, hide, note, onApply })
+   *   bar    element that receives the Chart | TradingView | Terminal switch
+   *   host   empty element where the Chart / TradingView is drawn
+   *   hide   elements belonging to the Terminal chart (hidden while Chart or TradingView shows)
+   *   symbol TradingView symbol, or null when it cannot be embedded
+   *   data   function returning the standard chart's data (or a promise of it), or omitted when not available
    */
   function attach(o) {
     var seg = document.createElement("div"); seg.className = "tve-seg";
-    seg.innerHTML = '<button data-e="tv">TradingView</button><button data-e="terminal">Terminal</button>';
+    seg.innerHTML = '<button data-e="std">Chart</button><button data-e="tv">TradingView</button><button data-e="terminal">Terminal</button>';
     var note = document.createElement("span"); note.className = "tve-note";
     o.bar.appendChild(seg); o.bar.appendChild(note);
-    var tvBtn = seg.querySelector('[data-e="tv"]');
     var width = o.bar.clientWidth || (o.host.parentNode && o.host.parentNode.clientWidth) || 0;
+    var stdBtn = seg.querySelector('[data-e="std"]'), tvBtn = seg.querySelector('[data-e="tv"]');
     function apply() {
-      var can = !!o.symbol, tv = engine(width) === "tv" && can;
-      tvBtn.disabled = !can; tvBtn.title = can ? "" : "TradingView does not allow this market in embedded charts";
-      seg.querySelector('[data-e="tv"]').classList.toggle("on", tv);
-      seg.querySelector('[data-e="terminal"]').classList.toggle("on", !tv);
-      note.textContent = tv ? (o.note || "") : (can ? "" : "TradingView cannot show this symbol, so the Terminal chart is used");
-      o.host.style.display = tv ? "" : "none";
-      (o.hide || []).forEach(function (el) { if (el) el.style.display = tv ? "none" : ""; });
-      if (tv) mount(o.host, o.symbol, o.height); else o.host.innerHTML = "";
-      if (o.onApply) o.onApply(tv);
+      var canStd = typeof o.data === "function", canTV = !!o.symbol, want = engine(width), eng = want;
+      if (eng === "std" && !canStd) eng = canTV ? "tv" : "terminal";
+      if (eng === "tv" && !canTV) eng = canStd ? "std" : "terminal";
+      stdBtn.disabled = !canStd; tvBtn.disabled = !canTV;
+      tvBtn.title = canTV ? "" : "TradingView does not allow this market in embedded charts";
+      ["std", "tv", "terminal"].forEach(function (e) { seg.querySelector('[data-e="' + e + '"]').classList.toggle("on", e === eng); });
+      note.textContent = eng === "tv" ? (o.note || "") : (eng === "terminal" && !canTV && want === "tv" ? "TradingView cannot show this symbol, so the Terminal chart is used" : "");
+      var showHost = eng !== "terminal";
+      o.host.style.display = showHost ? "" : "none";
+      (o.hide || []).forEach(function (el) { if (el) el.style.display = showHost ? "none" : ""; });
+      if (eng === "tv") mount(o.host, o.symbol, o.height);
+      else if (eng === "std") mountStd(o.host, o.data(), { ht: o.height, tf: o.tf || "1Y" });
+      else o.host.innerHTML = "";
+      if (o.onApply) o.onApply(eng);
     }
     seg.onclick = function (ev) { var b = ev.target.closest("button"); if (!b || b.disabled) return; setEngine(b.dataset.e, width); apply(); };
     apply();
-    return { refresh: apply, setSymbol: function (s) { o.symbol = s; apply(); } };
+    return { refresh: apply };
   }
 
-  window.TVE = { engine: engine, setEngine: setEngine, stockSymbol: stockSymbol, indexSymbol: indexSymbol, indexLabel: indexLabel, mount: mount, attach: attach };
+  window.TVE = { engine: engine, setEngine: setEngine, stockSymbol: stockSymbol, indexSymbol: indexSymbol, indexLabel: indexLabel, mount: mount, mountStd: mountStd, attach: attach, loadStd: loadStd };
 })();

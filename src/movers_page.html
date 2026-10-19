@@ -39,6 +39,9 @@
   th.r, td.r { text-align:right; } th:hover { color:var(--text); }
   td { padding:8px 10px; border-bottom:1px solid var(--line); white-space:nowrap; }
   tbody tr:hover td { background:var(--accent-a); }
+  .cmodal { position:fixed; inset:0; z-index:80; background:rgba(10,12,16,.55); display:flex; align-items:center; justify-content:center; padding:3vh 3vw; }
+  .cmodal > div { background:var(--panel); border:1px solid var(--line); border-radius:14px; width:min(1280px,96vw); max-height:94vh; overflow:auto; padding:12px 14px; box-shadow:0 8px 28px rgba(0,0,0,.45); }
+  .cmodal .ch { display:flex; align-items:center; gap:12px; margin-bottom:8px; } .cmodal .ch b { font-size:16px; }
   .tk { display:inline-flex; align-items:center; gap:8px; font-weight:700; color:var(--text); text-decoration:none; }
   .star { background:none; border:0; cursor:pointer; font-size:16px; line-height:1; color:var(--dim); padding:2px 4px; border-radius:6px; }
   .star.on { color:#f5b301; } .star:hover { background:var(--accent-a); }
@@ -90,6 +93,8 @@
   <div class="chips" id="chips"></div>
   <div class="tw"><table><thead><tr id="hdr"></tr></thead><tbody id="rows"></tbody></table><div class="msg" id="msg" hidden></div></div>
 </main>
+<script src="/docs/vendor/lightweight-charts.js"></script>
+<script src="/docs/tv_embed.js"></script>
 <script>
 const $ = id => document.getElementById(id);
 const COUNTRY = new URLSearchParams(location.search).get("country") === "IN" ? "IN" : "US";
@@ -125,12 +130,34 @@ function logoHtml(r) {
 function rowHtml(r) {
   const on = WL.set.has(r.t);
   const star = '<td><button class="star' + (on ? " on" : "") + '" data-t="' + esc(r.t) + '" title="' + (on ? "Remove from" : "Add to") + ' watchlist" aria-label="Toggle watchlist">' + (on ? "\u2605" : "\u2606") + '</button></td>';
-  const tk = '<td><a class="tk" target="_blank" rel="noopener" href="https://www.tradingview.com/chart/?symbol=' + encodeURIComponent(r.t) + '">' + logoHtml(r) + esc(r.t) + '</a></td>';
+  const tk = '<td><a class="tk" href="#" title="Open the chart" data-t="' + esc(r.t) + '" data-logo="' + esc(r.logo || "") + '">' + logoHtml(r) + esc(r.t) + '</a></td>';
   if (r.missing) return '<tr>' + star + tk + '<td class="dim" colspan="8">no price history stored for this symbol</td></tr>';
   return '<tr>' + star + tk + '<td>' + esc(r.sector || "\u2014") + '</td><td class="dim">' + esc(r.industry || "\u2014") + '</td>'
     + '<td class="r mono">' + CUR + r.close.toLocaleString() + '</td><td class="r mono ' + cls(r.move) + '" style="font-weight:700">' + fpct(r.move) + '</td><td class="r mono ' + cls(r.d1) + '">' + fpct(r.d1) + '</td>'
     + '<td class="r mono">' + (r.adr == null ? "&mdash;" : r.adr.toFixed(1) + "%") + '</td><td class="r mono">' + (r.off == null ? "&mdash;" : r.off.toFixed(1) + "%") + '</td><td class="r mono">' + (r.dv == null ? "&mdash;" : r.dv.toLocaleString()) + '</td></tr>';
 }
+// ---- chart window: the standard chart (or TradingView) in a window over the page, same as Money Flows
+function openChart(sym, logo) {
+  const m = document.createElement("div"); m.className = "cmodal";
+  m.innerHTML = '<div><div class="ch"><b>' + esc(sym) + '</b><span class="seg" id="cm-seg"><button data-e="std" class="on">Chart</button><button data-e="tv">TradingView</button></span><span style="flex:1"></span><button class="seg" style="padding:6px 12px;border:1px solid var(--line);background:var(--bg);color:var(--text);border-radius:8px;cursor:pointer;font:600 12px inherit" id="cm-x">Close</button></div><div id="cm-body"></div></div>';
+  document.body.appendChild(m);
+  const body = m.querySelector("#cm-body"), seg = m.querySelector("#cm-seg"), close = () => m.remove();
+  m.querySelector("#cm-x").onclick = close; m.onclick = e => { if (e.target === m) close(); };
+  const tvSym = TVE.stockSymbol(sym, COUNTRY), h = Math.max(420, Math.round(innerHeight * 0.66));
+  if (!tvSym) seg.querySelector('[data-e="tv"]').disabled = true;
+  const dir = COUNTRY === "IN" ? "/docs/in/tickers/" : "/docs/tickers/";
+  const data = fetch(dir + encodeURIComponent(sym) + ".json").then(r => { if (!r.ok) throw 0; return r.json(); })
+    .then(p => ({t: sym, name: sym, d: p.dates, o: p.open, h: p.high, l: p.low, c: p.close, v: p.volume || null, logoUrl: logo ? "/api/logo/" + encodeURIComponent(logo) : ""}))
+    .catch(() => null);
+  function show(eng) {
+    seg.querySelectorAll("button").forEach(b => b.classList.toggle("on", b.dataset.e === eng));
+    if (eng === "tv") TVE.mount(body, tvSym, h); else TVE.mountStd(body, data, {ht: h, tf: "1Y"});
+  }
+  seg.onclick = e => { const b = e.target.closest("button"); if (b && !b.disabled) show(b.dataset.e); };
+  show("std");
+}
+document.addEventListener("click", e => { const a = e.target.closest("a.tk"); if (!a) return; e.preventDefault(); openChart(a.dataset.t, a.dataset.logo); });
+document.addEventListener("keydown", e => { if (e.key === "Escape") { const m = document.querySelector(".cmodal"); if (m) m.remove(); } });
 // ---- watchlist state (stored on this machine through the hub, so it follows you across browsers)
 const WL = { lists: {}, active: null, set: new Set(), rows: [] };
 let mode = "scan";

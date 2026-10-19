@@ -209,14 +209,25 @@
   // Same rule as tv_embed.js: Terminal by default in tight spaces, TradingView with room to spare.
   function tvPreferred(el) {
     const w = el && el.clientWidth || 0, cls = w && w < 760 ? "tight" : "wide";
-    try { const v = localStorage.getItem("chartEngine." + cls); if (v) return v === "tv"; } catch (e) { /* fall through */ }
+    try { const v = localStorage.getItem("chartEngine." + cls); if (v === "std" || v === "tv" || v === "terminal") return v !== "terminal"; } catch (e) { /* fall through */ }
     return cls === "wide";
+  }
+  // Data for the standard chart from a ticker file (or any {dates,open,high,low,close,volume}).
+  function stdFromTicker(sym, p, name) {
+    const tags = (DATA.classification || {})[sym], logoid = tags && tags[2];
+    return { t: sym, name: name || sym, d: p.dates, o: p.open, h: p.high, l: p.low, c: p.close, v: p.volume || null,
+             logoUrl: logoid ? "https://s3-symbol-logo.tradingview.com/" + encodeURIComponent(logoid) + ".svg" : "" };
   }
   // Adds the TradingView | Terminal switch and chart host above an existing Terminal chart.
   // o: { bar, host, hide:[els], symbol (resolved by TVE), canTV (known before TVE loads), height, note }
   function tvAttach(o) {
-    if (tvPreferred(o.bar) && o.canTV) (o.hide || []).forEach(function (el) { if (el) el.style.display = "none"; });
-    withTVE(function () { o.symbol = o.symbolFn(); if (o.noteFn) o.note = o.noteFn(); TVE.attach(o); });
+    if (tvPreferred(o.bar) && (o.canTV || o.dataFn)) (o.hide || []).forEach(function (el) { if (el) el.style.display = "none"; });
+    withTVE(function () {
+      o.symbol = o.symbolFn ? o.symbolFn() : null;
+      if (o.noteFn) o.note = o.noteFn();
+      if (o.dataFn) o.data = o.dataFn;
+      TVE.attach(o);
+    });
   }
 
   function themeColors() {
@@ -644,7 +655,15 @@
       bar: card.querySelector(".tve-row"), host: card.querySelector(".tve-host"),
       hide: [card.querySelector(".tf-toggle"), container, card.querySelector(".vol-sub")],
       canTV: ["index_nasdaq", "index_sp500", "index_russell2000", "index_sensex"].indexOf(seriesKey) >= 0,
-      symbolFn: function () { return TVE.indexSymbol(seriesKey); }, height: 440,
+      symbolFn: function () { return TVE.indexSymbol(seriesKey); }, height: 440, tf: "1Y",
+      dataFn: function () {
+        // an index series carries no open, so each bar opens at the previous close; no volume for some indices
+        const ok = rows.filter(function (r) { return r.high != null && r.low != null && r.close != null; });
+        return { t: seriesKey, name: label, d: ok.map(function (r) { return r.date; }),
+                 o: ok.map(function (r, i) { return i ? ok[i - 1].close : r.close; }),
+                 h: ok.map(function (r) { return r.high; }), l: ok.map(function (r) { return r.low; }), c: ok.map(function (r) { return r.close; }),
+                 v: hasVolume ? ok.map(function (r) { return r.volume; }) : null };
+      },
       noteFn: function () { return TVE.indexLabel(seriesKey) === "BSE Sensex" ? "" : "Shown as " + TVE.indexLabel(seriesKey).split(" via ")[1] + ", the ETF that tracks it: TradingView does not embed the index itself, and the ETF has real volume"; },
     });
 
@@ -2674,58 +2693,58 @@
     }
     return wallCache[sym];
   }
+  // Full chart in a window over the page: the standard chart with every tool, or TradingView.
   function tvModal(sym) {
     const m = document.createElement("div");
     m.className = "tv-modal";
-    m.innerHTML = '<div class="tv-modal-box"><div class="tv-modal-head"><b>' + sym + '</b><button class="tf-btn" type="button">Close</button></div><div class="tv-modal-body"></div></div>';
+    m.innerHTML = '<div class="tv-modal-box"><div class="tv-modal-head"><b>' + sym + '</b><span class="tve-seg" id="tvm-seg">' +
+      '<button data-e="std" class="on">Chart</button><button data-e="tv">TradingView</button></span><button class="tf-btn" type="button" id="tvm-x">Close</button></div><div class="tv-modal-body"></div></div>';
     document.body.appendChild(m);
+    const body = m.querySelector(".tv-modal-body"), seg = m.querySelector("#tvm-seg");
     const close = function () { m.remove(); };
-    m.querySelector("button").addEventListener("click", close);
+    m.querySelector("#tvm-x").addEventListener("click", close);
     m.addEventListener("click", function (e) { if (e.target === m) close(); });
-    withTVE(function () {
-      const symbol = TVE.stockSymbol(sym, DATA.country);
-      if (!symbol) { m.querySelector(".tv-modal-body").innerHTML = '<div class="empty-note" style="padding:20px">TradingView does not allow this market in embedded charts.</div>'; return; }
-      TVE.mount(m.querySelector(".tv-modal-body"), symbol, Math.max(420, Math.round(window.innerHeight * 0.7)));
-    });
+    const tvBtn = seg.querySelector('[data-e="tv"]');
+    function show(eng) {
+      seg.querySelectorAll("button").forEach(function (b) { b.classList.toggle("on", b.dataset.e === eng); });
+      withTVE(function () {
+        if (eng === "tv") {
+          const symbol = TVE.stockSymbol(sym, DATA.country);
+          if (!symbol) { body.innerHTML = '<div class="empty-note" style="padding:20px">TradingView does not allow this market in embedded charts.</div>'; return; }
+          TVE.mount(body, symbol, Math.max(420, Math.round(window.innerHeight * 0.72)));
+        } else {
+          TVE.mountStd(body, loadTicker(sym).then(function (p) { return stdFromTicker(sym, p, sym); }), { ht: Math.max(420, Math.round(window.innerHeight * 0.68)), tf: "1Y" });
+        }
+      });
+    }
+    withTVE(function () { if (!TVE.stockSymbol(sym, DATA.country)) tvBtn.disabled = true; });
+    seg.addEventListener("click", function (e) { const b = e.target.closest("button"); if (b && !b.disabled) show(b.dataset.e); });
+    show("std");
   }
-  function renderChartWall(el, tickers, context) {
-    el.innerHTML = '<div class="mf-wall-grid">' + tickers.map(function (t) {
-      return '<div class="mf-wcard" data-t="' + t + '"><div class="mf-wcard-head"><span class="mf-wcard-t">' + t + '</span>' +
-        '<span class="mf-wcard-px"></span><button type="button" class="mf-wcard-x" title="Open the full TradingView chart">Expand</button></div>' +
-        '<div class="mf-wcard-chart"></div></div>';
-    }).join("") + '</div>';
-    const th = lwTheme();
+  let wallTf = "1Y";
+  function renderChartWall(el, tickers, context, onTf) {
+    const TFS = ["3M", "6M", "1Y", "2Y", "All"];
+    el.innerHTML = '<div class="mf-wall-bar"><span class="tve-seg">' + TFS.map(function (k) {
+      return '<button type="button" data-tf="' + k + '" class="' + (k === wallTf ? "on" : "") + '">' + k + "</button>";
+    }).join("") + '</span><span class="note" style="margin-left:8px">Same chart on every card: 10 EMA blue, 20 EMA red, 50 EMA orange, volume with its 30-day average.</span></div>' +
+      '<div class="mf-wall-grid">' + tickers.map(function (t) {
+        return '<div class="mf-wcard" data-t="' + t + '"><div class="mf-wcard-head"><span class="mf-wcard-t">' + t + '</span>' +
+          '<span class="mf-wcard-px"></span><button type="button" class="mf-wcard-x" title="Open the full chart">Expand</button></div>' +
+          '<div class="mf-wcard-chart"></div></div>';
+      }).join("") + '</div>';
+    el.querySelector(".mf-wall-bar").addEventListener("click", function (e) {
+      const b = e.target.closest("button[data-tf]"); if (!b) return;
+      wallTf = b.dataset.tf; renderChartWall(el, tickers, context, onTf);
+    });
     el.querySelectorAll(".mf-wcard").forEach(function (card) {
       const sym = card.dataset.t, box = card.querySelector(".mf-wcard-chart");
       card.querySelector(".mf-wcard-x").addEventListener("click", function () { tvModal(sym); });
       card.querySelector(".mf-wcard-t").addEventListener("click", function () { Sync.publish({ ticker: sym }); openStockPin(sym, context || ""); });
       loadTicker(sym).then(function (p) {
-        const n = p.dates.length, start = Math.max(0, n - 130);
-        const last = p.close[n - 1], prev = p.close[n - 2], chg = prev ? (last / prev - 1) * 100 : null;
+        const n = p.dates.length, last = p.close[n - 1], prev = p.close[n - 2], chg = prev ? (last / prev - 1) * 100 : null;
         card.querySelector(".mf-wcard-px").innerHTML = fmtNum(last, 2) + (chg === null ? "" :
           ' <span class="' + (chg >= 0 ? "up" : "down") + '">' + (chg >= 0 ? "+" : "") + fmtNum(chg, 2) + "%</span>");
-        const hasVol = !!(p.volume && p.volume.some(function (v) { return v != null; }));
-        const chart = LightweightCharts.createChart(box, {
-          height: 220, width: box.clientWidth,
-          layout: { background: { type: "solid", color: th.bg }, textColor: th.text, fontSize: 10 },
-          grid: { vertLines: { color: th.grid }, horzLines: { color: th.grid } },
-          rightPriceScale: { borderColor: th.border, scaleMargins: { top: 0.06, bottom: hasVol ? 0.26 : 0.06 } },
-          timeScale: { borderColor: th.border, rightOffset: 2 },
-        });
-        const candles = chart.addCandlestickSeries({ upColor: th.up, downColor: th.down, borderUpColor: th.up, borderDownColor: th.down, wickUpColor: th.up, wickDownColor: th.down, priceLineVisible: false });
-        candles.setData(p.dates.slice(start).map(function (d, i) { const k = start + i; return { time: d, open: p.open[k], high: p.high[k], low: p.low[k], close: p.close[k] }; }));
-        [[10, EMA_COLORS.ema10], [20, EMA_COLORS.ema20], [50, EMA_COLORS.ema50]].forEach(function (spec) {
-          const full = emaSeries(p.close, spec[0]);
-          const line = chart.addLineSeries({ color: spec[1], lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
-          line.setData(p.dates.slice(start).map(function (d, i) { return { time: d, value: full[start + i] }; }).filter(function (x) { return x.value != null; }));
-        });
-        if (hasVol) {
-          const vol = chart.addHistogramSeries({ priceFormat: { type: "volume" }, priceScaleId: "vol", priceLineVisible: false, lastValueVisible: false });
-          chart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.78, bottom: 0 } });
-          vol.setData(p.dates.slice(start).map(function (d, i) { const k = start + i; return { time: d, value: p.volume[k] || 0, color: p.close[k] >= p.open[k] ? "rgba(34,197,94,0.55)" : "rgba(239,68,68,0.55)" }; }));
-        }
-        chart.timeScale().fitContent();
-        if (window.ResizeObserver) new ResizeObserver(function () { chart.applyOptions({ width: box.clientWidth }); chart.timeScale().fitContent(); }).observe(box);
+        withTVE(function () { TVE.mountStd(box, stdFromTicker(sym, p, sym), { compact: true, ht: 250, tf: wallTf }); });
       }).catch(function () { box.innerHTML = '<div class="empty-note">No price history.</div>'; });
     });
   }
@@ -4388,7 +4407,8 @@
       tvAttach({
         bar: document.getElementById("stock-tve-bar"), host: document.getElementById("stock-tve"),
         hide: [body.querySelector(".stock-tf"), document.getElementById("stock-chart")],
-        canTV: DATA.country !== "IN", symbolFn: function () { return TVE.stockSymbol(sym, DATA.country); }, height: 460,
+        canTV: DATA.country !== "IN", symbolFn: function () { return TVE.stockSymbol(sym, DATA.country); }, height: 460, tf: "1Y",
+        dataFn: function () { return stdFromTicker(sym, d, cls ? cls[1] : sym); },
         note: "",
       });
       body.querySelectorAll(".stock-tf button").forEach(function (btn) {
@@ -4991,7 +5011,8 @@
       const priceEl = document.getElementById("tmle-price-chart");
       tvAttach({
         bar: document.getElementById("tmle-tve-bar"), host: document.getElementById("tmle-tve"), hide: [priceEl],
-        canTV: DATA.country !== "IN", symbolFn: function () { return TVE.stockSymbol(data.ticker, DATA.country); }, height: 420,
+        canTV: DATA.country !== "IN", symbolFn: function () { return TVE.stockSymbol(data.ticker, DATA.country); }, height: 420, tf: "1Y",
+        dataFn: function () { return loadTicker(data.ticker).then(function (p) { return stdFromTicker(data.ticker, p, data.ticker); }); },
       });
       const cachedPrice = priceCache[data.ticker];
       if (cachedPrice) {
