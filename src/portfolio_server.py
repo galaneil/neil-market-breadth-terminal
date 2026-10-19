@@ -5004,6 +5004,39 @@ HUB_PAGE = r"""<!doctype html>
   .stack-head span { font-size:12px; color:var(--dim); }
   .stack-frame { display:block; width:100%; height:760px; border:0;
     background:var(--bg); }
+
+  /* Workspace tabs (one browser-style tab per open page, each with its own
+     history and its own live frame) and the horizontal tabs of a grouped page. */
+  #wstabs { display:flex; align-items:flex-end; gap:2px; padding:6px 8px 0; overflow-x:auto;
+    background:color-mix(in srgb, var(--bg) 70%, var(--line)); border-bottom:1px solid var(--line); min-height:38px; flex:none; }
+  .wtab { display:flex; align-items:center; gap:8px; height:31px; padding:0 8px 0 12px; min-width:110px; max-width:220px;
+    border:1px solid transparent; border-bottom:0; border-radius:9px 9px 0 0; color:var(--dim); cursor:pointer;
+    font-size:12.5px; font-weight:500; flex:0 1 190px; position:relative; }
+  .wtab:hover { background:color-mix(in srgb, var(--accent) 8%, transparent); }
+  .wtab.on { background:var(--panel); color:var(--text); border-color:var(--line); font-weight:600; }
+  .wtab.on::after { content:""; position:absolute; left:0; right:0; bottom:-1px; height:1px; background:var(--panel); }
+  .wtab .tt { flex:1; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .wtab .x { width:18px; height:18px; border-radius:5px; display:flex; align-items:center; justify-content:center; font-size:14px; color:var(--dim); }
+  .wtab .x:hover { background:var(--line); color:var(--text); }
+  #newtab { flex:none; width:28px; height:28px; margin:0 0 2px 4px; border:0; border-radius:8px; background:transparent;
+    color:var(--dim); font-size:18px; cursor:pointer; }
+  #newtab:hover { background:color-mix(in srgb, var(--accent) 12%, transparent); color:var(--accent); }
+  #topbar-left { display:flex; align-items:center; gap:10px; min-width:0; }
+  #navbtns { display:flex; gap:4px; }
+  #navbtns button { width:28px; padding:3px 0; }
+  #navbtns button:disabled { opacity:.35; cursor:default; }
+  #ptabs { display:flex; gap:2px; padding:0 16px; background:var(--panel); border-bottom:1px solid var(--line); overflow-x:auto; flex:none; }
+  #ptabs[hidden] { display:none; }
+  .ptab { padding:10px 13px; font-size:13px; font-weight:600; color:var(--dim); border:0; background:none;
+    border-bottom:2px solid transparent; cursor:pointer; white-space:nowrap; font-family:inherit; }
+  .ptab:hover { color:var(--text); }
+  .ptab.on { color:var(--accent); border-bottom-color:var(--accent); }
+  .pframe { position:absolute; inset:0; width:100%; height:100%; border:0; background:var(--bg); }
+  #pop .menu { position:fixed; z-index:50; background:var(--panel); border:1px solid var(--line); border-radius:12px;
+    box-shadow:0 8px 28px rgba(0,0,0,.35); padding:8px; width:260px; max-height:60vh; overflow:auto; }
+  #pop .menu b { display:block; padding:4px 8px 6px; font-size:12px; color:var(--dim); }
+  #pop .menu a { display:block; padding:7px 10px; border-radius:7px; font-size:13px; cursor:pointer; color:var(--text); }
+  #pop .menu a:hover { background:color-mix(in srgb, var(--accent) 14%, transparent); }
 </style></head><body>
 
 <div id="sidebar">
@@ -5046,13 +5079,18 @@ HUB_PAGE = r"""<!doctype html>
 </div>
 
 <div id="body">
+  <div id="wstabs"></div>
   <div id="topbar">
-    <div id="crumb"></div>
+    <div id="topbar-left">
+      <div id="navbtns"><button id="back-btn" title="Back">&#8592;</button><button id="fwd-btn" title="Forward">&#8594;</button></div>
+      <div id="crumb"></div>
+    </div>
     <button id="reload-btn" title="Reload the current panel">Reload</button>
   </div>
-  <div id="frame-wrap"><iframe id="frame" title="panel"></iframe></div>
-  <div id="stack-wrap" hidden></div>
+  <div id="ptabs" hidden></div>
+  <div id="frame-wrap"></div>
 </div>
+<div id="pop"></div>
 
 <script>
 // One small line-icon per sidebar row, keyed by its label. Plain shapes
@@ -5137,73 +5175,124 @@ function highlightActive() {
     .forEach(el => el.classList.toggle("open", el.dataset.top === activeTop));
 }
 
-function setChrome(url, label, scoped, topLabel) {
-  currentUrl = url;
-  activeTop = topLabel != null ? topLabel : label;
-  // Portfolio and grouped panels are not scoped by the US/IN switch the same
-  // way a plain leaf is, so the crumb only claims a country when it is one.
-  document.getElementById("crumb").innerHTML = scoped === false ? "<b>" + label + "</b>"
-    : "<b>" + country.flag + " " + country.label + "</b> &nbsp;/&nbsp; " + label;
-  highlightActive();
-  localStorage.setItem("hub-last",
-    JSON.stringify({top: activeTop, country: country.code}));
-}
+const esc = s => String(s == null ? "" : s).replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
 
-function showLeaf() {
-  document.getElementById("frame-wrap").hidden = false;
-  document.getElementById("stack-wrap").hidden = true;
+// ---------- workspace tabs ----------
+// Each tab is one open page with its own back/forward history. Its frame stays
+// alive while another tab is in front, so switching tabs never reloads a page or
+// loses its scroll position. A grouped page (Indices, Sector & Industry) shows its
+// members as horizontal tabs under the title instead of stacking them down a page.
+const WS = {tabs: [], cur: null, uid: 1};
+const curTab = () => WS.tabs.find(t => t.id === WS.cur);
+function itemsOf(c) {
+  return c.panels.concat(c.signalsPanels || []).concat(c.algorithmsPanels || [])
+    .concat([portfolioItem, journalItem, setupsItem]).concat(c.systemPanels || []);
 }
-
-// Every published panel carries its own US/IN quick-links (plain <a href>,
-// so they work in Notion with no hub around them) — clicking one navigates
-// the iframe internally, which the hub never learns about. If the sidebar is
-// then clicked back to a panel whose URL string happens to be exactly what
-// the iframe's src ATTRIBUTE already says (unchanged since the hub last set
-// it), assigning that same string again is a no-op in every browser: the
-// frame silently keeps showing whatever it navigated to on its own, while the
-// hub's own chrome — crumb, sidebar highlight — confidently shows the
-// panel it THINKS is loaded. That mismatch is exactly what showed up as "US"
-// in the sidebar with India's data on screen.
-//
-// contentWindow.location.replace() has no such fast path: it always performs
-// a real navigation to the given URL regardless of the frame's current
-// location, so the hub's click is authoritative every time. It only fails
-// (cross-origin, or before the first document has loaded), in which case
-// setting .src is correct anyway since there is nothing stale to override.
-function loadFrame(url) {
-  const frame = document.getElementById("frame");
+function itemFor(code, label) {
+  const c = COUNTRIES.find(x => x.code === code) || COUNTRIES[0];
+  return itemsOf(c).find(p => p.label === label);
+}
+function urlsOf(item) { return item.children ? item.children.map(c => c.url) : [item.url]; }
+function saveWS() {
   try {
-    frame.contentWindow.location.replace(url);
-  } catch (e) {
-    frame.src = url;
+    localStorage.setItem("hub-ws", JSON.stringify({cur: WS.tabs.findIndex(t => t.id === WS.cur),
+      tabs: WS.tabs.map(t => ({code: t.code, top: t.top, sub: t.sub}))}));
+  } catch (e) { /* storage blocked: tabs simply do not survive a restart */ }
+}
+function newTab(code, top, sub) {
+  const t = {id: WS.uid++, code: code, top: top, sub: sub || 0, hist: [{code: code, top: top, sub: sub || 0}], hi: 0, frames: {}};
+  WS.tabs.push(t); WS.cur = t.id; return t;
+}
+// to: {code, top, sub}; opt: {force: reload the frame, replace: do not add a history entry}
+function navTo(to, opt) {
+  const t = curTab(); opt = opt || {};
+  const same = t.code === to.code && t.top === to.top && (t.sub || 0) === (to.sub || 0);
+  t.code = to.code; t.top = to.top; t.sub = to.sub || 0;
+  if (!opt.replace && !same) {
+    t.hist = t.hist.slice(0, t.hi + 1); t.hist.push({code: t.code, top: t.top, sub: t.sub}); t.hi = t.hist.length - 1;
   }
+  showTab(opt.force);
 }
-
-function go(url, label, scoped, topLabel) {
-  showLeaf();
-  loadFrame(url);
-  setChrome(url, label, scoped, topLabel);
+function mkFrame(t, url) {
+  const f = document.createElement("iframe");
+  f.className = "pframe"; f.title = "panel"; f.dataset.tab = t.id; f.src = url;
+  document.getElementById("frame-wrap").appendChild(f); t.frames[url] = f; return f;
 }
-
-// A grouped row's members render together on one scrollable page rather than
-// behind a toggle — the sidebar's expanded sub-list already shows what is in
-// the group, so switching to a horizontal tab bar on top of that would just
-// be the same information said twice.
-function openGroup(item) {
-  document.getElementById("frame-wrap").hidden = true;
-  const stack = document.getElementById("stack-wrap");
-  stack.hidden = false;
-  stack.innerHTML = item.children.map(c =>
-    '<div class="stack-block" id="' + stackId(c.url) + '">'
-    + '<div class="stack-head"><b>' + c.label + '</b>'
-    + (c.note ? '<span>' + c.note + '</span>' : '') + '</div>'
-    + '<iframe class="stack-frame" src="' + c.url + '" title="' + c.label + '"></iframe>'
-    + '</div>').join("");
-  setChrome(item.children[0].url, item.label, undefined, item.label);
+// Every published panel carries its own US/IN quick-links, so a frame can navigate
+// on its own without the hub knowing. Re-assigning the same src string would then be
+// a silent no-op in every browser and the hub's chrome would claim a page that is not
+// on screen. location.replace() always performs a real navigation, so an explicit
+// click in the sidebar is authoritative.
+function reloadFrame(f, url) {
+  try { f.contentWindow.location.replace(url); } catch (e) { f.src = url; }
 }
-
-function stackId(url) {
-  return "stack-" + url.replace(/[^a-zA-Z0-9]/g, "-");
+function showTab(force) {
+  const t = curTab(); if (!t) return;
+  country = COUNTRIES.find(c => c.code === t.code) || country;
+  let item = itemFor(t.code, t.top);
+  if (!item) { item = country.panels[0]; t.top = item.label; t.sub = 0; }
+  const kids = item.children || null;
+  if (kids) t.sub = Math.max(0, Math.min(t.sub || 0, kids.length - 1));
+  const keep = urlsOf(item), url = kids ? kids[t.sub].url : item.url;
+  Object.keys(t.frames).forEach(u => { if (keep.indexOf(u) < 0) { t.frames[u].remove(); delete t.frames[u]; } });
+  document.querySelectorAll("#frame-wrap iframe").forEach(f => { f.style.display = "none"; });
+  let f = t.frames[url];
+  if (!f) f = mkFrame(t, url); else if (force) reloadFrame(f, url);
+  f.style.display = "block";
+  currentUrl = url; activeTop = t.top;
+  const pt = document.getElementById("ptabs");
+  if (kids) {
+    pt.hidden = false;
+    pt.innerHTML = kids.map((c, i) => '<button class="ptab' + (i === t.sub ? " on" : "") + '" data-i="' + i + '" title="' + esc(c.note || "") + '">' + esc(c.label) + '</button>').join("");
+    pt.querySelectorAll(".ptab").forEach(b => b.onclick = () => navTo({code: t.code, top: t.top, sub: +b.dataset.i}));
+  } else { pt.hidden = true; pt.innerHTML = ""; }
+  const sub = kids ? " &rsaquo; " + esc(kids[t.sub].label) : "";
+  document.getElementById("crumb").innerHTML = item.scoped === false ? "<b>" + esc(item.label) + "</b>"
+    : "<b>" + country.flag + " " + country.label + "</b> &nbsp;/&nbsp; " + esc(item.label) + sub;
+  document.getElementById("back-btn").disabled = t.hi <= 0;
+  document.getElementById("fwd-btn").disabled = t.hi >= t.hist.length - 1;
+  renderWsTabs(); renderCountrySwitch(); refreshNav(); saveWS();
+}
+function tabTitle(t) {
+  const it = itemFor(t.code, t.top); if (!it) return t.top;
+  return t.top + (it.children ? " · " + it.children[Math.min(t.sub || 0, it.children.length - 1)].label : "");
+}
+function renderWsTabs() {
+  const el = document.getElementById("wstabs");
+  el.innerHTML = WS.tabs.map(t => '<div class="wtab' + (t.id === WS.cur ? " on" : "") + '" data-id="' + t.id + '"><span class="tt">'
+    + esc(tabTitle(t)) + '</span><span class="x" data-x="' + t.id + '" title="Close tab">&times;</span></div>').join("")
+    + '<button id="newtab" title="New tab">+</button>';
+  el.querySelectorAll(".wtab").forEach(w => w.onclick = ev => {
+    if (ev.target.dataset.x) { closeTab(+ev.target.dataset.x); return; }
+    WS.cur = +w.dataset.id; showTab();
+  });
+  document.getElementById("newtab").onclick = ev => { ev.stopPropagation(); tabPicker(ev.currentTarget); };
+}
+function closeTab(id) {
+  const i = WS.tabs.findIndex(t => t.id === id), t = WS.tabs[i];
+  Object.keys(t.frames).forEach(u => t.frames[u].remove());
+  WS.tabs.splice(i, 1);
+  if (!WS.tabs.length) newTab(COUNTRIES[0].code, COUNTRIES[0].panels[0].label);
+  else if (WS.cur === id) WS.cur = WS.tabs[Math.min(i, WS.tabs.length - 1)].id;
+  showTab();
+}
+function tabPicker(anchor) {
+  const r = anchor.getBoundingClientRect(), pop = document.getElementById("pop");
+  pop.innerHTML = '<div class="menu" style="left:' + Math.max(8, Math.min(r.left, innerWidth - 280)) + 'px;top:' + (r.bottom + 4) + 'px"><b>Open in a new tab</b>'
+    + itemsOf(country).map(p => '<a data-l="' + esc(p.label) + '">' + esc(p.label) + '</a>').join("") + '</div>';
+  pop.querySelectorAll("a").forEach(a => a.onclick = () => { pop.innerHTML = ""; newTab(country.code, a.dataset.l); showTab(true); });
+}
+document.addEventListener("click", e => {
+  if (!e.target.closest("#pop .menu") && !e.target.closest("#newtab")) { const p = document.getElementById("pop"); if (p) p.innerHTML = ""; }
+});
+// Sidebar click: change this tab's page; Ctrl/Cmd-click or middle-click opens it in a new tab.
+function openItem(item, inNewTab) {
+  if (inNewTab) { newTab(country.code, item.label); showTab(true); }
+  else navTo({code: country.code, top: item.label, sub: 0}, {force: true});
+}
+function histStep(d) {
+  const t = curTab(), j = t.hi + d; if (j < 0 || j >= t.hist.length) return;
+  t.hi = j; const h = t.hist[j]; t.code = h.code; t.top = h.top; t.sub = h.sub; showTab();
 }
 
 function pinButton(item) {
@@ -5228,21 +5317,12 @@ function wireItem(a, item) {
   };
   a.onclick = (e) => {
     if (e.target.closest(".pin-btn")) return;
-    if (item.children) openGroup(item);
-    else go(item.url, item.label, item.scoped, item.label);
-    refreshNav();
+    openItem(item, e.ctrlKey || e.metaKey);
   };
-}
-
-// Clicking a member's name in the sidebar's expanded sub-list scrolls that
-// member's block into view rather than navigating anywhere — everything in
-// the group is already on the page, so this is wayfinding, not routing.
-function wireSubNav(wrap, item) {
-  wrap.querySelectorAll(".sub-link").forEach(a => a.onclick = (e) => {
-    e.stopPropagation();
-    const target = document.getElementById(stackId(a.dataset.url));
-    if (target) target.scrollIntoView({behavior: "auto", block: "start"});
-  });
+  a.onauxclick = (e) => {
+    if (e.button !== 1 || e.target.closest(".pin-btn")) return;
+    e.preventDefault(); openItem(item, true);
+  };
 }
 
 function itemHTML(item) {
@@ -5251,13 +5331,6 @@ function itemHTML(item) {
   let html = '<div class="nav-item"><a data-top="' + item.label + '">'
     + (ICONS[item.label] || "") + '<span class="nav-label">' + item.label + '</span>' + badge
     + pinButton(item) + '</a>';
-  if (item.children) {
-    html += '<div class="sub-nav" data-top="' + item.label + '">' + item.children.map(c =>
-      '<a class="sub-link" data-url="' + c.url + '"><span class="sub-dot"></span>'
-      + '<span class="nav-label">' + c.label
-      + (c.note ? '<span class="sub-note">' + c.note + '</span>' : '')
-      + '</span></a>').join("") + '</div>';
-  }
   return html + '</div>';
 }
 
@@ -5265,7 +5338,6 @@ function renderGroup(nav, items) {
   nav.innerHTML = items.map(itemHTML).join("");
   [...nav.children].forEach((wrap, i) => {
     wireItem(wrap.querySelector(":scope > a"), items[i]);
-    if (items[i].children) wireSubNav(wrap, items[i]);
   });
   highlightActive();
 }
@@ -5302,19 +5374,10 @@ function renderCountrySwitch() {
     + c.code + '">' + c.flag + ' ' + c.label + '</button>').join("");
   document.querySelectorAll("#country-switch button").forEach(b =>
     b.onclick = () => {
-      // Stay on whatever tab was open (Money Flows -> Money Flows, not back
-      // to Market Environment) -- activeTop is set by setChrome() on every
-      // navigation, so it already names exactly the row to look up again in
-      // the country being switched to. Falls back to the first panel only
-      // for the rare case that row doesn't exist there (e.g. TMLE, US-only).
-      const wantedLabel = activeTop;
-      country = COUNTRIES.find(c => c.code === b.dataset.c);
-      renderCountrySwitch(); refreshNav();
-      const match = topLevelItems().find(p => p.label === wantedLabel);
-      const target = match || country.panels[0];
-      if (target.children) openGroup(target);
-      else go(target.url, target.label, target.scoped, target.label);
-      refreshNav();
+      // Stay on whatever page this tab has open (Money Flows -> Money Flows); fall back
+      // to the first panel only when that page does not exist in the other market.
+      const c = COUNTRIES.find(x => x.code === b.dataset.c), wanted = curTab().top;
+      navTo({code: c.code, top: itemFor(c.code, wanted) ? wanted : c.panels[0].label, sub: 0}, {force: true});
     });
 }
 
@@ -5323,18 +5386,12 @@ const journalItem = {label: "Trade Journal", url: "/journal", scoped: false};
 const setupsItem = {label: "Setups", url: "/setups", scoped: false};
 
 document.getElementById("reload-btn").onclick = () => {
-  if (!document.getElementById("stack-wrap").hidden) {
-    document.querySelectorAll(".stack-frame").forEach(f => {
-      try { f.contentWindow.location.reload(); } catch (e) { f.src = f.src; }
-    });
-  } else if (currentUrl) {
-    // Same no-op trap as go(): the frame's src attribute already equals
-    // currentUrl, so setting it again does nothing in any browser.
-    const frame = document.getElementById("frame");
-    try { frame.contentWindow.location.reload(); }
-    catch (e) { frame.src = currentUrl; }
-  }
+  const t = curTab(), f = t && t.frames[currentUrl]; if (!f) return;
+  // Same no-op trap as navigation: the frame's src attribute already equals currentUrl.
+  try { f.contentWindow.location.reload(); } catch (e) { f.src = currentUrl; }
 };
+document.getElementById("back-btn").onclick = () => histStep(-1);
+document.getElementById("fwd-btn").onclick = () => histStep(1);
 
 // The auto-sync loop deliberately refuses to overwrite local changes rather
 // than risk clobbering something — but that safe failure used to be
@@ -5422,46 +5479,35 @@ setInterval(refreshJournalBadge, 60000);
 renderCountrySwitch();
 refreshNav();
 
-const last = JSON.parse(localStorage.getItem("hub-last") || "null");
 let restored = false;
-if (last) {
-  if (last.top === "Live Portfolio") {
-    go("/portfolio", "Live Portfolio", false); restored = true;
-  } else if (last.top === "Trade Journal") {
-    go("/journal", "Trade Journal", false); restored = true;
-  } else if (last.top === "Setups") {
-    go("/setups", "Setups", false); restored = true;
-  } else if (COUNTRIES.some(c => c.code === last.country)) {
-    country = COUNTRIES.find(c => c.code === last.country);
-    renderCountrySwitch(); refreshNav();
-    const item = country.panels.find(p => p.label === last.top);
-    if (item) {
-      if (item.children) openGroup(item);
-      else go(item.url, item.label, undefined, item.label);
-      restored = true;
-    }
+try {
+  const ws = JSON.parse(localStorage.getItem("hub-ws") || "null");
+  if (ws && ws.tabs && ws.tabs.length) {
+    ws.tabs.forEach(s => { if (itemFor(s.code, s.top)) newTab(s.code, s.top, s.sub); });
+    if (WS.tabs.length) { WS.cur = WS.tabs[Math.max(0, Math.min(ws.cur, WS.tabs.length - 1))].id; restored = true; }
   }
-}
+} catch (e) { /* bad saved state: start fresh */ }
 if (!restored) {
-  const first = country.panels[0];
-  if (first.children) openGroup(first);
-  else go(first.url, first.label, undefined, first.label);
+  const last = JSON.parse(localStorage.getItem("hub-last") || "null");
+  if (last && itemFor(last.country || COUNTRIES[0].code, last.top)) { newTab(last.country || COUNTRIES[0].code, last.top); restored = true; }
 }
-refreshNav();
+if (!WS.tabs.length) newTab(COUNTRIES[0].code, COUNTRIES[0].panels[0].label);
+showTab(true);
 
-// Native pages (Market Environment) live inside the frame and cannot call go()
-// themselves; they post {hubGo: "<panel label>"} and the hub navigates.
+// Native pages (Market Environment) live inside the frame and cannot navigate the hub
+// themselves; they post {hubGo: "<panel label>"} and the hub opens it in the current tab.
 window.addEventListener("message", e => {
   if (e.origin !== location.origin || !e.data || !e.data.hubGo) return;
   const item = topLevelItems().find(p => p.label === e.data.hubGo);
   if (!item) return;
-  if (item.children) openGroup(item);
-  else go(item.url, item.label, item.scoped, item.label);
-  refreshNav();
-  // A landing-page click can say which stretch of an index to shade; hand it to
-  // each frame once it has loaded (the frames are new, so wait for their load).
+  navTo({code: country.code, top: item.label, sub: 0}, {force: true});
+  // A landing-page click can say which stretch of an index to shade; hand it to every
+  // member frame of the page (they are created now, so wait for each to load).
   if (Array.isArray(e.data.focus) && item.children) {
-    document.querySelectorAll("#stack-wrap iframe").forEach(f => {
+    const t = curTab();
+    item.children.forEach(c => {
+      const f = t.frames[c.url] || mkFrame(t, c.url);
+      f.style.display = c.url === currentUrl ? "block" : "none";
       const send = () => { try { f.contentWindow.postMessage({mbtFocus: e.data.focus}, location.origin); } catch (err) {} };
       f.addEventListener("load", send);
       setTimeout(send, 1500);
