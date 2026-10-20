@@ -189,7 +189,7 @@
       b.querySelector('#sv').onclick = () => { persist(); flash('Chart saved'); if (S.onSave) S.onSave(); };
     }
     renderBar();
-    if (compact) { const o = document.createElement('button'); o.className = 'tv-b'; o.textContent = 'Expand'; o.style.cssText = 'position:absolute;right:66px;top:2px;z-index:4;padding:2px 8px;font-size:11px'; o.onclick = () => TV.open(t); wrap.appendChild(o);
+    if (compact && !S.noExpand) { const o = document.createElement('button'); o.className = 'tv-b'; o.textContent = 'Expand'; o.style.cssText = 'position:absolute;right:66px;top:2px;z-index:4;padding:2px 8px;font-size:11px'; o.onclick = () => TV.open(t); wrap.appendChild(o);
       if (st.draw.length) { const bd = document.createElement('span'); bd.className = 'tv-st'; bd.style.cssText = 'position:absolute;left:8px;top:4px;z-index:4;background:var(--panel,var(--panel-bg,#fff));padding:1px 6px;border-radius:6px;border:1px solid var(--line,var(--border,#d0d4dc))'; bd.textContent = st.draw.length + ' note' + (st.draw.length > 1 ? 's' : ''); wrap.appendChild(bd); } }
     return { destroy() { dead = true; cancelAnimationFrame(raf); document.removeEventListener('keydown', onKey); document.removeEventListener('tv-saved', onSaved); try { chart.remove(); } catch (e) {} }, chart, series: cs };
   }

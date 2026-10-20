@@ -2857,7 +2857,7 @@
         const n = p.dates.length, last = p.close[n - 1], prev = p.close[n - 2], chg = prev ? (last / prev - 1) * 100 : null;
         card.querySelector(".mf-wcard-px").innerHTML = fmtNum(last, 2) + (chg === null ? "" :
           ' <span class="' + (chg >= 0 ? "up" : "down") + '">' + (chg >= 0 ? "+" : "") + fmtNum(chg, 2) + "%</span>");
-        withTVE(function () { TVE.mountStd(box, stdFromTicker(sym, p, sym), { compact: true, ht: 250, tf: wallTf }); });
+        withTVE(function () { TVE.mountStd(box, stdFromTicker(sym, p, sym), { compact: true, noExpand: true, ht: 250, tf: wallTf }); });
       }).catch(function () { box.innerHTML = '<div class="empty-note">No price history.</div>'; });
     });
   }
@@ -3173,6 +3173,114 @@
     }
     searchInput.addEventListener("focus", function () { showDropdown(searchInput.value); });
     searchInput.addEventListener("input", function () { showDropdown(searchInput.value); });
+    // ================= Explore view (the default tab) =================
+    // One side, one window, one scope at a time. The sector and industry pickers stay on screen, so
+    // drilling in or out is one click and never a trip back; the stocks of the picked industry show as charts.
+    const ex = { side: "hi", win: "w13", index: indexes[0].code, sector: null, ind: null, sort: "rs", more: 12 };
+    const exHost = document.getElementById("mf-explore");
+    const WIN_LABEL = { w13: "13 week", w26: "26 week", w52: "52 week" };
+    const capOf = function (t) { return (cls[t] && cls[t][3]) || 0; };
+    function exNames(sector, industry) {
+      return unionHits(ex.win, ex.side).filter(function (t) {
+        const m = membership[t], c = cls[t];
+        return m && m.indexOf(ex.index) !== -1 && c && c[0] && (!sector || c[0] === sector) && (!industry || (c[1] || "Other") === industry);
+      });
+    }
+    function exTree() {
+      const by = {};
+      exNames().forEach(function (t) {
+        const s = cls[t][0], i = cls[t][1] || "Other";
+        (by[s] = by[s] || {})[i] = (by[s][i] || []).concat(t);
+      });
+      return by;
+    }
+    const seg = function (items, cur, key) {
+      return '<span class="tve-seg">' + items.map(function (x) { return '<button type="button" data-k="' + key + '" data-v="' + x[0] + '" class="' + (x[0] === cur ? "on" : "") + '">' + x[1] + "</button>"; }).join("") + "</span>";
+    };
+    const ret3m = function (p) { const n = p.close.length; return n > 64 && p.close[n - 64] ? (p.close[n - 1] / p.close[n - 64] - 1) * 100 : null; };
+    function exDraw() {
+      const tree = exTree(), secs = Object.keys(tree).sort(function (a, b) {
+        const ca = Object.values(tree[a]).reduce(function (x, l) { return x + l.length; }, 0), cb = Object.values(tree[b]).reduce(function (x, l) { return x + l.length; }, 0); return cb - ca;
+      });
+      const count = function (s) { return Object.values(tree[s]).reduce(function (x, l) { return x + l.length; }, 0); };
+      if (ex.sector && !tree[ex.sector]) { ex.sector = null; ex.ind = null; }
+      if (ex.ind && !(tree[ex.sector] || {})[ex.ind]) ex.ind = null;
+      const cc = ex.side === "hi" ? "up" : "down", total = secs.reduce(function (x, s) { return x + count(s); }, 0);
+      let h = '<div class="mfx-controls">' + seg([["hi", "New highs"], ["lo", "New lows"]], ex.side, "side") + seg(Object.keys(WIN_LABEL).map(function (k) { return [k, WIN_LABEL[k]]; }), ex.win, "win") +
+        seg(indexes.map(function (i) { return [i.code, i.label]; }), ex.index, "index") +
+        '<span class="bi-note" style="margin:0">' + total + " names over the last " + LOOKBACK_SESSIONS + " sessions</span></div>";
+      h += '<div class="mfx-picker"><div class="mfx-row"><span class="mfx-lab">Sector</span><button type="button" class="mfx-chip' + (!ex.sector ? " on" : "") + '" data-sec="">All</button>' +
+        secs.map(function (s) { return '<button type="button" class="mfx-chip' + (ex.sector === s ? " on" : "") + '" data-sec="' + s.replace(/"/g, "&quot;") + '">' + s + " <b>" + count(s) + "</b></button>"; }).join("") + "</div>";
+      if (ex.sector) {
+        const inds = Object.keys(tree[ex.sector]).sort(function (a, b) { return tree[ex.sector][b].length - tree[ex.sector][a].length; });
+        h += '<div class="mfx-row"><span class="mfx-lab">Industry</span><button type="button" class="mfx-chip' + (!ex.ind ? " on" : "") + '" data-ind="">All</button>' +
+          inds.map(function (i) { return '<button type="button" class="mfx-chip' + (ex.ind === i ? " on" : "") + '" data-ind="' + i.replace(/"/g, "&quot;") + '">' + i + " <b>" + tree[ex.sector][i].length + "</b></button>"; }).join("") + "</div>";
+      }
+      h += "</div><div id=\"mfx-body\"></div>";
+      exHost.innerHTML = h;
+      exHost.querySelectorAll("button[data-k]").forEach(function (b) {
+        b.addEventListener("click", function () { ex[b.dataset.k] = b.dataset.v; if (b.dataset.k !== "side" && b.dataset.k !== "win") { ex.sector = null; ex.ind = null; } ex.more = 12; exDraw(); });
+      });
+      exHost.querySelectorAll("[data-sec]").forEach(function (b) { b.addEventListener("click", function () { ex.sector = b.dataset.sec || null; ex.ind = null; ex.more = 12; exDraw(); }); });
+      exHost.querySelectorAll("[data-ind]").forEach(function (b) { b.addEventListener("click", function () { ex.ind = b.dataset.ind || null; ex.more = 12; exDraw(); }); });
+      const body = document.getElementById("mfx-body");
+      if (!secs.length) { body.innerHTML = '<div class="empty-note">Nothing qualifies for this selection. Try a longer window or the other side.</div>'; return; }
+      const maxC = Math.max.apply(null, secs.map(count));
+      const topNames = function (list) { return list.slice().sort(function (a, b) { return capOf(b) - capOf(a); }).slice(0, 5).join(", "); };
+      if (!ex.sector) {
+        body.innerHTML = '<div class="mfx-grid">' + secs.map(function (s) {
+          return '<div class="mfx-card" data-s="' + s.replace(/"/g, "&quot;") + '"><div class="top"><b>' + s + '</b><span class="n ' + cc + '">' + count(s) + '</span></div>' +
+            '<div class="mfx-bar"><i class="' + cc + '" style="width:' + count(s) / maxC * 100 + '%;background:var(--' + cc + ')"></i></div><div class="mfx-names">' + topNames(exNames(s)) + "</div></div>";
+        }).join("") + "</div>";
+        body.querySelectorAll(".mfx-card").forEach(function (c) { c.addEventListener("click", function () { ex.sector = c.dataset.s; ex.ind = null; exDraw(); }); });
+        return;
+      }
+      const list = ex.ind ? tree[ex.sector][ex.ind] : null;
+      if (!list) {
+        const inds = Object.keys(tree[ex.sector]).sort(function (a, b) { return tree[ex.sector][b].length - tree[ex.sector][a].length; });
+        const avgChg = function (l) { const v = l.map(function (t) { return (DATA.quotes || {})[t]; }).filter(function (q) { return q && q[1] != null; }).map(function (q) { return q[1]; }); return v.length ? v.reduce(function (a, b) { return a + b; }, 0) / v.length : null; };
+        body.innerHTML = '<div class="mfx-grid">' + inds.map(function (i) {
+          const l = tree[ex.sector][i], a = avgChg(l);
+          return '<div class="mfx-card" data-i="' + i.replace(/"/g, "&quot;") + '"><div class="top"><b>' + i + '</b><span class="n ' + cc + '">' + l.length + "</span></div>" +
+            '<div class="mfx-names">' + topNames(l) + (l.length > 5 ? " +" + (l.length - 5) : "") + "</div>" + (a === null ? "" : '<div class="mfx-names" style="margin-top:6px">avg today <b class="' + (a >= 0 ? "up" : "down") + '">' + (a >= 0 ? "+" : "") + a.toFixed(2) + "%</b></div>") + "</div>";
+        }).join("") + '</div><div class="mfx-h"><h3>' + (ex.side === "hi" ? "Strongest" : "Weakest") + " charts in " + ex.sector + '</h3></div><div id="mfx-wall"></div>';
+        body.querySelectorAll(".mfx-card").forEach(function (c) { c.addEventListener("click", function () { ex.ind = c.dataset.i; ex.more = 12; exDraw(); }); });
+        exWall(document.getElementById("mfx-wall"), exNames(ex.sector), 6);
+        return;
+      }
+      body.innerHTML = '<div class="mfx-controls" style="margin-top:0"><span class="bi-note" style="margin:0">' + list.length + " names in " + ex.ind + " &middot; sorted by</span>" +
+        seg([["rs", "3-month strength"], ["d1", "Today"], ["mc", "Market cap"]], ex.sort, "sort") + '</div><div id="mfx-wall"></div>';
+      body.querySelectorAll("button[data-k=sort]").forEach(function (b) { b.addEventListener("click", function () { ex.sort = b.dataset.v; ex.more = 12; exDraw(); }); });
+      exWall(document.getElementById("mfx-wall"), list, ex.more);
+    }
+    // Ranks the names (3-month return, today, or market cap), then charts the first `limit`.
+    function exWall(el, names, limit) {
+      el.innerHTML = '<div class="empty-note">Loading charts…</div>';
+      const pool = names.slice().sort(function (a, b) { return capOf(b) - capOf(a); }).slice(0, 60);
+      Promise.all(pool.map(function (t) { return loadTicker(t).then(function (p) { return { t: t, r3: ret3m(p) }; }).catch(function () { return { t: t, r3: null }; }); })).then(function (rows) {
+        const sign = ex.side === "hi" ? -1 : 1, q = DATA.quotes || {};
+        const key = { rs: function (r) { return r.r3 == null ? 1e9 : sign * r.r3; }, d1: function (r) { const v = (q[r.t] || [])[1]; return v == null ? 1e9 : sign * v; }, mc: function (r) { return -capOf(r.t); } }[ex.sort || "rs"];
+        const ranked = rows.slice().sort(function (a, b) { return key(a) - key(b); }).map(function (r) { return r.t; });
+        const shown = ranked.slice(0, limit);
+        renderChartWall(el, shown, ex.index);
+        if (ranked.length > limit) {
+          const more = document.createElement("button"); more.type = "button"; more.className = "tf-btn"; more.style.marginTop = "10px";
+          more.textContent = "Show " + Math.min(12, ranked.length - limit) + " more (" + ranked.length + " names)";
+          more.addEventListener("click", function () { ex.more += 12; exDraw(); });
+          el.appendChild(more);
+        }
+      });
+    }
+    // Tabs: Explore (this) and the classic three-windows-at-once view
+    const mfTabs = document.getElementById("mf-tabs"), classic = document.getElementById("mf-classic");
+    function mfShow(which) {
+      mfTabs.innerHTML = [["explore", "Explore"], ["classic", "All three windows"]].map(function (t) { return '<button class="bi-tab' + (t[0] === which ? " on" : "") + '" data-t="' + t[0] + '">' + t[1] + "</button>"; }).join("");
+      mfTabs.querySelectorAll(".bi-tab").forEach(function (b) { b.addEventListener("click", function () { mfShow(b.dataset.t); }); });
+      exHost.hidden = which !== "explore"; classic.hidden = which !== "classic";
+    }
+    mfShow("explore");
+    exDraw();
+
     document.addEventListener("click", function (e) {
       if (!e.target.closest(".search-wrap")) dropdown.classList.remove("open");
     });

@@ -898,6 +898,9 @@ def _moneyflows_body():
     # level lookup that used to live only in the Screener is folded in here
     # too (Screener itself stays, for direct ticker/ADR searches).
     return """
+<div class="bi-tabs" id="mf-tabs"></div>
+<div id="mf-explore"></div>
+<div id="mf-classic" hidden>
 <div class="empty-note">Where new highs and new lows are concentrated, drilled from sector to
 industry to the actual stocks — for one index and one side (Longs/Shorts) at a time, across all
 three windows at once. Click any sector or industry bar to re-drill that window, double-click an
@@ -915,6 +918,7 @@ industry name to open its full Lookup; the log above remembers what you found in
   <div id="mf-log-rows"></div>
 </div>
 <div id="mf-blocks"></div>
+</div>
 """.strip() + "\n" + _stock_pin_html()
 
 
