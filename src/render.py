@@ -1351,6 +1351,10 @@ def _breadth_internals_body():
     # panels already publish, over whichever window is selected, rather than
     # a second copy of metrics/environment.py's fixed 10-day read.
     return """
+<div class="bi-tabs" id="bi-tabs"></div>
+<div id="bi-head"></div>
+<div id="bi-root" hidden></div>
+<div id="bi-overview">
 <div class="empty-note">What advance/decline and new highs/lows are actually saying, read
 over a window you choose — not just the raw counts.</div>
 <div class="tf-toggle" id="bi-window"></div>
@@ -1369,6 +1373,7 @@ over a window you choose — not just the raw counts.</div>
     <div class="card-sub" id="bi-hilo-sub"></div>
     <div class="chart-wrap"><canvas id="bi-hilo-canvas"></canvas></div>
   </div>
+</div>
 </div>
 """.strip()
 
@@ -1618,10 +1623,15 @@ def render_all_panels(country):
         needs_chartjs=False, needs_lightweight=True,
     ))
 
+    bi_extra = {}
+    bi_path = os.path.join(config.data_dir(country), "breadth_internals.json")
+    if os.path.exists(bi_path):
+        with open(bi_path, encoding="utf-8") as f:
+            bi_extra["breadthInternals"] = json.load(f)
     paths.append(render_panel(
         country, "panel-breadth-internals.html", "Breadth Internals",
         _breadth_internals_body(), ["breadth_adv_decl", "breadth_new_hilo"],
-        series, generated_at,
+        series, generated_at, extra=bi_extra, chart_lib="both",
     ))
 
     members = sector_member_counts(country)

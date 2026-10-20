@@ -38,7 +38,7 @@ import render
 import tv_industry
 import yf_client
 from fmp_client import FMPClient
-from metrics import (indices, sectors, industries, breadth, environment, hilo,
+from metrics import (indices, sectors, industries, breadth, environment, hilo, breadth_internals,
                      groups as groups_mod, relative_strength as rs_mod)
 from tmle import config as tmle_config, run as tmle_run
 
@@ -429,6 +429,11 @@ def run_country(code, client=None):
                                            ticker_to_sector)
     store.write_hilo(code, hilo_counts, hilo_names,
                      hilo.last_quotes(price_cache, screener_tickers, adr_by_ticker, adv_by_ticker))
+    # The daily breadth-internals table and its charts, from the per-ticker files just written.
+    try:
+        breadth_internals.write(code, log)
+    except Exception as exc:
+        log(f"{code}: breadth internals skipped ({exc})")
     if hilo_counts:
         last = hilo_counts[-1]
         log("  " + " · ".join(

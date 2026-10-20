@@ -2594,7 +2594,7 @@
   // panel itself.
   const BI_WINDOWS = [["1W", 5], ["1M", 21], ["3M", 63]];
 
-  function renderBreadthInternals() {
+  function renderBiOverview() {
     const badgeEl = document.getElementById("bi-badge");
     if (!badgeEl) return;
     const adv = S.breadth_adv_decl || [];
@@ -2672,6 +2672,119 @@
       });
     });
     draw();
+  }
+
+  // ---------- Breadth Internals: tabs ----------
+  // Overview is the verdict page that was here before. The other tabs are the internals tables and charts
+  // computed from the per-ticker files (metrics/breadth_internals.py): the daily table, a snapshot of the
+  // indices and every sector, % of stocks above key averages, up/down 4% with ratios, and McClellan.
+  function renderBreadthInternals() {
+    const tabsEl = document.getElementById("bi-tabs");
+    if (!tabsEl) return;
+    const BI = DATA.breadthInternals;
+    renderBiOverview();
+    if (!BI) { tabsEl.style.display = "none"; return; }
+    const TABS = [["overview", "Overview"], ["daily", "Daily table"], ["snap", "Snapshot"], ["avg", "% above averages"], ["ud4", "Up / down 4%"]];
+    if (BI.ts && BI.ts.mc_d) TABS.push(["mc", "McClellan"]);
+    let cur = "overview", live = [];
+    const root = document.getElementById("bi-root"), over = document.getElementById("bi-overview"), head = document.getElementById("bi-head");
+    const regime = function (a) { return a < 35 ? ["Weak", "down"] : a > 60 ? ["Strong", "up"] : ["Mixed", "dim"]; };
+    const last = BI.rows[BI.rows.length - 1], rg = regime(last.a50);
+    const upC = "34,197,94", dnC = "239,68,68";
+
+    function cell(v, max, kind) {
+      if (v == null) return "<td></td>";
+      let st = "";
+      if (kind === "up") st = "background:rgba(" + upC + "," + Math.min(0.85, 0.12 + v / max * 0.73).toFixed(2) + ")";
+      else if (kind === "dn") st = "background:rgba(" + dnC + "," + Math.min(0.85, 0.1 + v / max * 0.75).toFixed(2) + ")";
+      else if (kind === "ratio") st = v >= 1 ? "background:rgba(" + upC + "," + Math.min(0.8, 0.2 + (v - 1) * 0.3).toFixed(2) + ")" : "background:rgba(" + dnC + "," + Math.min(0.8, 0.2 + (1 - v) * 0.7).toFixed(2) + ")";
+      else if (kind === "ext") st = v >= 20 ? "background:rgba(180,140,40,.6)" : "";
+      return '<td class="c" style="' + st + '">' + v + "</td>";
+    }
+    const COLS = [["up4", "Stocks up 4%+ today", "up", "P"], ["dn4", "Stocks down 4%+ today", "dn", "P"], ["r5", "5-day ratio", "ratio", "P"], ["r10", "10-day ratio", "ratio", "P"],
+      ["up25q", "Up 25%+ quarter", "up", "S"], ["dn25q", "Down 25%+ quarter", "dn", "S"], ["up25m", "Up 25%+ month", "up", "S"], ["dn25m", "Down 25%+ month", "dn", "S"],
+      ["up50m", "Up 50%+ month", "up", "S"], ["dn50m", "Down 50%+ month", "dn", "S"], ["up13", "Up 13%+ 34 days", "up", "S"], ["dn13", "Down 13%+ 34 days", "dn", "S"]];
+
+    function dailyTable() {
+      const mx = {}; COLS.forEach(function (c) { mx[c[0]] = Math.max.apply(null, [1].concat(BI.rows.map(function (r) { return r[c[0]]; }))); });
+      const rows = BI.rows.slice().reverse();
+      return '<p class="bi-note">The daily internals table, newest first. Primary indicators in gold, secondary in green. Colour strength is relative to that column\'s own range over the days shown.</p>' +
+        '<div class="table-wrap" style="max-height:none"><table class="bi-table" style="min-width:1100px"><thead>' +
+        '<tr><th rowspan="2" style="background:#f2b705;color:#111;text-align:center">Date</th><th colspan="4" style="background:#f2b705;color:#111;text-align:center">Primary breadth indicators</th><th colspan="8" style="background:#22c55e;color:#06210f;text-align:center">Secondary breadth indicators</th><th rowspan="2" style="background:#a78bfa;color:#1b0f3a;text-align:center">10x ATR extended</th><th rowspan="2" style="background:#60a5fa;color:#071a33;text-align:center">&gt; 50 SMA</th></tr>' +
+        "<tr>" + COLS.map(function (c) { return '<th style="text-align:center;white-space:normal;font-size:9.5px;background:' + (c[3] === "P" ? "#fbbf24" : "#34d399") + ';color:#111">' + c[1] + "</th>"; }).join("") + "</tr></thead><tbody>" +
+        rows.map(function (r) {
+          return '<tr><td style="font-weight:600">' + r.d + "</td>" + COLS.map(function (c) { return cell(r[c[0]], mx[c[0]], c[2]); }).join("") + cell(r.ext, 1, "ext") +
+            '<td class="c ' + (r.a50 >= 50 ? "up" : "down") + '">' + r.a50 + "%</td></tr>";
+        }).join("") + "</tbody></table></div>";
+    }
+    function snapshot() {
+      const tint = function (v, sc) { return v == null ? "" : "background:rgba(" + (v >= 0 ? "45,170,140" : "230,90,90") + "," + Math.min(0.4, Math.abs(v) / sc * 0.4).toFixed(2) + ")"; };
+      const row = function (r) {
+        return '<tr' + (r.k === "sec" ? "" : ' style="font-weight:600"') + "><td>" + r.n + ' <span style="color:var(--text-dim);font-size:10.5px">' + r.cnt + '</span></td><td class="r">' + r.adv + '</td><td class="r">' + r.dec + '</td><td class="r" style="' + tint(r.nr, 70) + '">' + r.net + '</td><td class="r" style="' + tint(r.nr, 70) + '">' + r.nr + "%</td>" +
+          '<td class="r">' + r.hi + '</td><td class="r">' + r.lo + '</td><td class="r" style="' + tint(r.hnr, 70) + '">' + r.hnet + '</td><td class="r" style="' + tint(r.hnr, 70) + '">' + r.hnr + "%</td>" +
+          ["a5", "a10", "a21", "a50", "a200"].map(function (k) { return '<td class="r" style="' + tint(r[k] - 50, 40) + '">' + r[k] + "%</td>"; }).join("") + "</tr>";
+      };
+      const idx = BI.snaps.filter(function (x) { return x.k === "idx"; }), sec = BI.snaps.filter(function (x) { return x.k === "sec"; });
+      return '<p class="bi-note">Indices on top, sectors below, so one glance shows whether weakness is broad or concentrated.</p><div class="table-wrap" style="max-height:none"><table class="bi-table" style="min-width:900px"><thead><tr><th>Group</th><th class="r" colspan="4">Advances / declines (latest)</th><th class="r" colspan="4">New 52-week highs / lows</th><th class="r" colspan="5">% above key moving averages</th></tr>' +
+        '<tr><th></th><th class="r">Adv</th><th class="r">Decl</th><th class="r">Net</th><th class="r">Net ratio</th><th class="r">Highs</th><th class="r">Lows</th><th class="r">Net</th><th class="r">Net ratio</th><th class="r">5 SMA</th><th class="r">10 EMA</th><th class="r">21 EMA</th><th class="r">50 SMA</th><th class="r">200 SMA</th></tr></thead><tbody>' +
+        idx.map(row).join("") + '<tr><td colspan="14" style="height:6px;padding:0"></td></tr>' + sec.map(row).join("") + "</tbody></table></div>";
+    }
+    function mk(el, h) {
+      const th = lwTheme();
+      const c = LightweightCharts.createChart(el, { height: h, width: el.clientWidth,
+        layout: { background: { type: "solid", color: th.bg }, textColor: th.text, fontSize: 11 },
+        grid: { vertLines: { color: th.grid }, horzLines: { color: th.grid } }, rightPriceScale: { borderColor: th.border }, timeScale: { borderColor: th.border } });
+      live.push(c);
+      if (window.ResizeObserver) new ResizeObserver(function () { c.applyOptions({ width: el.clientWidth }); }).observe(el);
+      return c;
+    }
+    const line = function (ch, d, v, color, title) {
+      const s = ch.addLineSeries({ color: color, lineWidth: 2, priceLineVisible: false, lastValueVisible: true, title: title || "" });
+      s.setData(d.map(function (x, i) { return v[i] == null ? null : { time: x, value: v[i] }; }).filter(Boolean)); return s;
+    };
+    const link = function (a, b) {
+      a.timeScale().subscribeVisibleLogicalRangeChange(function (r) { if (r) b.timeScale().setVisibleLogicalRange(r); });
+      b.timeScale().subscribeVisibleLogicalRangeChange(function (r) { if (r) a.timeScale().setVisibleLogicalRange(r); });
+    };
+    function charts(kind) {
+      const T = BI.ts, th = lwTheme();
+      const box = function (title, note, id, two) {
+        return '<div class="bi-chartbox" style="padding:10px 12px"><h3 style="margin:0 0 4px;font-size:14px">' + title + '</h3><p class="bi-note">' + note + '</p><div id="' + id + '"></div></div>';
+      };
+      if (kind === "avg") {
+        root.innerHTML = box("Percent of stocks above key moving averages", "Below 25 is oversold, above 75 overbought. Three lines show how far the damage goes: short term (10 EMA), intermediate (50 SMA), long term (200 SMA).", "bi-c1");
+        const ch = mk(document.getElementById("bi-c1"), 340), a = line(ch, T.d, T.a10, "#f59e0b", "10 EMA");
+        line(ch, T.d, T.a50, "#6aa6ff", "50 SMA"); line(ch, T.d, T.a200, "#a78bfa", "200 SMA");
+        a.createPriceLine({ price: 75, color: th.down, lineWidth: 1, lineStyle: 2, title: "OB 75" }); a.createPriceLine({ price: 25, color: th.up, lineWidth: 1, lineStyle: 2, title: "OS 25" });
+        ch.timeScale().fitContent();
+      } else if (kind === "ud4") {
+        root.innerHTML = box("Stocks up 4% vs down 4% today", "Bars above zero are stocks up 4%+, bars below zero are down 4%+.", "bi-c1") + box("5 and 10 day ratio", "Rolling ratios of up-4% to down-4% stocks; above 1 means more up than down.", "bi-c2");
+        const ch = mk(document.getElementById("bi-c1"), 260);
+        const hu = ch.addHistogramSeries({ priceLineVisible: false, lastValueVisible: false, color: th.up }), hd = ch.addHistogramSeries({ priceLineVisible: false, lastValueVisible: false, color: th.down });
+        hu.setData(T.d.map(function (d, i) { return { time: d, value: T.up4[i] }; })); hd.setData(T.d.map(function (d, i) { return { time: d, value: -T.dn4[i] }; }));
+        ch.timeScale().fitContent();
+        const c2 = mk(document.getElementById("bi-c2"), 220), r5 = line(c2, T.d, T.r5, "#f59e0b", "5d");
+        line(c2, T.d, T.r10, "#6aa6ff", "10d"); r5.createPriceLine({ price: 1, color: th.text, lineWidth: 1, lineStyle: 2, title: "neutral 1.0" });
+        c2.timeScale().fitContent(); link(ch, c2);
+      } else if (kind === "mc") {
+        root.innerHTML = box("McClellan oscillator", "The 19-day minus 39-day average of the ratio-adjusted net advances, from the stored daily advancers and decliners.", "bi-c1") + box("Summation index", "The running total of the oscillator.", "bi-c2");
+        const ch = mk(document.getElementById("bi-c1"), 260), h = ch.addHistogramSeries({ priceLineVisible: false, lastValueVisible: true });
+        h.setData(T.mc_d.map(function (d, i) { return { time: d, value: T.mc_osc[i], color: T.mc_osc[i] >= 0 ? th.up : th.down }; })); ch.timeScale().fitContent();
+        const c2 = mk(document.getElementById("bi-c2"), 220); line(c2, T.mc_d, T.mc_sum, "#6aa6ff", "Sum"); c2.timeScale().fitContent(); link(ch, c2);
+      }
+    }
+    function show() {
+      live.forEach(function (c) { try { c.remove(); } catch (e) {} }); live = [];
+      tabsEl.innerHTML = TABS.map(function (t) { return '<button class="bi-tab' + (t[0] === cur ? " on" : "") + '" data-t="' + t[0] + '">' + t[1] + "</button>"; }).join("");
+      tabsEl.querySelectorAll(".bi-tab").forEach(function (b) { b.addEventListener("click", function () { cur = b.dataset.t; show(); }); });
+      over.hidden = cur !== "overview"; root.hidden = cur === "overview"; head.innerHTML = "";
+      if (cur === "overview") return;
+      head.innerHTML = '<p class="bi-note" style="display:flex;gap:12px;flex-wrap:wrap;align-items:center"><span class="badge on ' + rg[1] + '">Breadth regime: ' + rg[0] + " &middot; " + last.a50 + "% above 50 SMA</span><span>" + BI.universe.toLocaleString() + " stocks &middot; " + BI.note + " &middot; as of " + BI.date + "</span></p>";
+      if (cur === "daily") root.innerHTML = dailyTable();
+      else if (cur === "snap") root.innerHTML = snapshot();
+      else charts(cur);
+    }
+    show();
   }
 
   // ---------- Money Flows: sector -> industry -> stock drill, 3 windows at once ----------
