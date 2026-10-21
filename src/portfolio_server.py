@@ -418,6 +418,42 @@ def trigger_sync_and_backfill(country, log=print):
 DATA_STALE_DAYS = 4
 
 
+def _resolve_generated_conflicts(log=print):
+    """After a stopped `git pull --rebase`: settle conflicts that are only in generated files, or abort.
+    Returns True when the rebase finished, otherwise a short reason (the rebase has been aborted)."""
+    def git(*args):
+        return subprocess.run(["git", *args], cwd=config.ROOT_DIR, capture_output=True, text=True, timeout=120,
+                              env={**os.environ, "GIT_EDITOR": "true"})
+    try:
+        rebase_dir = git("rev-parse", "--git-path", "rebase-merge").stdout.strip()
+        if not rebase_dir or not os.path.isdir(os.path.join(config.ROOT_DIR, rebase_dir)):
+            return None          # no rebase in progress: nothing to settle
+        for _ in range(40):
+            conflicted = [f for f in git("diff", "--name-only", "--diff-filter=U").stdout.split() if f]
+            if not conflicted:
+                step = git("rebase", "--continue")
+                if step.returncode == 0:
+                    return True
+                continue
+            if any(not (f.startswith("docs/") or f.startswith("data/")) for f in conflicted):
+                git("rebase", "--abort")
+                return "local code changes conflict with the published update: " + ", ".join(conflicted[:3])
+            for f in conflicted:
+                git("checkout", "--ours", "--", f)     # during a rebase, "ours" is the upstream side
+                git("add", "--", f)
+            step = git("rebase", "--continue")
+            if step.returncode == 0:
+                return True
+        git("rebase", "--abort")
+        return "too many conflicting steps; rebase aborted"
+    except Exception as error:
+        try:
+            git("rebase", "--abort")
+        except Exception:
+            pass
+        return f"conflict handling failed: {error}"
+
+
 def sync_from_origin(log=print):
     """Returns {"ok": bool, "message": str} — the caller persists this so a
     blocked sync (e.g. dirty working tree) is visible in the hub UI instead of
@@ -433,9 +469,15 @@ def sync_from_origin(log=print):
             msg = result.stdout.strip() or "already up to date"
             log(f"  git sync: {msg}")
             return {"ok": True, "message": msg}
-        # Diverged history or local edits in the way. Never forced past
-        # this — staying stale is the safe failure, overwriting isn't.
-        reason = result.stderr.strip()[:200] or "not a fast-forward"
+        # A rebase that stops on a conflict used to be left half-done, which blocked every later pull
+        # ("you have unmerged files") and kept the hub on stale data for days. The nightly jobs rewrite the
+        # generated pages (docs/) and data files (data/), so when local commits touch the same files the
+        # conflict is expected: take the upstream copy of those and carry on. Anything in code is not ours
+        # to guess at, so that case aborts the rebase cleanly and says so.
+        fixed = _resolve_generated_conflicts(log)
+        if fixed is True:
+            return {"ok": True, "message": "synced (conflicts in generated files resolved to the latest published copy)"}
+        reason = fixed or result.stderr.strip()[:200] or "not a fast-forward"
         log(f"  git sync skipped: {reason}")
         return {"ok": False, "message": reason}
     except Exception as error:
