@@ -3017,7 +3017,7 @@ function drawDash() {
     const el = document.getElementById("d-stopwhy"); if (!el || s.error) return; const st = s.status || {};
     el.innerHTML = 'IBKR&rsquo;s daily report has no order history, so stops you placed never reach the journal. ' +
       (st.gateway === "connected" ? 'The live gateway is connected, so stops resting at IBKR are copied onto open trades.' : 'The live gateway is not logged in, so resting stops cannot be read right now (' + esc(st.gateway || "never checked") + ').') +
-      (st.flexOrders ? ' The report includes orders (' + (st.flexStopOrders || 0) + ' stop orders).' : ' To capture past stops, add the <b>Orders</b> section to your Flex query (stop price, order type, date/time, symbol, side).') +
+      (st.flexOrders ? ' The report includes orders (' + (st.flexStopOrders || 0) + ' stop orders).' : ' IBKR’s Flex sections do not include placed orders, so stops from before today cannot be recovered automatically; from now on they are captured while the gateway is logged in.') +
       ' Open trades without a stop: ' + s.openNoStop + ' of ' + s.open + '.';
   }).catch(() => {});
   host.querySelectorAll("#dstreak button").forEach(b => b.onclick = () => { dashStreak = +b.dataset.n; drawDash(); });
