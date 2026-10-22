@@ -316,12 +316,22 @@ def _pipeline_running(country):
     if not os.path.exists(log_path):
         return False
     started = finished = False
+    started_at = None
     with open(log_path, encoding="utf-8", errors="ignore") as f:
         for line in f:
             if f"{country}: starting pipeline" in line:
                 started, finished = True, False
+                try:
+                    started_at = datetime.strptime(line[1:20], "%Y-%m-%d %H:%M:%S")
+                except ValueError:
+                    started_at = None
             elif f"{country}: pipeline done" in line or f"{country}: pipeline FAILED" in line:
                 finished = True
+    # A run that crashed never writes its "done" line. Without an age limit that one orphaned "starting" line
+    # (US, 14 Sep) made every US row read "syncing" for five weeks and hid whether the data was actually fresh.
+    # The longest real run is under two hours, so anything older than that is not running.
+    if started and not finished and started_at is not None and (datetime.now() - started_at).total_seconds() > 4 * 3600:
+        return False
     return started and not finished
 
 
