@@ -208,6 +208,18 @@ def parse(xml_text):
             "trade_id": get("tradeID"),
         })
 
+    # Orders section: only present when the Flex query includes it (needed to learn the stops you placed).
+    orders = []
+    for node in root.iter("Order"):
+        get = node.get
+        stop = _number(get("stopPrice")) or _number(get("auxPrice"))
+        orders.append({
+            "account": get("accountId"), "symbol": get("symbol"), "side": get("buySell"),
+            "order_type": get("orderType"), "stop": stop, "quantity": _number(get("quantity")),
+            "status": get("status"),
+            "datetime": _iso_datetime(get("tradeDate") or (get("dateTime") or "")[:8], get("dateTime") or get("orderTime")),
+        })
+
     nav = []
     for node in root.iter("EquitySummaryByReportDateInBase"):
         get = node.get
@@ -225,6 +237,7 @@ def parse(xml_text):
         "cash": cash,
         "nav": nav,
         "trades": trades,
+        "orders": orders,
         "as_of": nav[-1]["date"] if nav else (
             positions[0]["report_date"] if positions else None),
     }

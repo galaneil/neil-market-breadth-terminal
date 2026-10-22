@@ -286,6 +286,12 @@ def reconcile_ibkr(log=print):
         result["error"] = str(error)
         return result
 
+    try:
+        import stop_capture
+        stop_capture.from_statement(statement, log=log)
+    except Exception as error:
+        log(f"  stop capture from Flex orders skipped: {error}")
+
     with _RECONCILE_LOCK:
         open_notion = _open_rows(account["id"])
         current_positions = {}

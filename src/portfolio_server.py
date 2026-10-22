@@ -600,6 +600,13 @@ def run_auto_sync(force_tickers=False, log=print):
         except Exception as error:
             log(f"  IBKR trade sync failed: {error}")
 
+    # Stops resting at IBKR (needs the gateway logged in) are copied onto open trades that have no Initial Stop $ yet.
+    try:
+        import stop_capture
+        stop_capture.capture_live(log=log)
+    except Exception as error:
+        log(f"  stop capture skipped: {error}")
+
     return origin_result
 
 
@@ -1285,6 +1292,13 @@ class Handler(BaseHTTPRequestHandler):
                 import home_data
                 import journal_mfe
                 self._send(200, json.dumps(journal_mfe.group_strength(home_data._trades())), "application/json")
+            except Exception as error:
+                self._send(200, json.dumps({"error": str(error)}), "application/json")
+            return
+        if route.path == "/api/journal/stops":
+            try:
+                import stop_capture
+                self._send(200, json.dumps(stop_capture.summary()), "application/json")
             except Exception as error:
                 self._send(200, json.dumps({"error": str(error)}), "application/json")
             return
@@ -2102,7 +2116,9 @@ JOURNAL_PAGE = r"""<!doctype html>
         <div><div class="k">Shares</div><div class="v" id="d-shares"></div></div>
         <div><div class="k">Cost Value <i style="color:var(--violet);font-style:normal;font-size:10px">&fnof;</i></div><div class="v" id="d-cost"></div></div>
         <div><div class="k">Initial Stop $ / % <i style="color:var(--violet);font-style:normal;font-size:10px">&fnof;</i></div><div class="v" id="d-stop"></div></div>
-        <div><div class="k">PnL% / Hold Days <i style="color:var(--violet);font-style:normal;font-size:10px">&fnof;</i></div><div class="v" id="d-pnl"></div></div>
+        <div><div class="k">P&amp;L ($)</div><div class="v" id="d-pnl-usd"></div></div>
+        <div><div class="k">P&amp;L % <i style="color:var(--violet);font-style:normal;font-size:10px">&fnof;</i></div><div class="v" id="d-pnl"></div></div>
+        <div><div class="k">Hold days <i style="color:var(--violet);font-style:normal;font-size:10px">&fnof;</i></div><div class="v" id="d-hold"></div></div>
         <div><div class="k">MFE / capture / MAE</div><div class="v" id="d-mfe">&mdash;</div></div>
         <div><a class="notion-link" id="d-notion-link" href="#" target="_blank" rel="noopener">Open this trade in Notion &rarr;</a></div>
       </div>
@@ -2679,7 +2695,10 @@ function openDetail(t) {
   document.getElementById("d-shares").innerHTML = t.shares ?? "&mdash;";
   document.getElementById("d-cost").innerHTML = fmtMoney(t.costValue, t.currency);
   document.getElementById("d-stop").innerHTML = fmtMoney(t.initialStop, t.currency) + " / " + fmtPct(t.initialStopPct);
-  document.getElementById("d-pnl").innerHTML = fmtPct(t.pnlPct) + " / " + (t.holdDays ?? "&mdash;") + "d";
+  const pl = t.pnl == null ? null : Number(t.pnl);
+  document.getElementById("d-pnl-usd").innerHTML = pl == null ? "&mdash;" : '<span style="color:var(--' + (pl >= 0 ? "up" : "down") + ')">' + fmtMoney(pl, t.currency) + '</span>';
+  document.getElementById("d-pnl").innerHTML = fmtPct(t.pnlPct);
+  document.getElementById("d-hold").innerHTML = t.holdDays == null ? "&mdash;" : t.holdDays + (t.holdDays === 1 ? " day" : " days");
   document.getElementById("d-notion-link").href = t.notionUrl || "#";
   const m = MFE[t.pageId];
   document.getElementById("d-mfe").innerHTML = m
@@ -2988,12 +3007,19 @@ function drawDash() {
       kv("Biggest win", S.bigW ? '<span class="up">' + m(S.bigW.pnl) + '</span>' : "&mdash;", S.bigW ? esc(S.bigW.ticker) + " &middot; " + S.bigW.dateClosed : "") + kv("Biggest loss", S.bigL ? '<span class="down">' + m(S.bigL.pnl) + '</span>' : "&mdash;", S.bigL ? esc(S.bigL.ticker) + " &middot; " + S.bigL.dateClosed : "") + '</div></div>' +
     '<div class="jw"><h3>Risk &amp; consistency</h3><div class="kv">' + kv("Max drawdown", '<span class="down">' + m(S.mdd) + '</span>', "realised, peak to trough") + kv("Streaks", "best " + S.bestW + "W", "worst " + S.worstL + "L") + '</div><div style="font-size:11.5px;color:var(--dim);margin:12px 0 4px">Realised P&amp;L by month</div><div id="d-mo" style="height:110px"></div></div>' +
     '<div class="jw"><h3>Trading edge</h3><div class="kv">' + kv("Win/loss $ ratio", S.wl == null ? "&mdash;" : S.wl.toFixed(2)) + kv("Expectancy", m(S.exp, 2)) + kv("Expectancy (R)", S.expR == null ? "&mdash;" : sign(S.expR) + S.expR.toFixed(2) + "R", S.withStop + " trades with a real stop") + '</div>' +
-      '<div class="dbox"><b style="color:var(--warn)">Add stops</b> &mdash; ' + S.noStop + ' of ' + S.n + ' closed trades have no initial stop, so R-multiples cover only ' + S.withStop + '. Record the stop at entry (Initial Stop $ in Notion, or the stop box in Setups) and this fills in.</div></div>' +
+      '<div class="dbox"><b style="color:var(--warn)">Add stops</b> &mdash; ' + S.noStop + ' of ' + S.n + ' closed trades have no initial stop, so R-multiples cover only ' + S.withStop + '. <span id="d-stopwhy">Checking where stops can come from&hellip;</span></div></div>' +
     '<div class="jw"><h3>Needs review</h3><div style="display:flex;align-items:center;gap:14px"><div style="font-size:34px;font-weight:800;color:var(--warn)">' + queue.length + '</div><div><b>closed trades are missing a setup</b><div style="font-size:12px;color:var(--dim)">Work through them one at a time: setup, notes, emotion, tags, then Save &amp; next.</div></div></div><button class="rv-btn" id="d-start" style="margin-top:12px"' + (queue.length ? "" : " disabled") + '>Start reviewing &rarr;</button></div>' +
     '<div class="jw w12"><h3>Open positions &amp; near stops</h3>' + (open.length ? '<table class="dtbl"><thead><tr><th>Symbol</th><th class="r">Shares</th><th class="r">Avg</th><th class="r">Last</th><th class="r">P&amp;L %</th><th class="r">Stop</th><th class="r">From stop</th></tr></thead><tbody id="d-open"></tbody></table><div id="d-opd"></div>' :
       '<div class="dbox" style="margin-top:0">No open positions in ' + esc(dashAcct) + ' right now. Open positions appear here with the last close, % from the stop, and a chart when you click a row.</div>') + '</div>' +
     '</div>';
   host.querySelectorAll("#dacct button").forEach(b => b.onclick = () => { dashAcct = b.dataset.a; dashOpenSel = null; drawDash(); });
+  fetch("/api/journal/stops").then(r => r.json()).then(s => {
+    const el = document.getElementById("d-stopwhy"); if (!el || s.error) return; const st = s.status || {};
+    el.innerHTML = 'IBKR&rsquo;s daily report has no order history, so stops you placed never reach the journal. ' +
+      (st.gateway === "connected" ? 'The live gateway is connected, so stops resting at IBKR are copied onto open trades.' : 'The live gateway is not logged in, so resting stops cannot be read right now (' + esc(st.gateway || "never checked") + ').') +
+      (st.flexOrders ? ' The report includes orders (' + (st.flexStopOrders || 0) + ' stop orders).' : ' To capture past stops, add the <b>Orders</b> section to your Flex query (stop price, order type, date/time, symbol, side).') +
+      ' Open trades without a stop: ' + s.openNoStop + ' of ' + s.open + '.';
+  }).catch(() => {});
   host.querySelectorAll("#dstreak button").forEach(b => b.onclick = () => { dashStreak = +b.dataset.n; drawDash(); });
   host.querySelectorAll(".strip span[data-p]").forEach(el => el.onclick = () => { const t = ALL_TRADES.find(x => x.pageId === el.dataset.p); if (t) openDetail(t); });
   const st = document.getElementById("d-start"); if (st) st.onclick = () => { const q = reviewQueue().filter(t => t.account === dashAcct); if (q.length) openDetail(q[0]); };
