@@ -22,13 +22,13 @@
   const CSS = '.tv{position:relative}.tv-bar{display:flex;flex-wrap:wrap;gap:6px 8px;align-items:center;margin-bottom:6px}.tv-seg{display:inline-flex;border:1px solid var(--line,var(--border,#d0d4dc));border-radius:8px;overflow:hidden;background:var(--bg,#fff)}' +
     '.tv-seg button,.tv-b{border:0;background:transparent;color:var(--dim,var(--text-dim,#667085));font-weight:600;font-size:11.5px;padding:5px 9px;cursor:pointer;white-space:nowrap;font-family:inherit}.tv-seg button.on,.tv-b.on{background:var(--accent);color:#fff}.tv-seg button:hover:not(.on),.tv-b:hover:not(.on){color:var(--text)}' +
     '.tv-b{border:1px solid var(--line,var(--border,#d0d4dc));border-radius:8px;background:var(--bg,#fff)}.tv-b.pri{background:var(--accent);color:#fff;border-color:var(--accent)}.tv-sw{width:16px;height:16px;border-radius:50%;border:2px solid var(--panel,var(--panel-bg,#fff));box-shadow:0 0 0 1px var(--line,var(--border,#d0d4dc));cursor:pointer;display:inline-block}.tv-sw.on{box-shadow:0 0 0 2px var(--text)}' +
-    '.tv-leg{font:11.5px "IBM Plex Mono",ui-monospace,monospace;display:flex;flex-wrap:wrap;gap:3px 12px;min-height:18px;margin-bottom:2px}.tv-wrap{position:relative}.tv-ov{position:absolute;left:0;top:0;pointer-events:none}' +
-    '.tv-in{position:absolute;z-index:5;border:1px solid var(--accent);background:var(--panel,var(--panel-bg,#fff));color:var(--text);padding:4px 7px;border-radius:6px;font-size:12px;min-width:150px}.tv-st{font-size:11px;color:var(--dim,var(--text-dim,#667085))}.tv-sep{width:1px;height:18px;background:var(--line,var(--border,#d0d4dc))}' +
+    '.tv-leg{font:11.5px "IBM Plex Mono",ui-monospace,monospace;display:flex;flex-wrap:wrap;gap:3px 12px;min-height:18px;margin-bottom:2px}.tv-wrap{position:relative}.tv-ov{position:absolute;left:0;top:0;pointer-events:none;z-index:5}' +
+    '.tv-in{position:absolute;z-index:7;border:1px solid var(--accent);background:var(--panel,var(--panel-bg,#fff));color:var(--text);padding:4px 7px;border-radius:6px;font-size:12px;min-width:150px}.tv-st{font-size:11px;color:var(--dim,var(--text-dim,#667085))}.tv-sep{width:1px;height:18px;background:var(--line,var(--border,#d0d4dc))}' +
     '.tv-modal{position:fixed;inset:0;z-index:80;background:rgba(10,12,16,.55);display:flex;align-items:center;justify-content:center;padding:3vh 3vw}.tv-modal>div{background:var(--panel,var(--panel-bg,#fff));border:1px solid var(--line,var(--border,#d0d4dc));border-radius:14px;width:min(1280px,96vw);max-height:94vh;overflow:auto;padding:14px 16px;box-shadow:var(--shadow)}';
   if (!document.getElementById('tv-css')) { const s = document.createElement('style'); s.id = 'tv-css'; s.textContent = CSS; document.head.appendChild(s); }
 
   const COLORS = ['#2563eb', '#f59e0b', '#16a34a', '#dc2626', '#8b5cf6', '#e5e7eb'];
-  const TOOLS = [['cursor', 'Cursor'], ['trend', 'Trend line'], ['ray', 'Ray'], ['hline', 'Horizontal'], ['rect', 'Box'], ['fib', 'Fib'], ['text', 'Note']];
+  const TOOLS = [['cursor', 'Cursor'], ['trend', 'Trend line'], ['text', 'Note']];
   const TFS = ['1M', '3M', '6M', '1Y', '2Y', 'All'], TFN = { '1M': 21, '3M': 63, '6M': 126, '1Y': 252, '2Y': 504 };
 
   function mount(el, S) {
@@ -144,12 +144,24 @@
     function flash(m) { const s = el.querySelector('#stt'); if (s) { s.textContent = m + ' · shows on every page'; clearTimeout(flash.t); flash.t = setTimeout(() => { const s2 = el.querySelector('#stt'); if (s2) s2.textContent = st.draw.length ? st.draw.length + ' annotation' + (st.draw.length > 1 ? 's' : '') + ' saved' : 'No annotations yet'; }, 1800); } }
     function setTool(k) { tool = k; pend = null; hoverPt = null; ov.style.pointerEvents = k === 'cursor' ? 'none' : 'auto'; ov.style.cursor = 'crosshair'; wrap.querySelectorAll('.tv-in').forEach(x => x.remove()); renderBar(); }
     function commit(dr) { dr.id = Date.now() + Math.random(); dr.color = color; st.draw.push(dr); sel = dr.id; persist(); setTool('cursor'); }
-    ov.addEventListener('click', e => {
+    // Trend line works both ways: press, drag, release; or click the start and click the end.
+    // A note is one click, then type and press Enter.
+    ov.addEventListener('mousedown', e => {
+      if (e.button !== 0 || tool !== 'trend') return;
+      const [x, y] = posIn(e); if (pend) return;
+      const pt = toPt(x, y); if (pt) pend = { type: 'trend', pt, k: 1, drag: true, xy: [x, y] };
+    });
+    ov.addEventListener('mouseup', e => {
+      if (e.button !== 0) return;
       const [x, y] = posIn(e), pt = toPt(x, y); if (!pt) return;
-      if (tool === 'hline') { commit({ type: 'hline', pts: [pt] }); }
-      else if (tool === 'text') { const inp = document.createElement('input'); inp.className = 'tv-in'; inp.placeholder = 'Note, then Enter'; inp.style.left = Math.min(x, wrap.clientWidth - 170) + 'px'; inp.style.top = y + 'px'; wrap.appendChild(inp); inp.focus(); inp.onkeydown = k => { if (k.key === 'Enter' && inp.value.trim()) { const v = inp.value.trim(); inp.remove(); commit({ type: 'text', pts: [pt], text: v }); } else if (k.key === 'Escape') { inp.remove(); setTool('cursor'); } }; }
-      else if (!pend) { pend = { type: tool, pt, k: 1 }; }
-      else { commit({ type: pend.type, pts: [pend.pt, pt] }); }
+      if (tool === 'text') {
+        const inp = document.createElement('input'); inp.className = 'tv-in'; inp.placeholder = 'Note, then Enter'; inp.style.left = Math.min(x, wrap.clientWidth - 170) + 'px'; inp.style.top = y + 'px'; wrap.appendChild(inp); inp.focus();
+        inp.onkeydown = k => { if (k.key === 'Enter' && inp.value.trim()) { const v = inp.value.trim(); inp.remove(); commit({ type: 'text', pts: [pt], text: v }); } else if (k.key === 'Escape') { inp.remove(); setTool('cursor'); } };
+        return;
+      }
+      if (tool !== 'trend' || !pend) return;
+      if (pend.drag) { if (Math.hypot(x - pend.xy[0], y - pend.xy[1]) > 6) commit({ type: 'trend', pts: [pend.pt, pt] }); else pend.drag = false; }
+      else commit({ type: 'trend', pts: [pend.pt, pt] });
     });
     ov.addEventListener('mousemove', e => { if (!pend) return; const [x, y] = posIn(e), pt = toPt(x, y); hoverPt = pt ? { x, y, pt } : null; });
     function hit(x, y) {

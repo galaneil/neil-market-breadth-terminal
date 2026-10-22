@@ -2680,10 +2680,10 @@
   // indices and every sector, % of stocks above key averages, up/down 4% with ratios, and McClellan.
   function renderBreadthInternals() {
     const tabsEl = document.getElementById("bi-tabs");
-    if (!tabsEl) return;
     const BI = DATA.breadthInternals;
     renderBiOverview();
-    if (!BI) { tabsEl.style.display = "none"; return; }
+    // An older page (published before the tabs existed) has no tab bar: the overview alone still works.
+    if (!tabsEl || !BI) { if (tabsEl) tabsEl.style.display = "none"; return; }
     const TABS = [["overview", "Overview"], ["daily", "Daily table"], ["snap", "Snapshot"], ["avg", "% above averages"], ["ud4", "Up / down 4%"]];
     if (BI.ts && BI.ts.mc_d) TABS.push(["mc", "McClellan"]);
     let cur = "overview", live = [];
@@ -3178,6 +3178,7 @@
     // drilling in or out is one click and never a trip back; the stocks of the picked industry show as charts.
     const ex = { side: "hi", win: "w13", index: indexes[0].code, sector: null, ind: null, sort: "rs", more: 12 };
     const exHost = document.getElementById("mf-explore");
+    const classicEl = document.getElementById("mf-classic");
     const WIN_LABEL = { w13: "13 week", w26: "26 week", w52: "52 week" };
     const capOf = function (t) { return (cls[t] && cls[t][3]) || 0; };
     function exNames(sector, industry) {
@@ -3278,8 +3279,8 @@
       mfTabs.querySelectorAll(".bi-tab").forEach(function (b) { b.addEventListener("click", function () { mfShow(b.dataset.t); }); });
       exHost.hidden = which !== "explore"; classic.hidden = which !== "classic";
     }
-    mfShow("explore");
-    exDraw();
+    // Pages published before the Explore view existed have no container for it: keep the classic view.
+    if (exHost && mfTabs && classic) { mfShow("explore"); exDraw(); }
 
     document.addEventListener("click", function (e) {
       if (!e.target.closest(".search-wrap")) dropdown.classList.remove("open");
