@@ -201,6 +201,27 @@ def plan_leg_actions(legs, rows, open_row=None):
     return actions
 
 
+def _already_logged(database_id, symbol, date_iso, price):
+    """True when a row for this ticker, opened on this date (a day of slack) at this price (1%), already
+    exists in ANY form: core or pyramid add, open or closed. Core rows are only looked at in a date window
+    above, so a leg that is really an add on a position opened before the report window used to look like a
+    brand-new trade and was created again, next to the add that was already there."""
+    if not date_iso or not price:
+        return False
+    lo, hi = _days_before(date_iso, 1), _days_before(date_iso, -1)
+    pages = notion_sync.query(database_id, {"filter": {"and": [
+        {"property": "Date Opened", "date": {"on_or_after": lo}},
+        {"property": "Date Opened", "date": {"on_or_before": hi}}]}})
+    for page in pages:
+        props = page.get("properties", {})
+        if (notion_sync._text_of(props.get("Ticker")) or "").upper() != symbol.upper():
+            continue
+        entry = notion_sync._number_of(props.get("Entry Price"))
+        if entry and abs(entry - price) / price <= 0.01:
+            return True
+    return False
+
+
 def _apply_actions(account, symbol, actions, result, log):
     for act in actions:
         leg, row = act["leg"], act["row"]
@@ -220,6 +241,9 @@ def _apply_actions(account, symbol, actions, result, log):
             first = events[0] if events else {"date": (leg["opened"] or "")[:10],
                                               "shares": leg["shares"], "price": leg["entryPrice"]}
             if not first["date"]:
+                continue
+            if _already_logged(account["id"], symbol, first["date"], first["price"]):
+                log(f"  {symbol}: {first['date']} @ {first['price']} is already logged, not creating it again")
                 continue
             created = notion_sync.create_trade(account, symbol, first["date"], first["price"],
                                                first["shares"], log=log)
