@@ -18,6 +18,11 @@ def _history(country, symbol):
     symbol = "".join(ch for ch in (symbol or "").upper() if ch.isalnum() or ch in ".-")[:16]
     if not symbol:
         return None
+    try:
+        import ticker_topup
+        ticker_topup.ensure_fresh(country, symbol)     # a traded name outside the nightly universe goes stale
+    except Exception:
+        pass
     sub = config.COUNTRIES[country].get("docs_subdir", "")
     candidates = [symbol]
     if country == "IN":

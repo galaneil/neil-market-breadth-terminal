@@ -5109,6 +5109,8 @@ def _hub_nav_json():
     """The sidebar's contents, generated from HUB_PANELS and config.COUNTRIES
     rather than hand-duplicated in the JS below — a panel added to one list
     should not require editing two places to appear in the hub."""
+    cfg_code = [None]
+
     def indices_group(cfg, prefix):
         labels = cfg.get("index_labels", {})
         children = [
@@ -5117,6 +5119,13 @@ def _hub_nav_json():
              "note": ""}
             for key in cfg.get("index_tickers", {})
         ]
+        try:
+            acc = os.path.join(config.data_dir(cfg_code[0]), "accdist_index.json")
+            if os.path.exists(acc) and os.path.getsize(acc) > 4:
+                children.append({"label": "Distribution days", "url": prefix + "panel-distribution.html",
+                                 "note": "O'Neil distribution and accumulation days on the indices."})
+        except Exception:
+            pass
         return {"label": "Indices", "children": children}
 
     def resolve(entry, cfg, prefix):
@@ -5133,6 +5142,7 @@ def _hub_nav_json():
 
     countries = []
     for code, cfg in config.COUNTRIES.items():
+        cfg_code[0] = code
         sub = cfg.get("docs_subdir", "")
         prefix = f"/docs/{sub}/" if sub else "/docs/"
         countries.append({

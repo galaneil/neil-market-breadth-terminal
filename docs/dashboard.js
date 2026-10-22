@@ -215,7 +215,7 @@
   // Data for the standard chart from a ticker file (or any {dates,open,high,low,close,volume}).
   function stdFromTicker(sym, p, name) {
     const tags = (DATA.classification || {})[sym], logoid = tags && tags[2];
-    return { t: sym, name: name || sym, d: p.dates, o: p.open, h: p.high, l: p.low, c: p.close, v: p.volume || null,
+    return { t: sym, name: name || sym, d: p.dates, o: p.open, h: p.high, l: p.low, c: p.close, v: p.volume || null, distChip: !!p.volume,
              logoUrl: logoid ? "https://s3-symbol-logo.tradingview.com/" + encodeURIComponent(logoid) + ".svg" : "" };
   }
   // Adds the TradingView | Terminal switch and chart host above an existing Terminal chart.
@@ -2674,6 +2674,111 @@
     draw();
   }
 
+  // ---------- Distribution days (indices) ----------
+  // O'Neil: a distribution day is the index closing down at least X% (0.2 by default) on volume above the prior day's; it
+  // stays live for N sessions (25). The mirror image is an accumulation day. A follow-through day (computed in the
+  // pipeline) is day 4+ of a rally attempt, up 1.25%+ on higher volume. Click any chart to see the count as it stood
+  // on that date; the history chart shows how the count rose and fell.
+  function renderDistribution() {
+    const root = document.getElementById("dist-root");
+    if (!root) return;
+    const A = DATA.accIndex || {}, keys = Object.keys(A);
+    if (!keys.length) { root.innerHTML = '<div class="empty-note">No index with its own volume series yet.</div>'; return; }
+    let ix = { k: keys[0], thr: 0.2, win: 25, drop5: false, asof: null };
+    let live = [];
+    const th = lwTheme();
+    function calc(s, e) {
+      const lv = [], ac = [], t = ix.thr / 100;
+      for (let i = Math.max(1, e - ix.win + 1); i <= e; i++) {
+        const ch = s.c[i] / s.c[i - 1] - 1, hv = s.v[i] && s.v[i - 1] && s.v[i] > s.v[i - 1];
+        if (hv && ch <= -t) { if (ix.drop5 && Math.max.apply(null, s.c.slice(i + 1, e + 1).concat([0])) >= s.c[i] * 1.05) continue; lv.push(i); }
+        else if (hv && ch >= t) ac.push(i);
+      }
+      return { live: lv, acc: ac };
+    }
+    const endAt = function (s, date) { if (!date) return s.d.length - 1; let e = 0; for (let i = 0; i < s.d.length; i++) if (s.d[i] <= date) e = i; return e; };
+    const level = function (n) { return n >= 5 ? ["down", "Correction pressure"] : n >= 3 ? ["warn", "Caution"] : ["up", "Healthy"]; };
+    function draw() {
+      live.forEach(function (c) { try { c.remove(); } catch (e) {} }); live = [];
+      const S = A[ix.k].series, N = S.c.length, hist = { d: [], a: [] };
+      for (let i = 1; i < N; i++) { const r = calc(S, i); hist.d.push(r.live.length); hist.a.push(r.acc.length); }
+      root.innerHTML =
+        '<p class="bi-note">A day the index closes down at least <b>' + ix.thr + '%</b> on volume above the day before is a <b>distribution day (D)</b>. It stays live for <b>' + ix.win +
+        '</b> sessions; five or more is the classic sign of institutional selling. An up day of the same size on higher volume is an <b>accumulation day (A)</b>. A <b>follow-through day (FTD)</b> is a strong up day on rising volume, day 4 or later of a rally attempt.</p>' +
+        '<div class="bi-note" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span class="badge on" id="d-asb"></span><button class="tf-btn" id="d-today" type="button">Back to latest</button><span>Click any chart to see the count on that date.</span></div>' +
+        '<div class="mfx-grid" id="d-cards" style="margin:10px 0 12px"></div>' +
+        '<div class="mfx-controls"><label class="bi-note" style="margin:0">Down at least <select id="d-thr">' + [0.1, 0.2, 0.3, 0.4].map(function (v) { return '<option' + (v === ix.thr ? " selected" : "") + ' value="' + v + '">' + v + "%</option>"; }).join("") + '</select></label>' +
+        '<label class="bi-note" style="margin:0">Window <select id="d-win">' + [20, 25, 30].map(function (v) { return '<option' + (v === ix.win ? " selected" : "") + ' value="' + v + '">' + v + " sessions</option>"; }).join("") + '</select></label>' +
+        '<button type="button" class="mfx-chip' + (ix.drop5 ? " on" : "") + '" id="d-d5">Drop a day once the index is 5% above it</button></div>' +
+        '<div class="bi-chartbox" style="padding:10px 12px;margin-bottom:12px"><div style="display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap"><h3 id="d-sth" style="margin:0;font-size:14px"></h3><span class="bi-note" style="margin:0">red D1, D2&hellip; distribution &middot; green A1, A2&hellip; accumulation &middot; FTD follow-through</span></div><div id="d-strip" style="display:flex;flex-wrap:wrap;gap:5px;margin-top:8px"></div></div>' +
+        '<div style="display:grid;grid-template-columns:minmax(0,1fr) 290px;gap:12px;align-items:start"><div class="bi-chartbox" style="padding:10px 12px"><div class="mono" id="d-leg" style="font-size:11.5px;min-height:18px;display:flex;gap:12px;flex-wrap:wrap"></div><div id="d-ic"></div><div class="bi-note" style="margin:8px 0 3px">Volume: <b class="down">dark red</b> = live distribution day on the selected date, light red = outside the window, <b class="up">green</b> = accumulation day. Labels sit above the bars so they never cover price.</div><div id="d-iv"></div><div class="bi-note" style="margin:8px 0 3px">Live count on every date: <b class="down">red</b> distribution, <b class="up">green</b> accumulation, dotted line = the 5-day warning level.</div><div id="d-ih"></div></div><div class="bi-chartbox" style="padding:10px 12px" id="d-tbl"></div></div>';
+      const mkc = function (id, h) {
+        const el = document.getElementById(id);
+        const c = LightweightCharts.createChart(el, { width: el.clientWidth, height: h, layout: { background: { type: "solid", color: th.bg }, textColor: th.text, fontSize: 10 },
+          grid: { vertLines: { color: th.grid }, horzLines: { color: th.grid } }, rightPriceScale: { borderColor: th.border }, timeScale: { borderColor: th.border, rightOffset: 3 }, crosshair: { mode: 0 } });
+        live.push(c); if (window.ResizeObserver) new ResizeObserver(function () { c.applyOptions({ width: el.clientWidth }); }).observe(el); return c;
+      };
+      const ch = mkc("d-ic", 360), cs = ch.addCandlestickSeries({ upColor: th.up, downColor: th.down, borderUpColor: th.up, borderDownColor: th.down, wickUpColor: th.up, wickDownColor: th.down, priceLineVisible: false });
+      cs.setData(S.d.map(function (d, i) { return { time: d, open: S.o[i], high: S.h[i], low: S.l[i], close: S.c[i] }; }));
+      const ema = function (a, n) { const k = 2 / (n + 1), o = []; let p = null; a.forEach(function (v) { p = p == null ? v : v * k + p * (1 - k); o.push(p); }); return o; };
+      const MAS = [["10", EMA_COLORS.ema10, ema(S.c, 10)], ["20", EMA_COLORS.ema20, ema(S.c, 20)], ["50", EMA_COLORS.ema50, ema(S.c, 50)]];
+      MAS.forEach(function (m) { const l = ch.addLineSeries({ color: m[1], lineWidth: 1, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false }); l.setData(S.d.map(function (d, i) { return { time: d, value: m[2][i] }; })); });
+      const yr = S.c.length > 252 ? S.c.length - 252 : 0, hi52 = Math.max.apply(null, S.h.slice(yr)), lo52 = Math.min.apply(null, S.l.slice(yr));
+      cs.createPriceLine({ price: hi52, color: th.text, lineWidth: 1, lineStyle: 1, axisLabelVisible: true, title: "52w high" }); cs.createPriceLine({ price: lo52, color: th.text, lineWidth: 1, lineStyle: 1, axisLabelVisible: true, title: "52w low" });
+      const hc = mkc("d-iv", 150); hc.priceScale("right").applyOptions({ scaleMargins: { top: 0.2, bottom: 0 } });
+      const vh = hc.addHistogramSeries({ priceFormat: { type: "volume" }, priceLineVisible: false, lastValueVisible: false });
+      const cc = mkc("d-ih", 120), ld = cc.addLineSeries({ color: "#ef4444", lineWidth: 2, priceLineVisible: false, lastValueVisible: true, title: "dist" }), la = cc.addLineSeries({ color: "#22c55e", lineWidth: 2, priceLineVisible: false, lastValueVisible: true, title: "acc" });
+      ld.setData(hist.d.map(function (v, i) { return { time: S.d[i + 1], value: v }; })); la.setData(hist.a.map(function (v, i) { return { time: S.d[i + 1], value: v }; }));
+      ld.createPriceLine({ price: 5, color: "#ef4444", lineWidth: 1, lineStyle: 3, axisLabelVisible: true, title: "5" });
+      const upd = function () {
+        const res = {}; keys.forEach(function (k) { const s = A[k].series, e = endAt(s, ix.asof); res[k] = Object.assign(calc(s, e), { e: e }); });
+        const r = res[ix.k], e = r.e, liveSet = new Set(r.live), accSet = new Set(r.acc), num = {}, anum = {};
+        r.live.forEach(function (i, k) { num[i] = k + 1; }); r.acc.forEach(function (i, k) { anum[i] = k + 1; });
+        document.getElementById("d-asb").textContent = (ix.asof ? "As of " : "Latest session ") + S.d[e]; document.getElementById("d-today").hidden = !ix.asof;
+        const cards = document.getElementById("d-cards");
+        cards.innerHTML = keys.map(function (k) {
+          const q = res[k], l = level(q.live.length);
+          return '<div class="mfx-card" data-k="' + k + '" style="' + (k === ix.k ? "border-color:var(--accent)" : "") + '"><div class="mfx-names">' + A[k].label + " &middot; " + A[k].series.d[q.e] + '</div><div class="top"><span class="n ' + l[0] + '" style="font-size:34px">' + q.live.length + '</span><b class="' + l[0] + '">' + l[1] + '</b></div><div class="mfx-names" style="margin-top:4px"><b class="down">' + q.live.length + ' distribution</b> &middot; <b class="up">' + q.acc.length + ' accumulation</b> live' + (q.acc.length > q.live.length ? " &mdash; accumulation is ahead" : "") + "</div></div>";
+        }).join("");
+        cards.querySelectorAll(".mfx-card").forEach(function (c) { c.addEventListener("click", function () { ix.k = c.dataset.k; draw(); }); });
+        document.getElementById("d-sth").textContent = A[ix.k].label + " · the " + ix.win + " sessions up to " + S.d[e];
+        const cells = [], mon = function (d) { return new Date(d + "T00:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" }); };
+        for (let i = Math.max(1, e - ix.win + 1); i <= e; i++) {
+          const isD = liveSet.has(i), isA = accSet.has(i), isF = !!S.ftd[i], chg = (S.c[i] / S.c[i - 1] - 1) * 100;
+          cells.push('<div title="' + S.d[i] + " " + chg.toFixed(2) + '%" style="width:46px;border-radius:7px;padding:4px 0;text-align:center;border:1px solid var(--border);' + (isD ? "background:rgba(239,68,68,.16);border-color:rgba(239,68,68,.55)" : isF ? "background:rgba(34,197,94,.2);border-color:rgba(34,197,94,.6)" : isA ? "background:rgba(34,197,94,.08)" : "") + '"><div style="font-size:10px">' + mon(S.d[i]) + '</div><div style="font-weight:700;font-size:12px;height:17px" class="' + (isD ? "down" : isF || isA ? "up" : "") + '">' + (isD ? "D" + num[i] : isF ? "FTD" : isA ? "A" + anum[i] : "&middot;") + '</div><div class="' + (chg >= 0 ? "up" : "down") + '" style="font-size:10px">' + (chg >= 0 ? "+" : "") + chg.toFixed(1) + "</div></div>");
+        }
+        document.getElementById("d-strip").innerHTML = cells.join("");
+        document.getElementById("d-tbl").innerHTML = '<h3 style="margin:0 0 6px;font-size:13px">Live distribution days</h3>' + (r.live.length ? '<table class="bi-table"><thead><tr><th></th><th>Date</th><th class="r">Chg</th><th class="r">Expires in</th></tr></thead><tbody>' + r.live.map(function (i, k) { return '<tr><td><b class="down">D' + (k + 1) + '</b></td><td>' + S.d[i] + '</td><td class="r down">' + ((S.c[i] / S.c[i - 1] - 1) * 100).toFixed(2) + '%</td><td class="r">' + (ix.win - (e - i)) + "d</td></tr>"; }).join("") + "</tbody></table>" : '<div class="empty-note">None in the window.</div>') +
+          '<h3 style="margin:14px 0 6px;font-size:13px">Live accumulation days</h3>' + (r.acc.length ? '<table class="bi-table"><thead><tr><th></th><th>Date</th><th class="r">Chg</th></tr></thead><tbody>' + r.acc.map(function (i, k) { return '<tr><td><b class="up">A' + (k + 1) + '</b></td><td>' + S.d[i] + '</td><td class="r up">+' + ((S.c[i] / S.c[i - 1] - 1) * 100).toFixed(2) + "%</td></tr>"; }).join("") + "</tbody></table>" : '<div class="empty-note">None in the window.</div>');
+        vh.setData(S.d.map(function (d, i) { return { time: d, value: S.v[i], color: liveSet.has(i) ? "rgba(239,68,68,1)" : accSet.has(i) ? "rgba(34,197,94,.95)" : (S.c[i] < (S.c[i - 1] || S.c[i]) && S.v[i] > (S.v[i - 1] || 0)) ? "rgba(239,68,68,.4)" : "rgba(140,148,165,.6)" }; }));
+        const marks = r.live.map(function (i, k) { return { time: S.d[i], position: "aboveBar", color: "#ef4444", shape: "circle", text: "D" + (k + 1), size: 0 }; });
+        r.acc.forEach(function (i, k) { marks.push({ time: S.d[i], position: "aboveBar", color: "#22c55e", shape: "circle", text: "A" + (k + 1), size: 0 }); });
+        S.ftd.forEach(function (f, i) { if (f && i <= e) marks.push({ time: S.d[i], position: "aboveBar", color: "#22c55e", shape: "circle", text: "FTD", size: 0 }); });
+        marks.sort(function (a, b) { return a.time < b.time ? -1 : a.time > b.time ? 1 : 0; }); vh.setMarkers(marks);
+        window.__dist = { num: num, anum: anum };
+      };
+      const lg = function (i) {
+        const chg = (S.c[i] / S.c[i - 1] - 1) * 100, nn = (window.__dist || {}).num || {}, an = (window.__dist || {}).anum || {};
+        document.getElementById("d-leg").innerHTML = '<span>' + S.d[i] + "</span><span>C <b>" + S.c[i].toLocaleString() + '</b></span><span class="' + (chg >= 0 ? "up" : "down") + '"><b>' + (chg >= 0 ? "+" : "") + chg.toFixed(2) + "%</b></span>" +
+          (i > 0 ? '<span>Live then: <b class="down">' + hist.d[i - 1] + ' D</b> / <b class="up">' + hist.a[i - 1] + " A</b></span>" : "") +
+          (nn[i] ? '<span class="down"><b>Distribution D' + nn[i] + "</b></span>" : S.ftd[i] ? '<span class="up"><b>Follow-through day</b></span>' : an[i] ? '<span class="up"><b>Accumulation A' + an[i] + "</b></span>" : "") +
+          MAS.map(function (m) { return '<span style="color:' + m[1] + '">' + m[0] + "E <b>" + m[2][i].toFixed(0) + "</b></span>"; }).join("");
+      };
+      document.getElementById("d-thr").onchange = function (e) { ix.thr = +e.target.value; draw(); };
+      document.getElementById("d-win").onchange = function (e) { ix.win = +e.target.value; draw(); };
+      document.getElementById("d-d5").onclick = function () { ix.drop5 = !ix.drop5; draw(); };
+      document.getElementById("d-today").onclick = function () { ix.asof = null; upd(); lg(N - 1); };
+      upd(); lg(endAt(S, ix.asof));
+      const pick = function (p) { if (p.time) { ix.asof = p.time; upd(); const i = S.d.indexOf(p.time); if (i > 0) lg(i); } };
+      const all = [ch, hc, cc]; all.forEach(function (c) { c.subscribeClick(pick); });
+      const hover = function (p) { if (p.time) { const i = S.d.indexOf(p.time); if (i > 0) lg(i); } else lg(endAt(S, ix.asof)); };
+      all.forEach(function (c) { c.subscribeCrosshairMove(hover); });
+      const from = S.d[Math.max(0, N - 150)], to = S.d[N - 1]; all.forEach(function (c) { c.timeScale().setVisibleRange({ from: from, to: to }); });
+      let lock = false; all.forEach(function (a) { a.timeScale().subscribeVisibleLogicalRangeChange(function (rr) { if (lock || !rr) return; lock = true; all.forEach(function (b) { if (b !== a) b.timeScale().setVisibleLogicalRange(rr); }); lock = false; }); });
+    }
+    draw();
+  }
+
   // ---------- Breadth Internals: tabs ----------
   // Overview is the verdict page that was here before. The other tabs are the internals tables and charts
   // computed from the per-ticker files (metrics/breadth_internals.py): the daily table, a snapshot of the
@@ -3385,6 +3490,8 @@
         return { ticker: t, sector: tags[0] || "—", industry: tags[1] || "—",
                  close: q[0], chg: q[1], adr: q[2] === undefined ? null : q[2],
                  cap: tags[3] || null, adv: q[3] === undefined ? null : q[3],
+                 ad: ((DATA.accdist || {}).t || {})[t] ? DATA.accdist.t[t][0] : null, adn: ((DATA.accdist || {}).t || {})[t] ? "EDCBA".indexOf(DATA.accdist.t[t][0]) + 1 : null,
+                 dist: ((DATA.accdist || {}).t || {})[t] ? DATA.accdist.t[t][2] : null, acc: ((DATA.accdist || {}).t || {})[t] ? DATA.accdist.t[t][3] : null,
                  hits: hits[t], last: lastSeen[t] };
       });
     }
@@ -3432,7 +3539,7 @@
         : sorted.length + " of " + rows.length + " companies" +
           (sorted.length > MAX_ROWS ? " — showing the first " + MAX_ROWS : "");
       if (!sorted.length) {
-        body.innerHTML = '<tr><td colspan="7" class="empty-note">Nothing matches.</td></tr>';
+        body.innerHTML = '<tr><td colspan="9" class="empty-note">Nothing matches.</td></tr>';
         return;
       }
       body.innerHTML = shown.map(function (r) {
@@ -3442,6 +3549,8 @@
           "<td>" + (r.close === null ? "—" : r.close.toFixed(2)) + "</td>" +
           '<td class="pct ' + pctClass(r.chg) + '">' + (r.chg === null ? "—" : fmtSignedPct(r.chg)) + "</td>" +
           "<td>" + (r.adr === null ? "—" : r.adr.toFixed(1) + "%") + "</td>" +
+          '<td>' + (r.ad ? '<span class="badge on" style="background:' + ({ A: "#16a34a", B: "#65a30d", C: "#ca8a04", D: "#ea580c", E: "#dc2626" })[r.ad] + ';color:#fff;border-color:transparent;font-weight:800">' + r.ad + "</span>" : "—") + "</td>" +
+          "<td>" + (r.dist === null ? "—" : '<b class="down">' + r.dist + '</b> / <b class="up">' + r.acc + "</b>") + "</td>" +
           "<td>" + r.hits + "</td><td>" + r.last + "</td>" +
         "</tr>";
       }).join("");
@@ -4435,6 +4544,16 @@
   }
 
   // ---------- Stock context ----------
+  // Accumulation / distribution for one stock, from the ratings file (A-E, last-25-session counts).
+  function accdistLine(sym) {
+    const a = (DATA.accdist || {}).t && DATA.accdist.t[sym];
+    if (!a) return "";
+    const cols = { A: "#16a34a", B: "#65a30d", C: "#ca8a04", D: "#ea580c", E: "#dc2626" };
+    return '<div class="stock-ad" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:8px 0;font-size:12.5px"><span class="badge on" style="background:' + cols[a[0]] + ';color:#fff;border-color:transparent;font-weight:800">' + a[0] + '</span>' +
+      '<span><b class="down">' + a[2] + ' distribution</b> &middot; <b class="up">' + a[3] + ' accumulation</b> days in the last 25 sessions</span><span>13-week up/down volume <b>' + a[1] + '</b></span>' +
+      '<span style="color:var(--text-dim)">A&ndash;E ranks the 13-week up/down volume ratio in fifths (IBD\'s own formula is not published, so this approximates it).</span></div>';
+  }
+
   function renderStockPanel() {
     const host = document.getElementById("stock-panel");
     if (!host) return;
@@ -4598,6 +4717,7 @@
               '<div class="card-sub">close on ' + d.dates[end] + "</div></div>" +
           "</div>" +
           rsRatingBlock(d, end) +
+          accdistLine(sym) +
           '<div class="tve-row" id="stock-tve-bar" style="margin:6px 0"></div><div class="tve-host" id="stock-tve" style="display:none"></div>' +
           '<div class="tf-toggle stock-tf">' +
             RANGES.map(function (r) {
@@ -5424,6 +5544,7 @@
   initStockPin();
   renderMoneyFlows();
   renderBreadthInternals();
+  renderDistribution();
   renderSectorLookup();
   renderSignals();
   renderWatchlist();

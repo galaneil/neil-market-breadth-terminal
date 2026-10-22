@@ -270,6 +270,20 @@ def _replay_body():
 """.strip()
 
 
+def _read_accdist(country, name):
+    path = os.path.join(config.data_dir(country), name)
+    if not os.path.exists(path):
+        return {}
+    with open(path, encoding="utf-8") as f:
+        return json.load(f)
+
+
+def _distribution_body():
+    return """
+<div id="dist-root"></div>
+""".strip()
+
+
 def _stock_body():
     # The suggestion list is built client-side from the classification map the
     # page already carries, rather than emitted here as a few thousand
@@ -883,6 +897,8 @@ def _screener_body():
     <th data-sort="close">Close</th>
     <th data-sort="chg">1D %</th>
     <th data-sort="adr" title="Average daily range over 20 sessions: mean of high/low - 1. How much room the stock gives you intraday.">ADR %</th>
+    <th data-sort="adn" title="A-E: the 13-week up/down volume ratio ranked in fifths (A = top). IBD's own formula is not published, so this approximates it.">A&ndash;E</th>
+    <th data-sort="dist" title="Distribution days / accumulation days in the last 25 sessions: down on higher volume / up on higher volume.">Dist / Acc</th>
     <th data-sort="hits" title="Sessions in the selected period on which it printed a new high or low">Sessions</th>
     <th data-sort="last" title="Most recent session on which it printed one">Latest</th>
   </tr></thead><tbody></tbody>
@@ -973,6 +989,7 @@ def _screener_payload(country):
     # 3,311-name count by 1,500-name weights would overstate every group.
     classification = _load_classification(country)
     quotes = _read_json("hilo_quotes.json", {})
+    accdist_stocks = _read_json("accdist_stocks.json", {})
     group_members = {"sector": {}, "industry": {}}
     for ticker, tags in classification.items():
         if ticker not in quotes or not tags:
@@ -986,6 +1003,7 @@ def _screener_payload(country):
         "hiloCounts": compact,
         "hiloNames": _read_json("hilo_names.json", []),
         "quotes": quotes,
+        "accdist": accdist_stocks,
         "classification": classification,
         "sectorMembers": sector_member_counts(country),
         "groupMembers": group_members,
@@ -1534,9 +1552,17 @@ def render_all_panels(country):
             "tickerDir": config.TICKER_DIR_NAME,
             "indexLabels": index_labels(country),
             "benchmarkKeys": cfg["largecap_keys"],
+            "accdist": _read_accdist(country, "accdist_stocks.json"),
         },
         generated_at, needs_lightweight=True,
     ))
+
+    acc_idx = _read_accdist(country, "accdist_index.json")
+    if acc_idx:
+        paths.append(render_panel(
+            country, "panel-distribution.html", "Distribution Days", _distribution_body(), [],
+            series, generated_at, extra={"accIndex": acc_idx}, chart_lib="lightweight",
+        ))
 
     for key, label in index_labels(country).items():
         filename = f"panel-{key.replace('_', '-')}.html"

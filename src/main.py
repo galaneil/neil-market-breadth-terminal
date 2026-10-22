@@ -38,7 +38,7 @@ import render
 import tv_industry
 import yf_client
 from fmp_client import FMPClient
-from metrics import (indices, sectors, industries, breadth, environment, hilo, breadth_internals,
+from metrics import (indices, sectors, industries, breadth, environment, hilo, breadth_internals, accdist,
                      groups as groups_mod, relative_strength as rs_mod)
 from tmle import config as tmle_config, run as tmle_run
 
@@ -434,6 +434,10 @@ def run_country(code, client=None):
         breadth_internals.write(code, log)
     except Exception as exc:
         log(f"{code}: breadth internals skipped ({exc})")
+    try:
+        accdist.write(code, log)
+    except Exception as exc:
+        log(f"{code}: accumulation/distribution skipped ({exc})")
     if hilo_counts:
         last = hilo_counts[-1]
         log("  " + " · ".join(
