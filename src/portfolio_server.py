@@ -1256,11 +1256,8 @@ class Handler(BaseHTTPRequestHandler):
                 for t in trades:
                     t["logoid"] = (setup_context.classify("US", t.get("ticker"))[2]
                                    or setup_context.classify("IN", t.get("ticker"))[2])
-                block_ids = [t["pageId"] for t in trades if t.get("chartMode") != "property"]
-                presence = notion_sync.bulk_chart_presence(block_ids)
-                for t in trades:
-                    t["hasChart"] = (bool(t.get("charts")) if t.get("chartMode") == "property"
-                                     else presence.get(t["pageId"]))
+                # Charts are drawn automatically, so whether a screenshot was pasted is no longer checked
+                # here (it took one Notion call per trade and nothing flags on it any more).
                 self._send(200, json.dumps(trades), "application/json")
             except Exception as error:
                 self._send(500, json.dumps({"error": str(error)}), "application/json")
@@ -1316,14 +1313,8 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 import notion_sync
                 trades = notion_sync.fetch_trades(log=lambda *a: None)
-                block_ids = [t["pageId"] for t in trades if t.get("chartMode") != "property"]
-                presence = notion_sync.bulk_chart_presence(block_ids)
-                count = 0
-                for t in trades:
-                    has_chart = (bool(t.get("charts")) if t.get("chartMode") == "property"
-                                 else presence.get(t["pageId"]))
-                    if not t.get("entryThesis") or has_chart is False:
-                        count += 1
+                # charts are imported automatically; only a missing setup counts as a gap
+                count = sum(1 for t in trades if not t.get("entrySetup") or (t.get("dateClosed") and not t.get("exitSetup")))
                 self._send(200, json.dumps({"count": count}), "application/json")
             except Exception as error:
                 self._send(200, json.dumps({"count": 0, "error": str(error)}), "application/json")
@@ -2071,7 +2062,6 @@ JOURNAL_PAGE = r"""<!doctype html>
     <button class="filter-pill" data-filter="closed">Closed</button>
     <button class="filter-pill gap" data-filter="nosetup">&#9888; No entry setup <span class="n" id="cnt-nosetup"></span></button>
     <button class="filter-pill gap" data-filter="noexit">&#9888; Closed, no exit setup <span class="n" id="cnt-noexit"></span></button>
-    <button class="filter-pill gap" data-filter="pending">&#9888; Needs chart or thesis <span class="n" id="cnt-pending"></span></button>
   </div>
   <input id="search" placeholder="Filter by ticker&hellip;">
 
@@ -2525,9 +2515,10 @@ function drawPath(t) {
   const box = document.getElementById("d-path");
   if (pathChart) { pathChart.destroy(); pathChart = null; }
   box.hidden = true; box.innerHTML = "";
-  if (!t.dateClosed || !t.dateOpened || !window.StdChart) return;
+  if (!t.dateOpened || !window.StdChart) return;
+  // An open trade has no close date: the chart then runs to the latest bar with just the entry arrow.
   fetch("/api/journal/path?country=" + encodeURIComponent(t.country || "US") + "&symbol=" + encodeURIComponent(t.ticker || "")
-        + "&from=" + t.dateOpened + "&to=" + t.dateClosed).then(r => r.json()).then(d => {
+        + "&from=" + t.dateOpened + "&to=" + (t.dateClosed || "")).then(r => r.json()).then(d => {
     if (!d.series || currentTrade !== t) return;
     const s = d.series, entryIdx = Math.max(0, s.dates.findIndex(x => x >= t.dateOpened));
     const lines = [], m = MFE[t.pageId];
@@ -2535,8 +2526,8 @@ function drawPath(t) {
     if (m) lines.push({p: m.peak, color: "#16a34a", title: "peak"});
     box.hidden = false;
     pathChart = StdChart.mount(box, {t: t.ticker, name: t.name || t.ticker, d: s.dates, o: s.open, h: s.high, l: s.low, c: s.close, v: s.volume,
-      logoUrl: t.logoid ? "/api/logo/" + encodeURIComponent(t.logoid) : "", ht: Math.round(Math.max(340, Math.min(620, innerHeight * 0.44))), tf: "Trade", entryIdx: entryIdx, lines: lines,
-      trades: [{d: t.dateOpened, a: "Buy", p: t.entryPrice, q: t.shares}, {d: t.dateClosed, a: "Sell", p: t.exitPrice, q: t.shares}].filter(x => x.p)});
+      logoUrl: t.logoid ? "/api/logo/" + encodeURIComponent(t.logoid) : "", ht: Math.round(Math.max(340, Math.min(620, innerHeight * 0.44))), tf: t.dateClosed ? "Trade" : "6M", entryIdx: entryIdx, lines: lines,
+      trades: [{d: t.dateOpened, a: "Buy", p: t.entryPrice, q: t.shares}, t.dateClosed ? {d: t.dateClosed, a: "Sell", p: t.exitPrice, q: t.shares} : null].filter(x => x && x.p)});
   }).catch(() => {});
 }
 
@@ -2564,7 +2555,8 @@ function drawBreakdown(elId, trades, key) {
 }
 
 let activeAccount = "all";
-function isPending(t) { return !t.entryThesis || t.hasChart === false; }
+// Charts are imported automatically now, so a missing chart or thesis is not a gap. Only a missing setup is.
+function isPending(t) { return !t.entrySetup || (!!t.dateClosed && !t.exitSetup); }
 function passesFilter(t) {
   if (activeAccount !== "all" && t.account !== activeAccount) return false;
   if (searchTerm && !(t.ticker || "").toLowerCase().includes(searchTerm)) return false;
@@ -2580,15 +2572,12 @@ function completenessBadge(t) {
   const bits = [];
   if (!t.entrySetup) bits.push('no entry setup');
   if (t.dateClosed && !t.exitSetup) bits.push('no exit setup');
-  if (!t.entryThesis) bits.push('no thesis');
-  if (t.hasChart === false) bits.push('no chart');
   return bits.length ? '<span class="gap-badge">' + bits.join(', ') + '</span>'
                       : '<span class="ok-badge">&#10003; complete</span>';
 }
 function updatePillCounts() {
   document.getElementById("cnt-nosetup").textContent = ALL_TRADES.filter(t => !t.entrySetup).length || "";
   document.getElementById("cnt-noexit").textContent = ALL_TRADES.filter(t => t.dateClosed && !t.exitSetup).length || "";
-  document.getElementById("cnt-pending").textContent = ALL_TRADES.filter(isPending).length || "";
 }
 
 let sortState = { key: null, dir: -1 };
@@ -2736,7 +2725,7 @@ function loadTradeChart(t) {
 function renderTradeChart(imgs) {
   const box = document.getElementById("d-chart");
   if (!imgs || !imgs.length) {
-    box.innerHTML = '<div class="chart-note">No chart on this trade yet &mdash; paste one below.</div>';
+    box.innerHTML = "";     // the chart below is drawn automatically; pasting a screenshot is optional
     return;
   }
   box.innerHTML = imgs.map(i =>
@@ -3000,7 +2989,7 @@ function drawDash() {
     '<div class="jw"><h3>Risk &amp; consistency</h3><div class="kv">' + kv("Max drawdown", '<span class="down">' + m(S.mdd) + '</span>', "realised, peak to trough") + kv("Streaks", "best " + S.bestW + "W", "worst " + S.worstL + "L") + '</div><div style="font-size:11.5px;color:var(--dim);margin:12px 0 4px">Realised P&amp;L by month</div><div id="d-mo" style="height:110px"></div></div>' +
     '<div class="jw"><h3>Trading edge</h3><div class="kv">' + kv("Win/loss $ ratio", S.wl == null ? "&mdash;" : S.wl.toFixed(2)) + kv("Expectancy", m(S.exp, 2)) + kv("Expectancy (R)", S.expR == null ? "&mdash;" : sign(S.expR) + S.expR.toFixed(2) + "R", S.withStop + " trades with a real stop") + '</div>' +
       '<div class="dbox"><b style="color:var(--warn)">Add stops</b> &mdash; ' + S.noStop + ' of ' + S.n + ' closed trades have no initial stop, so R-multiples cover only ' + S.withStop + '. Record the stop at entry (Initial Stop $ in Notion, or the stop box in Setups) and this fills in.</div></div>' +
-    '<div class="jw"><h3>Needs review</h3><div style="display:flex;align-items:center;gap:14px"><div style="font-size:34px;font-weight:800;color:var(--warn)">' + queue.length + '</div><div><b>closed trades need a chart or thesis</b><div style="font-size:12px;color:var(--dim)">Work through them one at a time: notes, emotion, tags, then Save &amp; next.</div></div></div><button class="rv-btn" id="d-start" style="margin-top:12px"' + (queue.length ? "" : " disabled") + '>Start reviewing &rarr;</button></div>' +
+    '<div class="jw"><h3>Needs review</h3><div style="display:flex;align-items:center;gap:14px"><div style="font-size:34px;font-weight:800;color:var(--warn)">' + queue.length + '</div><div><b>closed trades are missing a setup</b><div style="font-size:12px;color:var(--dim)">Work through them one at a time: setup, notes, emotion, tags, then Save &amp; next.</div></div></div><button class="rv-btn" id="d-start" style="margin-top:12px"' + (queue.length ? "" : " disabled") + '>Start reviewing &rarr;</button></div>' +
     '<div class="jw w12"><h3>Open positions &amp; near stops</h3>' + (open.length ? '<table class="dtbl"><thead><tr><th>Symbol</th><th class="r">Shares</th><th class="r">Avg</th><th class="r">Last</th><th class="r">P&amp;L %</th><th class="r">Stop</th><th class="r">From stop</th></tr></thead><tbody id="d-open"></tbody></table><div id="d-opd"></div>' :
       '<div class="dbox" style="margin-top:0">No open positions in ' + esc(dashAcct) + ' right now. Open positions appear here with the last close, % from the stop, and a chart when you click a row.</div>') + '</div>' +
     '</div>';
