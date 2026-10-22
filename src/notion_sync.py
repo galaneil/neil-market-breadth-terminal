@@ -372,6 +372,10 @@ def _trade_from_page(page, account):
         "holdDays": _formula_of(p.get("Hold Days")),
         "win": _formula_of(p.get("Win")),
         "outcome": _formula_of(p.get("Outcome")),
+        "postNotes": _text_of(p.get("Post-trade Notes")),
+        "emotion": _select_of(p.get("Emotion")),
+        "processTags": [o["name"] for o in ((p.get("Process Tags") or {}).get("multi_select") or [])],
+        "reviewed": bool((p.get("Reviewed") or {}).get("checkbox")),
         "charts": charts,          # property-mode only; blocks fetched on demand
         "parentId": _relation_ids(p.get(PARENT_FIELD))[0] if _relation_ids(p.get(PARENT_FIELD)) else None,
     }
@@ -584,6 +588,27 @@ def update_stop(page_id, stop, log=print):
     log(f"  stop set on {page_id}: {stop}")
 
 
+# Review fields. They do not exist in your logs yet: they are created (additively, never altering an existing
+# property) the first time a review is saved, in whichever log the trade lives in.
+REVIEW_FIELDS = {"Post-trade Notes": "rich_text", "Emotion": "select", "Process Tags": "multi_select", "Reviewed": "checkbox"}
+_REVIEW_READY = set()
+
+
+def ensure_review_properties(database_id, log=print):
+    if database_id in _REVIEW_READY:
+        return
+    have = _call("GET", f"/databases/{database_id}").get("properties", {})
+    add = {name: {kind: {}} for name, kind in REVIEW_FIELDS.items() if name not in have}
+    if add:
+        _call("PATCH", f"/databases/{database_id}", {"properties": add})
+        log(f"  added review fields to {database_id}: {', '.join(add)}")
+    _REVIEW_READY.add(database_id)
+
+
+def _database_of(page_id):
+    return ((_call("GET", f"/pages/{page_id}").get("parent") or {}).get("database_id"))
+
+
 def update_trade(page_id, fields, log=print):
     """Write one or more editable properties back onto a single trade page.
     `fields` is {property_name: raw_value} -- select/text distinguished by
@@ -594,8 +619,20 @@ def update_trade(page_id, fields, log=print):
             properties[name] = select(value)
         elif name == TRADE_TEXT_FIELD:
             properties[name] = text(value)
+        elif name == "Post-trade Notes":
+            properties[name] = text(value)
+        elif name == "Emotion":
+            properties[name] = select(value)
+        elif name == "Process Tags":
+            properties[name] = {"multi_select": [{"name": str(v)} for v in (value or [])]}
+        elif name == "Reviewed":
+            properties[name] = {"checkbox": bool(value)}
         else:
             raise NotionError(f"{name!r} is not an editable trade field")
+    if any(name in REVIEW_FIELDS for name in fields):
+        db = _database_of(page_id)
+        if db:
+            ensure_review_properties(db, log)
     _call("PATCH", f"/pages/{page_id}", {"properties": properties})
     log(f"  updated {', '.join(fields)} on {page_id}")
 

@@ -1281,6 +1281,18 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as error:
                 self._send(200, json.dumps({"error": str(error)}), "application/json")
             return
+        if route.path == "/api/journal/last":
+            import journal_mfe
+            q = parse_qs(route.query)
+            code = (q.get("country") or ["US"])[0].upper()
+            code = code if code in config.COUNTRIES else "US"
+            out = {}
+            for sym in ((q.get("symbols") or [""])[0].split(","))[:80]:
+                hist = journal_mfe._history(code, sym)
+                if hist and hist.get("close"):
+                    out[sym] = {"close": hist["close"][-1], "date": hist["dates"][-1]}
+            self._send(200, json.dumps(out), "application/json")
+            return
         if route.path == "/api/journal/path":
             import journal_mfe
             q = parse_qs(route.query)
@@ -1960,6 +1972,23 @@ JOURNAL_PAGE = r"""<!doctype html>
   .mfe-bar{position:relative; height:8px; background:var(--line); border-radius:4px; min-width:90px;}
   .mfe-bar i{position:absolute; left:0; top:0; bottom:0; border-radius:4px; background:var(--up); opacity:.85;}
   .mfe-bar i.low{background:var(--warn);}
+  .jtabs{display:flex;gap:2px;border-bottom:1px solid var(--line);margin:0 0 14px;}
+  .jtab{font:inherit;font-size:13px;font-weight:600;padding:9px 14px;border:0;background:none;color:var(--dim);cursor:pointer;border-bottom:2px solid transparent;}
+  .jtab:hover{color:var(--text);} .jtab.on{color:var(--accent);border-bottom-color:var(--accent);}
+  .dgrid{display:grid;grid-template-columns:repeat(12,1fr);gap:12px;} .dgrid .jw{grid-column:span 6;} .dgrid .jw.w12{grid-column:span 12;} .dgrid .jw.w7{grid-column:span 7;} .dgrid .jw.w5{grid-column:span 5;}
+  @media (max-width:900px){.dgrid .jw,.dgrid .jw.w7,.dgrid .jw.w5{grid-column:span 12;}}
+  .jw{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:14px 16px;}
+  .jw h3{margin:0 0 10px;font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:var(--dim);}
+  .jw .kv{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px 16px;} .jw .kv .k{font-size:11px;color:var(--dim);} .jw .kv .v{font-size:19px;font-weight:700;margin-top:2px;font-variant-numeric:tabular-nums;} .jw .kv .s{font-size:11px;color:var(--dim);}
+  .jw .strip{display:flex;gap:6px;flex-wrap:wrap;} .jw .strip span{width:40px;height:32px;border-radius:7px;display:flex;align-items:center;justify-content:center;font-weight:700;font-size:12px;}
+  .jw .strip .W{background:rgba(34,197,94,.16);color:var(--up);border:1px solid rgba(34,197,94,.4);} .jw .strip .L{background:rgba(239,68,68,.14);color:var(--down);border:1px solid rgba(239,68,68,.4);}
+  .dseg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;} .dseg button{border:0;background:transparent;color:var(--dim);font:600 12px inherit;font-family:inherit;padding:5px 11px;cursor:pointer;} .dseg button.on{background:var(--accent);color:#fff;}
+  .dbox{border:1px dashed var(--line);border-radius:10px;padding:11px 13px;font-size:12px;color:var(--dim);line-height:1.5;margin-top:10px;}
+  .dtbl{width:100%;border-collapse:collapse;font-size:12.5px;} .dtbl th{text-align:left;font-size:10.5px;text-transform:uppercase;letter-spacing:.03em;color:var(--dim);padding:7px 9px;border-bottom:1px solid var(--line);} .dtbl td{padding:7px 9px;border-bottom:1px solid var(--line);} .dtbl .r{text-align:right;} .dtbl tbody tr.dclick{cursor:pointer;} .dtbl tbody tr.dclick:hover td{background:color-mix(in srgb,var(--accent) 8%,transparent);}
+  .tagrow{display:flex;flex-wrap:wrap;gap:6px;} .tagchip{border:1px solid var(--line);background:var(--panel);border-radius:99px;padding:3px 10px;font-size:11.5px;font-weight:600;cursor:pointer;color:var(--text);} .tagchip.on{background:var(--accent);border-color:var(--accent);color:#fff;}
+  .rv-bar{display:flex;align-items:center;gap:12px;margin-top:14px;padding-top:12px;border-top:1px solid var(--line);} .rv-stat{flex:1;font-size:12px;color:var(--dim);}
+  .rv-btn{font:700 12.5px inherit;font-family:inherit;padding:8px 14px;border-radius:8px;border:1px solid var(--accent);background:var(--accent);color:#fff;cursor:pointer;}
+  .newsetup{display:flex;gap:6px;margin-top:6px;} .newsetup input{flex:1;padding:7px 9px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--text);font:inherit;}
   #d-path{margin:4px 0 12px; border:1px solid var(--line); border-radius:9px; padding:8px 10px 4px;}
   #d-path[hidden]{display:none;}
 </style></head><body>
@@ -1973,6 +2002,9 @@ JOURNAL_PAGE = r"""<!doctype html>
   </div>
   <div id="sync-banner" hidden style="font-size:12px;background:color-mix(in srgb, var(--accent) 10%, transparent);border:1px solid color-mix(in srgb, var(--accent) 30%, transparent);border-radius:9px;padding:10px 13px;margin-bottom:12px;line-height:1.6"></div>
   <div id="load-err" hidden></div>
+  <div class="jtabs" id="jtabs"><button class="jtab" data-t="dash">Dashboard</button><button class="jtab" data-t="trades">Trades</button></div>
+  <div id="tab-dash" hidden></div>
+  <div id="tab-trades">
 
   <div class="kpi-strip">
     <div class="kpi-tile"><div class="kpi-k">Open positions</div><div class="kpi-v" id="kpi-open">&mdash;</div></div>
@@ -2052,6 +2084,7 @@ JOURNAL_PAGE = r"""<!doctype html>
   </table>
   </div>
   <div id="empty" hidden>No trades match this filter.</div>
+  </div>
 </main>
 
 <div class="overlay" id="overlay" hidden>
@@ -2082,9 +2115,16 @@ JOURNAL_PAGE = r"""<!doctype html>
       <select class="edit-select" id="d-buyquality"></select>
       <div class="field-label">Sell Quality</div>
       <select class="edit-select" id="d-sellquality"></select>
-      <div class="field-label">Entry Thesis</div>
+      <div class="field-label">Entry Thesis (pre-trade notes)</div>
       <textarea class="edit-text" id="d-thesis"></textarea>
+      <div class="field-label">Post-trade notes</div>
+      <textarea class="edit-text" id="d-post" placeholder="What changed after the trade, and what will you carry forward?"></textarea>
+      <div class="field-label">Emotion</div>
+      <select class="edit-select" id="d-emotion"></select>
+      <div class="field-label">Process tags (pick any that apply)</div>
+      <div class="tagrow" id="d-tags"></div>
       <div class="save-status" id="d-save-status"></div>
+      <div class="rv-bar"><span id="d-rvstat" class="rv-stat"></span><button class="rv-btn" id="d-rv-next" type="button">Save &amp; next</button></div>
     </div>
   </div>
 </div>
@@ -2881,6 +2921,170 @@ function loadJournal() {
     el.textContent = "Could not load the trade journal: " + err.message;
   });
 }
+
+// ================= Dashboard tab + review mode =================
+const REVIEW_EMOTIONS = ["Calm", "FOMO", "Fear", "Overconfident", "Frustrated"];
+const REVIEW_TAGS = ["Followed plan", "Chased entry", "Sized too big", "Cut early", "Held too long", "Moved stop", "Added to winner"];
+const NEW_SETUP = "__new__";
+let dashAcct = null, dashStreak = 10, dashOpenSel = null, dashLive = [], dashLast = {};
+let jtab = (function () { try { return localStorage.getItem("journal-tab") || "dash"; } catch (e) { return "dash"; } })();
+
+function setJTab(t) {
+  jtab = t; try { localStorage.setItem("journal-tab", t); } catch (e) {}
+  document.querySelectorAll("#jtabs .jtab").forEach(b => b.classList.toggle("on", b.dataset.t === t));
+  document.getElementById("tab-dash").hidden = t !== "dash"; document.getElementById("tab-trades").hidden = t !== "trades";
+  if (t === "dash") drawDash();
+}
+document.querySelectorAll("#jtabs .jtab").forEach(b => b.addEventListener("click", () => setJTab(b.dataset.t)));
+
+const _drawTrades = draw;
+draw = function () { _drawTrades(); if (jtab === "dash") drawDash(); };
+
+function reviewQueue() {
+  return ALL_TRADES.filter(t => t.dateClosed && isPending(t) && !t.reviewed && (activeAccount === "all" || t.account === activeAccount))
+    .sort((a, b) => (b.dateClosed || "").localeCompare(a.dateClosed || ""));
+}
+
+function dashStats(list) {
+  const cl = list.filter(t => t.dateClosed && t.pnl != null).sort((a, b) => (a.dateClosed || "").localeCompare(b.dateClosed || ""));
+  const wins = cl.filter(t => t.pnl > 0), loss = cl.filter(t => t.pnl <= 0);
+  const gw = wins.reduce((s, t) => s + t.pnl, 0), gl = Math.abs(loss.reduce((s, t) => s + t.pnl, 0)), total = cl.reduce((s, t) => s + t.pnl, 0);
+  let eq = 0, peak = 0, mdd = 0; const curve = {};
+  cl.forEach(t => { eq += t.pnl; peak = Math.max(peak, eq); mdd = Math.min(mdd, eq - peak); curve[t.dateClosed] = eq; });
+  let bestW = 0, worstL = 0, runW = 0, runL = 0;
+  cl.forEach(t => { if (t.pnl > 0) { runW++; runL = 0; } else { runL++; runW = 0; } bestW = Math.max(bestW, runW); worstL = Math.max(worstL, runL); });
+  const months = {}; cl.forEach(t => { const m = t.dateClosed.slice(0, 7); months[m] = (months[m] || 0) + t.pnl; });
+  const withStop = cl.filter(t => t.initialStop && t.entryPrice && t.exitPrice && t.entryPrice > t.initialStop);
+  const rs = withStop.map(t => (t.exitPrice - t.entryPrice) / (t.entryPrice - t.initialStop));
+  const big = (arr, f) => arr.reduce((b, t) => (b == null || f(t) > f(b)) ? t : b, null);
+  return { cl, n: cl.length, wins, loss, total, pf: gl ? gw / gl : null, exp: cl.length ? total / cl.length : 0, winRate: cl.length ? wins.length / cl.length * 100 : 0,
+    avgW: wins.length ? gw / wins.length : 0, avgL: loss.length ? -gl / loss.length : 0, avgWp: mean(wins.map(t => t.pnlPct).filter(x => x != null)), avgLp: mean(loss.map(t => t.pnlPct).filter(x => x != null)),
+    holdW: mean(wins.map(t => t.holdDays).filter(x => x != null)), holdL: mean(loss.map(t => t.holdDays).filter(x => x != null)), bigW: big(wins, t => t.pnl), bigL: big(loss, t => -t.pnl),
+    mdd, bestW, worstL, curve, months, withStop: withStop.length, noStop: cl.length - withStop.length, expR: rs.length ? mean(rs) : null, wl: gl && wins.length && loss.length ? (gw / wins.length) / (gl / loss.length) : null };
+}
+
+function killDash() { dashLive.forEach(h => { try { h.remove ? h.remove() : h.destroy(); } catch (e) {} }); dashLive = []; }
+function drawDash() {
+  const host = document.getElementById("tab-dash"); if (!host || !ALL_TRADES.length) return;
+  killDash();
+  const accounts = [...new Set(ALL_TRADES.map(t => t.account))];
+  if (!dashAcct || accounts.indexOf(dashAcct) < 0) dashAcct = accounts[0];
+  const list = ALL_TRADES.filter(t => t.account === dashAcct), cur = (list[0] || {}).currency || "USD", S = dashStats(list);
+  const m = (v, d) => fmtMoney(v, cur).replace(/\.\d+$/, d ? "$&" : "");
+  const kv = (k, v, s) => '<div><div class="k">' + k + '</div><div class="v">' + v + '</div>' + (s ? '<div class="s">' + s + '</div>' : '') + '</div>';
+  const col = v => v >= 0 ? "up" : "down", sign = v => (v >= 0 ? "+" : "");
+  const queue = reviewQueue().filter(t => t.account === dashAcct);
+  const open = list.filter(t => !t.dateClosed && t.entryPrice);
+  const recent = S.cl.slice(-dashStreak);
+  host.innerHTML =
+    '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:12px"><div class="dseg" id="dacct">' + accounts.map(a => '<button data-a="' + esc(a) + '"' + (a === dashAcct ? ' class="on"' : '') + '>' + esc(a) + '</button>').join("") + '</div>' +
+    '<span style="font-size:12px;color:var(--dim)">' + S.n + ' closed trades &middot; ' + cur + ' &middot; realised P&amp;L from fill prices</span></div>' +
+    '<div class="dgrid">' +
+    '<div class="jw w12"><h3>Performance overview</h3><div class="kv">' + kv("Realised P&amp;L", '<span class="' + col(S.total) + '">' + m(S.total) + '</span>', "all closed trades") + kv("Trades", S.n, S.wins.length + "W / " + S.loss.length + "L") + kv("Win rate", S.winRate.toFixed(1) + "%") + kv("Profit factor", S.pf == null ? "&mdash;" : S.pf.toFixed(2), "gross wins &divide; gross losses") + kv("Expectancy", '<span class="' + col(S.exp) + '">' + m(S.exp, 2) + '</span>', "per trade") + kv("Avg win / loss", '<span class="up">' + m(S.avgW) + '</span> / <span class="down">' + m(S.avgL) + '</span>') + '</div></div>' +
+    '<div class="jw w7"><h3>Equity curve</h3><div id="d-eq" style="height:230px"></div></div>' +
+    '<div class="jw w5"><h3 style="display:flex;justify-content:space-between;align-items:center">Recent trades<span class="dseg" id="dstreak"><button data-n="5"' + (dashStreak === 5 ? ' class="on"' : '') + '>5</button><button data-n="10"' + (dashStreak === 10 ? ' class="on"' : '') + '>10</button></span></h3><div class="strip">' +
+      recent.map(t => '<span class="' + (t.pnl > 0 ? "W" : "L") + '" title="' + esc(t.ticker) + " " + fmtMoney(t.pnl, cur) + " " + fmtPct(t.pnlPct) + " " + t.dateClosed + '">' + (t.pnl > 0 ? "W" : "L") + '</span>').join("") + '</div>' +
+      '<div style="font-size:12px;color:var(--dim);margin-top:8px">Current streak: <b class="' + (recent.length && recent[recent.length - 1].pnl > 0 ? "up" : "down") + '">' + (function () { let k = 0, w = recent.length && recent[recent.length - 1].pnl > 0; for (let i = S.cl.length - 1; i >= 0 && (S.cl[i].pnl > 0) === w; i--) k++; return k + (w ? "W" : "L"); })() + '</b> &middot; oldest &rarr; latest</div></div>' +
+    '<div class="jw"><h3>Win / loss profile</h3><div class="kv">' + kv("Avg win", '<span class="up">' + m(S.avgW) + '</span>', S.avgWp == null ? "" : "+" + (S.avgWp * 100).toFixed(1) + "%") + kv("Avg loss", '<span class="down">' + m(S.avgL) + '</span>', S.avgLp == null ? "" : (S.avgLp * 100).toFixed(1) + "%") + kv("Avg hold, winners", S.holdW == null ? "&mdash;" : S.holdW.toFixed(1) + " days") + kv("Avg hold, losers", S.holdL == null ? "&mdash;" : S.holdL.toFixed(1) + " days") +
+      kv("Biggest win", S.bigW ? '<span class="up">' + m(S.bigW.pnl) + '</span>' : "&mdash;", S.bigW ? esc(S.bigW.ticker) + " &middot; " + S.bigW.dateClosed : "") + kv("Biggest loss", S.bigL ? '<span class="down">' + m(S.bigL.pnl) + '</span>' : "&mdash;", S.bigL ? esc(S.bigL.ticker) + " &middot; " + S.bigL.dateClosed : "") + '</div></div>' +
+    '<div class="jw"><h3>Risk &amp; consistency</h3><div class="kv">' + kv("Max drawdown", '<span class="down">' + m(S.mdd) + '</span>', "realised, peak to trough") + kv("Streaks", "best " + S.bestW + "W", "worst " + S.worstL + "L") + '</div><div style="font-size:11.5px;color:var(--dim);margin:12px 0 4px">Realised P&amp;L by month</div><div id="d-mo" style="height:110px"></div></div>' +
+    '<div class="jw"><h3>Trading edge</h3><div class="kv">' + kv("Win/loss $ ratio", S.wl == null ? "&mdash;" : S.wl.toFixed(2)) + kv("Expectancy", m(S.exp, 2)) + kv("Expectancy (R)", S.expR == null ? "&mdash;" : sign(S.expR) + S.expR.toFixed(2) + "R", S.withStop + " trades with a real stop") + '</div>' +
+      '<div class="dbox"><b style="color:var(--warn)">Add stops</b> &mdash; ' + S.noStop + ' of ' + S.n + ' closed trades have no initial stop, so R-multiples cover only ' + S.withStop + '. Record the stop at entry (Initial Stop $ in Notion, or the stop box in Setups) and this fills in.</div></div>' +
+    '<div class="jw"><h3>Needs review</h3><div style="display:flex;align-items:center;gap:14px"><div style="font-size:34px;font-weight:800;color:var(--warn)">' + queue.length + '</div><div><b>closed trades need a chart or thesis</b><div style="font-size:12px;color:var(--dim)">Work through them one at a time: notes, emotion, tags, then Save &amp; next.</div></div></div><button class="rv-btn" id="d-start" style="margin-top:12px"' + (queue.length ? "" : " disabled") + '>Start reviewing &rarr;</button></div>' +
+    '<div class="jw w12"><h3>Open positions &amp; near stops</h3>' + (open.length ? '<table class="dtbl"><thead><tr><th>Symbol</th><th class="r">Shares</th><th class="r">Avg</th><th class="r">Last</th><th class="r">P&amp;L %</th><th class="r">Stop</th><th class="r">From stop</th></tr></thead><tbody id="d-open"></tbody></table><div id="d-opd"></div>' :
+      '<div class="dbox" style="margin-top:0">No open positions in ' + esc(dashAcct) + ' right now. Open positions appear here with the last close, % from the stop, and a chart when you click a row.</div>') + '</div>' +
+    '</div>';
+  host.querySelectorAll("#dacct button").forEach(b => b.onclick = () => { dashAcct = b.dataset.a; dashOpenSel = null; drawDash(); });
+  host.querySelectorAll("#dstreak button").forEach(b => b.onclick = () => { dashStreak = +b.dataset.n; drawDash(); });
+  const st = document.getElementById("d-start"); if (st) st.onclick = () => { const q = reviewQueue().filter(t => t.account === dashAcct); if (q.length) openDetail(q[0]); };
+  // equity curve + monthly bars
+  const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim(), th = { layout: { background: { color: "transparent" }, textColor: css("--dim"), fontSize: 10 }, grid: { vertLines: { color: css("--line") }, horzLines: { color: css("--line") } }, rightPriceScale: { borderColor: css("--line") }, timeScale: { borderColor: css("--line") } };
+  const eqEl = document.getElementById("d-eq");
+  if (eqEl && window.LightweightCharts) {
+    const c = LightweightCharts.createChart(eqEl, Object.assign({ width: eqEl.clientWidth, height: 230 }, th)); dashLive.push(c);
+    const a = c.addAreaSeries({ lineColor: css("--accent"), topColor: "rgba(37,99,235,.28)", bottomColor: "rgba(37,99,235,.02)", lineWidth: 2, priceLineVisible: false });
+    a.setData(Object.keys(S.curve).sort().map(d => ({ time: d, value: S.curve[d] }))); c.timeScale().fitContent();
+    new ResizeObserver(() => { try { c.applyOptions({ width: eqEl.clientWidth }); } catch (e) {} }).observe(eqEl);
+  }
+  const moEl = document.getElementById("d-mo");
+  if (moEl && window.LightweightCharts) {
+    const c = LightweightCharts.createChart(moEl, Object.assign({ width: moEl.clientWidth, height: 110 }, th, { rightPriceScale: { visible: false } })); dashLive.push(c);
+    const h = c.addHistogramSeries({ priceLineVisible: false, lastValueVisible: false });
+    h.setData(Object.keys(S.months).sort().map(k => ({ time: k + "-15", value: S.months[k], color: S.months[k] >= 0 ? css("--up") : css("--down") }))); c.timeScale().fitContent();
+    new ResizeObserver(() => { try { c.applyOptions({ width: moEl.clientWidth }); } catch (e) {} }).observe(moEl);
+  }
+  // open positions: last close from the local price files, near-stop flag, click for a chart
+  if (open.length) {
+    const code = open[0].country || "US";
+    fetch("/api/journal/last?country=" + code + "&symbols=" + encodeURIComponent(open.map(t => t.ticker).join(","))).then(r => r.json()).then(L => { dashLast = L; drawOpen(open, cur); }).catch(() => drawOpen(open, cur));
+  }
+}
+function drawOpen(open, cur) {
+  const tb = document.getElementById("d-open"); if (!tb) return;
+  tb.innerHTML = open.map(t => {
+    const last = (dashLast[t.ticker] || {}).close, pl = last && t.entryPrice ? (last / t.entryPrice - 1) : null, fs = last && t.initialStop ? (last / t.initialStop - 1) : null;
+    return '<tr class="dclick" data-p="' + esc(t.pageId) + '"' + (t.pageId === dashOpenSel ? ' style="background:color-mix(in srgb,var(--accent) 9%,transparent)"' : '') + '><td><b>' + esc(t.ticker) + '</b></td><td class="r">' + (t.shares == null ? "&mdash;" : t.shares) + '</td><td class="r">' + fmtMoney(t.entryPrice, cur) + '</td><td class="r">' + (last ? fmtMoney(last, cur) : "&mdash;") + '</td><td class="r ' + (pl == null ? "" : pl >= 0 ? "up" : "down") + '">' + fmtPct(pl) + '</td><td class="r">' + (t.initialStop ? fmtMoney(t.initialStop, cur) : "&mdash;") + '</td><td class="r ' + (fs != null && fs < 0.05 ? "down" : "") + '">' + (fs == null ? "&mdash;" : (fs * 100).toFixed(1) + "%" + (fs < 0.05 ? " &middot; near" : "")) + '</td></tr>';
+  }).join("");
+  tb.querySelectorAll("tr").forEach(tr => tr.onclick = () => { dashOpenSel = dashOpenSel === tr.dataset.p ? null : tr.dataset.p; drawOpen(open, cur); });
+  const box = document.getElementById("d-opd"); box.innerHTML = "";
+  const t = open.find(x => x.pageId === dashOpenSel); if (!t || !window.StdChart) return;
+  const lines = []; if (t.entryPrice) lines.push({ p: t.entryPrice, color: "#2563eb", title: "avg buy" }); if (t.initialStop) lines.push({ p: t.initialStop, color: "#dc2626", title: "stop" });
+  box.style.marginTop = "12px";
+  fetch("/api/setups/prices?country=" + (t.country || "US") + "&ticker=" + encodeURIComponent(t.ticker)).then(r => r.json()).then(D => {
+    if (D.error) { box.innerHTML = '<div class="dbox">' + esc(D.error) + '</div>'; return; }
+    dashLive.push(StdChart.mount(box, { t: t.ticker, name: t.ticker, d: D.dates, o: D.open, h: D.high, l: D.low, c: D.close, v: D.volume || null, ht: 360, tf: "6M", lines: lines, entryDate: t.dateOpened,
+      trades: t.dateOpened ? [{ d: t.dateOpened, a: "Buy", p: t.entryPrice, q: t.shares }] : [], logoUrl: t.logoid ? "/api/logo/" + encodeURIComponent(t.logoid) : "" }));
+  }).catch(() => {});
+}
+
+// ---- review mode in the trade sheet
+function reviewFill(t) {
+  fillSelect("d-emotion", REVIEW_EMOTIONS, t.emotion);
+  document.getElementById("d-post").value = t.postNotes || "";
+  const tags = t.processTags || [];
+  document.getElementById("d-tags").innerHTML = REVIEW_TAGS.map(x => '<span class="tagchip' + (tags.indexOf(x) >= 0 ? " on" : "") + '" data-t="' + esc(x) + '">' + esc(x) + '</span>').join("");
+  ["d-entrysetup", "d-exitsetup"].forEach(id => { const el = document.getElementById(id); el.insertAdjacentHTML("beforeend", '<option value="' + NEW_SETUP + '">+ New setup…</option>'); });
+  const q = reviewQueue(), at = q.findIndex(x => x.pageId === t.pageId);
+  document.getElementById("d-rvstat").textContent = t.reviewed ? "Reviewed" : (at >= 0 ? (at + 1) + " of " + q.length + " to review" : (q.length ? q.length + " trades to review" : "Nothing left to review"));
+  document.getElementById("d-rv-next").textContent = q.filter(x => x.pageId !== t.pageId).length ? "Save & next" : "Save & finish";
+  document.querySelectorAll(".newsetup").forEach(n => n.remove());
+}
+const _openDetail = openDetail;
+openDetail = function (t) { _openDetail(t); reviewFill(t); };
+
+function newSetupInput(selId, prop, key) {
+  const sel = document.getElementById(selId); document.querySelectorAll(".newsetup").forEach(n => n.remove());
+  const box = document.createElement("div"); box.className = "newsetup";
+  box.innerHTML = '<input type="text" placeholder="Name of the new ' + (prop === "Entry Setup" ? "entry" : "exit") + ' setup, e.g. Oversold Bounce" maxlength="60"><button class="rv-btn" type="button">Add</button>';
+  sel.insertAdjacentElement("afterend", box);
+  const inp = box.querySelector("input"), go = () => {
+    const name = inp.value.trim(); if (!name) return;
+    SCHEMA[prop] = (SCHEMA[prop] || []).concat(SCHEMA[prop] && SCHEMA[prop].indexOf(name) >= 0 ? [] : [name]);
+    fillSelect(selId, SCHEMA[prop], name); sel.insertAdjacentHTML("beforeend", '<option value="' + NEW_SETUP + '">+ New setup…</option>'); sel.value = name;
+    box.remove(); saveField(prop, name, key);
+  };
+  box.querySelector("button").onclick = go; inp.onkeydown = e => { if (e.key === "Enter") go(); }; inp.focus();
+  sel.value = (currentTrade && currentTrade[key]) || "";
+}
+document.getElementById("d-entrysetup").addEventListener("change", e => { if (e.target.value === NEW_SETUP) { e.stopImmediatePropagation(); newSetupInput("d-entrysetup", "Entry Setup", "entrySetup"); } }, true);
+document.getElementById("d-exitsetup").addEventListener("change", e => { if (e.target.value === NEW_SETUP) { e.stopImmediatePropagation(); newSetupInput("d-exitsetup", "Exit Setup", "exitSetup"); } }, true);
+document.getElementById("d-post").addEventListener("blur", e => { if (currentTrade && e.target.value !== (currentTrade.postNotes || "")) saveField("Post-trade Notes", e.target.value, "postNotes"); });
+document.getElementById("d-emotion").addEventListener("change", e => saveField("Emotion", e.target.value, "emotion"));
+document.getElementById("d-tags").addEventListener("click", e => {
+  const c = e.target.closest(".tagchip"); if (!c || !currentTrade) return;
+  c.classList.toggle("on"); const tags = [...document.querySelectorAll("#d-tags .tagchip.on")].map(x => x.dataset.t);
+  saveField("Process Tags", tags, "processTags");
+});
+document.getElementById("d-rv-next").addEventListener("click", () => {
+  if (!currentTrade) return; const t = currentTrade;
+  const post = document.getElementById("d-post").value; if (post !== (t.postNotes || "")) saveField("Post-trade Notes", post, "postNotes");
+  const q = reviewQueue().filter(x => x.pageId !== t.pageId);
+  saveField("Reviewed", true, "reviewed");
+  setTimeout(() => { if (q.length) openDetail(q[0]); else document.getElementById("overlay").hidden = true; if (jtab === "dash") drawDash(); }, 450);
+});
+
+setJTab(jtab);
+
 loadJournal();
 </script>
 </body></html>"""
