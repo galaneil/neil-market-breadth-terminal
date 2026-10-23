@@ -190,7 +190,7 @@ def plan_leg_actions(legs, rows, open_row=None):
             if row["closed"]:
                 continue                       # resolved already: never touched
             actions.append({"do": "adds" if leg["open"] else "close", "leg": leg, "row": row})
-        elif (newest is None and i == len(legs) - 1) or (newest is not None and opened and opened > newest):
+        elif (newest is None and i == len(legs) - 1) or (newest is not None and opened and opened >= newest):
             actions.append({"do": "create", "leg": leg, "row": None})
             newest = opened if newest is None else max(newest, opened)
     if not matched and open_row is not None and len(legs) == 1:
@@ -201,7 +201,7 @@ def plan_leg_actions(legs, rows, open_row=None):
     return actions
 
 
-def _already_logged(database_id, symbol, date_iso, price):
+def _already_logged(database_id, symbol, date_iso, price, shares=None):
     """True when a row for this ticker, opened on this date (a day of slack) at this price (1%), already
     exists in ANY form: core or pyramid add, open or closed. Core rows are only looked at in a date window
     above, so a leg that is really an add on a position opened before the report window used to look like a
@@ -217,7 +217,11 @@ def _already_logged(database_id, symbol, date_iso, price):
         if (notion_sync._text_of(props.get("Ticker")) or "").upper() != symbol.upper():
             continue
         entry = notion_sync._number_of(props.get("Entry Price"))
-        if entry and abs(entry - price) / price <= 0.01:
+        # Shares must match too: two different same-day trades at nearly the same price (a quick scalp, then the real
+        # buy) are not the same trade.
+        qty = notion_sync._number_of(props.get("Shares"))
+        # price: within 0.12% (or 2 cents), tight enough to tell a scalp from the real buy minutes later at nearly the same price
+        if entry and abs(entry - price) <= max(0.02, 0.0012 * price) and (shares is None or qty is None or abs(qty - shares) < 0.5):
             return True
     return False
 
@@ -242,7 +246,7 @@ def _apply_actions(account, symbol, actions, result, log):
                                               "shares": leg["shares"], "price": leg["entryPrice"]}
             if not first["date"]:
                 continue
-            if _already_logged(account["id"], symbol, first["date"], first["price"]):
+            if _already_logged(account["id"], symbol, first["date"], first["price"], first["shares"]):
                 log(f"  {symbol}: {first['date']} @ {first['price']} is already logged, not creating it again")
                 continue
             created = notion_sync.create_trade(account, symbol, first["date"], first["price"],

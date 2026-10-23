@@ -93,7 +93,8 @@ def test_two_same_day_round_trips_each_find_their_own_row():
     legs = bs._legs_from_fills(fills)["PLTR"]
     r = {"id": "p", "page": {"id": "p", "properties": {}}, "ticker": "PLTR", "opened": "2026-10-15", "closed": None, "entry": 198.745}
     acts = bs.plan_leg_actions(legs, [r])
-    assert [(a["do"], a["leg"]["exitPrice"]) for a in acts] == [("close", 192.0)]
+    # the quick scalp has no row of its own, so it is created as its own trade; the real buy is closed at 192.0
+    assert [(a["do"], a["leg"]["exitPrice"]) for a in acts] == [("create", 198.335), ("close", 192.0)]
 
 
 def test_sell_bigger_than_the_window_leaves_flat_so_the_next_buy_is_its_own_trade():
@@ -106,6 +107,18 @@ def test_sell_bigger_than_the_window_leaves_flat_so_the_next_buy_is_its_own_trad
     legs = bs._legs_from_fills(fills)["TWLO"]
     assert [(l["opened"][:10], (l["closed"] or "")[:10]) for l in legs] == [("2026-09-28", "2026-10-14"), ("2026-10-21", "2026-10-22")]
     assert legs[1]["exitPrice"] == 252.82 and legs[1]["shares"] == 10
+
+
+def test_a_same_day_scalp_with_no_row_of_its_own_is_created():
+    # PLTR 15 Oct: a 15-share scalp (one minute) and then the real 15-share buy; only the real trade has a row.
+    fills = [{"symbol": "PLTR", "quantity": 15, "price": 198.4, "side": "BUY", "datetime": "2026-10-15 11:44:00"},
+             {"symbol": "PLTR", "quantity": 15, "price": 198.335, "side": "SELL", "datetime": "2026-10-15 11:45:00"},
+             {"symbol": "PLTR", "quantity": 15, "price": 198.745, "side": "BUY", "datetime": "2026-10-15 11:47:00"},
+             {"symbol": "PLTR", "quantity": 15, "price": 192.0, "side": "SELL", "datetime": "2026-10-16 11:05:00"}]
+    legs = bs._legs_from_fills(fills)["PLTR"]
+    big = {"id": "p", "page": {"id": "p", "properties": {}}, "ticker": "PLTR", "opened": "2026-10-15", "closed": "2026-10-16", "entry": 198.745}
+    acts = bs.plan_leg_actions(legs, [big])
+    assert [(a["do"], round(a["leg"]["entryPrice"], 2)) for a in acts] == [("create", 198.4)]
 
 
 if __name__ == "__main__":
