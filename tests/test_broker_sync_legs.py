@@ -96,6 +96,18 @@ def test_two_same_day_round_trips_each_find_their_own_row():
     assert [(a["do"], a["leg"]["exitPrice"]) for a in acts] == [("close", 192.0)]
 
 
+def test_sell_bigger_than_the_window_leaves_flat_so_the_next_buy_is_its_own_trade():
+    # TWLO: 4 seen bought, 17 sold (13 were held before the report window), then a fresh buy of 10 sold in two lots.
+    fills = [{"symbol": "TWLO", "quantity": 4, "price": 282.98, "side": "BUY", "datetime": "2026-09-28 12:40:48"},
+             {"symbol": "TWLO", "quantity": 17, "price": 277.4, "side": "SELL", "datetime": "2026-10-14 11:59:47"},
+             {"symbol": "TWLO", "quantity": 10, "price": 266.9995, "side": "BUY", "datetime": "2026-10-21 09:53:11"},
+             {"symbol": "TWLO", "quantity": 5, "price": 252.82, "side": "SELL", "datetime": "2026-10-22 14:05:04"},
+             {"symbol": "TWLO", "quantity": 5, "price": 252.82, "side": "SELL", "datetime": "2026-10-22 14:05:04"}]
+    legs = bs._legs_from_fills(fills)["TWLO"]
+    assert [(l["opened"][:10], (l["closed"] or "")[:10]) for l in legs] == [("2026-09-28", "2026-10-14"), ("2026-10-21", "2026-10-22")]
+    assert legs[1]["exitPrice"] == 252.82 and legs[1]["shares"] == 10
+
+
 if __name__ == "__main__":
     for name, fn in list(globals().items()):
         if name.startswith("test_"):

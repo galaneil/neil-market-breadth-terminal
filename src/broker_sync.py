@@ -385,7 +385,11 @@ def _legs_from_fills(fills):
         leg = leglist[-1]
         (leg["buys"] if side > 0 else leg["sells"]).append(
             (f["quantity"], f["price"], f.get("datetime")))
-        running[sym] = pos + qty
+        # A sell larger than what the report window shows us bought means the rest came from shares held before the
+        # window. The position is flat after it, never negative: a negative balance swallowed the NEXT buy into the old
+        # leg (TWLO: sold 17 against 4 seen, then a fresh buy of 10 looked like part of the closed trade, and its sale
+        # was skipped as "nothing to sell").
+        running[sym] = max(0, pos + qty)
 
     out = {}
     for sym, leglist in legs.items():
