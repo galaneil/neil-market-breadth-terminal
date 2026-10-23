@@ -3281,12 +3281,16 @@
     // ================= Explore view (the default tab) =================
     // One side, one window, one scope at a time. The sector and industry pickers stay on screen, so
     // drilling in or out is one click and never a trip back; the stocks of the picked industry show as charts.
-    const ex = { side: "hi", win: "w13", index: indexes[0].code, sector: null, ind: null, sort: "rs", more: 12 };
+    const ex = { side: "hi", win: "w13", index: indexes[0].code, sector: null, ind: null, sort: "rs", more: 12, all: false };
     const exHost = document.getElementById("mf-explore");
     const classicEl = document.getElementById("mf-classic");
     const WIN_LABEL = { w13: "13 week", w26: "26 week", w52: "52 week" };
     const capOf = function (t) { return (cls[t] && cls[t][3]) || 0; };
     function exNames(sector, industry) {
+      // jumped to an industry with no new highs/lows right now: every name in it, within the chosen index
+      if (ex.all && industry) {
+        return Object.keys(cls).filter(function (t) { const c = cls[t], m = membership[t]; return c && c[0] === sector && (c[1] || "Other") === industry && m && m.indexOf(ex.index) !== -1; });
+      }
       return unionHits(ex.win, ex.side).filter(function (t) {
         const m = membership[t], c = cls[t];
         return m && m.indexOf(ex.index) !== -1 && c && c[0] && (!sector || c[0] === sector) && (!industry || (c[1] || "Other") === industry);
@@ -3309,15 +3313,17 @@
         const ca = Object.values(tree[a]).reduce(function (x, l) { return x + l.length; }, 0), cb = Object.values(tree[b]).reduce(function (x, l) { return x + l.length; }, 0); return cb - ca;
       });
       const count = function (s) { return Object.values(tree[s]).reduce(function (x, l) { return x + l.length; }, 0); };
-      if (ex.sector && !tree[ex.sector]) { ex.sector = null; ex.ind = null; }
-      if (ex.ind && !(tree[ex.sector] || {})[ex.ind]) ex.ind = null;
+      if (!ex.all && ex.sector && !tree[ex.sector]) { ex.sector = null; ex.ind = null; }
+      if (!ex.all && ex.ind && !(tree[ex.sector] || {})[ex.ind]) ex.ind = null;
       const cc = ex.side === "hi" ? "up" : "down", total = secs.reduce(function (x, s) { return x + count(s); }, 0);
       let h = '<div class="mfx-controls">' + seg([["hi", "New highs"], ["lo", "New lows"]], ex.side, "side") + seg(Object.keys(WIN_LABEL).map(function (k) { return [k, WIN_LABEL[k]]; }), ex.win, "win") +
         seg(indexes.map(function (i) { return [i.code, i.label]; }), ex.index, "index") +
         '<span class="bi-note" style="margin:0">' + total + " names over the last " + LOOKBACK_SESSIONS + " sessions</span></div>";
+      h += '<div class="mfx-controls" style="margin-top:-4px"><div class="search-wrap" style="position:relative"><input class="industry-search" id="mfx-jump" placeholder="Jump to an industry…" autocomplete="off"><div class="search-dropdown" id="mfx-jumpdd"></div></div>' +
+        (ex.all ? '<span class="bi-note" style="margin:0">Showing every name in <b>' + ex.ind + '</b>: none has a new ' + (ex.side === "hi" ? "high" : "low") + " in this selection. </span>" + '<button type="button" class="mfx-chip" id="mfx-back">Back to the ' + (ex.side === "hi" ? "highs" : "lows") + "</button>" : "") + "</div>";
       h += '<div class="mfx-picker"><div class="mfx-row"><span class="mfx-lab">Sector</span><button type="button" class="mfx-chip' + (!ex.sector ? " on" : "") + '" data-sec="">All</button>' +
         secs.map(function (s) { return '<button type="button" class="mfx-chip' + (ex.sector === s ? " on" : "") + '" data-sec="' + s.replace(/"/g, "&quot;") + '">' + s + " <b>" + count(s) + "</b></button>"; }).join("") + "</div>";
-      if (ex.sector) {
+      if (ex.sector && tree[ex.sector]) {
         const inds = Object.keys(tree[ex.sector]).sort(function (a, b) { return tree[ex.sector][b].length - tree[ex.sector][a].length; });
         h += '<div class="mfx-row"><span class="mfx-lab">Industry</span><button type="button" class="mfx-chip' + (!ex.ind ? " on" : "") + '" data-ind="">All</button>' +
           inds.map(function (i) { return '<button type="button" class="mfx-chip' + (ex.ind === i ? " on" : "") + '" data-ind="' + i.replace(/"/g, "&quot;") + '">' + i + " <b>" + tree[ex.sector][i].length + "</b></button>"; }).join("") + "</div>";
@@ -3327,10 +3333,30 @@
       exHost.querySelectorAll("button[data-k]").forEach(function (b) {
         b.addEventListener("click", function () { ex[b.dataset.k] = b.dataset.v; if (b.dataset.k !== "side" && b.dataset.k !== "win") { ex.sector = null; ex.ind = null; } ex.more = 12; exDraw(); });
       });
-      exHost.querySelectorAll("[data-sec]").forEach(function (b) { b.addEventListener("click", function () { ex.sector = b.dataset.sec || null; ex.ind = null; ex.more = 12; exDraw(); }); });
-      exHost.querySelectorAll("[data-ind]").forEach(function (b) { b.addEventListener("click", function () { ex.ind = b.dataset.ind || null; ex.more = 12; exDraw(); }); });
+      exHost.querySelectorAll("[data-sec]").forEach(function (b) { b.addEventListener("click", function () { ex.all = false; ex.sector = b.dataset.sec || null; ex.ind = null; ex.more = 12; exDraw(); }); });
+      exHost.querySelectorAll("[data-ind]").forEach(function (b) { b.addEventListener("click", function () { ex.all = false; ex.ind = b.dataset.ind || null; ex.more = 12; exDraw(); }); });
       const body = document.getElementById("mfx-body");
-      if (!secs.length) { body.innerHTML = '<div class="empty-note">Nothing qualifies for this selection. Try a longer window or the other side.</div>'; return; }
+      // jump box: pick any industry; it opens right there even when it has no hits in this selection
+      const jump = document.getElementById("mfx-jump"), jdd = document.getElementById("mfx-jumpdd");
+      const jfill = function (q) {
+        q = q.trim().toLowerCase();
+        const seen = {}, items = [];
+        Object.keys(cls).forEach(function (t) { const c = cls[t]; if (c && c[0] && c[1] && !seen[c[1]]) { seen[c[1]] = c[0]; } });
+        Object.keys(seen).sort().forEach(function (n) { if (!q || n.toLowerCase().indexOf(q) !== -1 || seen[n].toLowerCase().indexOf(q) !== -1) items.push(n); });
+        jdd.innerHTML = items.slice(0, 24).map(function (n) { return '<div class="search-dropdown-row" data-n="' + n.replace(/"/g, "&quot;") + '" data-s="' + seen[n].replace(/"/g, "&quot;") + '">' + n + ' <span style="color:var(--text-dim)">· ' + seen[n] + "</span></div>"; }).join("");
+        jdd.classList.toggle("open", items.length > 0);
+        jdd.querySelectorAll(".search-dropdown-row").forEach(function (row) {
+          row.addEventListener("click", function () {
+            ex.sector = row.dataset.s; ex.ind = row.dataset.n; ex.more = 12;
+            const t = exTree(); ex.all = !((t[ex.sector] || {})[ex.ind]);      // no hits right now: show the whole industry
+            jdd.classList.remove("open"); exDraw();
+          });
+        });
+      };
+      jump.addEventListener("focus", function () { jfill(jump.value); }); jump.addEventListener("input", function () { jfill(jump.value); });
+      document.addEventListener("click", function (e) { if (!e.target.closest(".search-wrap")) jdd.classList.remove("open"); });
+      const back = document.getElementById("mfx-back"); if (back) back.addEventListener("click", function () { ex.all = false; ex.sector = null; ex.ind = null; exDraw(); });
+      if (!secs.length && !ex.all) { body.innerHTML = '<div class="empty-note">Nothing qualifies for this selection. Try a longer window or the other side.</div>'; return; }
       const maxC = Math.max.apply(null, secs.map(count));
       const topNames = function (list) { return list.slice().sort(function (a, b) { return capOf(b) - capOf(a); }).slice(0, 5).join(", "); };
       if (!ex.sector) {
@@ -3341,7 +3367,7 @@
         body.querySelectorAll(".mfx-card").forEach(function (c) { c.addEventListener("click", function () { ex.sector = c.dataset.s; ex.ind = null; exDraw(); }); });
         return;
       }
-      const list = ex.ind ? tree[ex.sector][ex.ind] : null;
+      const list = ex.ind ? (ex.all ? exNames(ex.sector, ex.ind) : tree[ex.sector][ex.ind]) : null;
       if (!list) {
         const inds = Object.keys(tree[ex.sector]).sort(function (a, b) { return tree[ex.sector][b].length - tree[ex.sector][a].length; });
         const avgChg = function (l) { const v = l.map(function (t) { return (DATA.quotes || {})[t]; }).filter(function (q) { return q && q[1] != null; }).map(function (q) { return q[1]; }); return v.length ? v.reduce(function (a, b) { return a + b; }, 0) / v.length : null; };
