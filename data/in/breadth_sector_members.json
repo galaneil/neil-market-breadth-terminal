@@ -1,8 +1,8 @@
 {
- "Commercial Services": 25,
+ "Commercial Services": 26,
  "Communications": 7,
- "Consumer Durables": 47,
- "Consumer Non-Durables": 51,
+ "Consumer Durables": 46,
+ "Consumer Non-Durables": 50,
  "Consumer Services": 29,
  "Distribution Services": 11,
  "Electronic Technology": 37,
@@ -10,13 +10,13 @@
  "Finance": 165,
  "Health Services": 22,
  "Health Technology": 73,
- "Industrial Services": 35,
+ "Industrial Services": 34,
  "Miscellaneous": 6,
- "Non-Energy Minerals": 68,
- "Process Industries": 110,
- "Producer Manufacturing": 159,
+ "Non-Energy Minerals": 69,
+ "Process Industries": 111,
+ "Producer Manufacturing": 161,
  "Retail Trade": 31,
- "Technology Services": 57,
+ "Technology Services": 56,
  "Transportation": 19,
- "Utilities": 33
+ "Utilities": 32
 }
