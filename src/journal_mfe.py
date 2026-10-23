@@ -92,9 +92,17 @@ def rows(trades):
 def path(country, symbol, start, end, pad=15):
     """Daily candles around a trade (with `pad` bars of context either side)."""
     hist = _history(country, symbol)
+    if hist and start and start > hist["dates"][-1]:
+        # Opened after the last stored bar (a position taken today): fetch the newest bars, and if there is still none, draw to the last bar.
+        try:
+            import ticker_topup
+            ticker_topup.ensure_fresh(country, symbol, force=True)
+            hist = _history(country, symbol) or hist
+        except Exception:
+            pass
     if not hist:
         return {"error": "no price history for " + str(symbol)}
-    idx = _window(hist, start, end or hist["dates"][-1])
+    idx = _window(hist, min(start, hist["dates"][-1]) if start else start, end or hist["dates"][-1])
     if not idx:
         return {"error": "no bars in the trade window"}
     lo, hi = max(0, idx[0] - pad), min(len(hist["dates"]), idx[-1] + pad + 1)

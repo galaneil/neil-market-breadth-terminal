@@ -27,18 +27,19 @@ def _last_date(path):
         return None
 
 
-def ensure_fresh(country, symbol, log=print):
-    """Returns True when the ticker file is current (already, or after a top-up)."""
+def ensure_fresh(country, symbol, log=print, force=False):
+    """Returns True when the ticker file is current (already, or after a top-up). `force` refreshes even a file that is
+    only a day behind (a position opened today has no bar in yesterday's file), at most every ten minutes per name."""
     symbol = "".join(ch for ch in (symbol or "").upper() if ch.isalnum() or ch in ".-")[:16]
     if not symbol:
         return False
     path = os.path.join(config.ticker_dir(country), symbol + ".json")
     last = _last_date(path)
-    if last and (date.today() - datetime.strptime(last, "%Y-%m-%d").date()).days <= STALE_DAYS:
+    if not force and last and (date.today() - datetime.strptime(last, "%Y-%m-%d").date()).days <= STALE_DAYS:
         return True
     key = (country, symbol)
     with _LOCK:
-        if time.time() - _TRIED.get(key, 0) < RETRY_SECONDS:
+        if time.time() - _TRIED.get(key, 0) < (600 if force else RETRY_SECONDS):
             return False
         _TRIED[key] = time.time()
     try:

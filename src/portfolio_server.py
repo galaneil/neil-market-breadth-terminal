@@ -1601,8 +1601,11 @@ class Handler(BaseHTTPRequestHandler):
                                if a["label"] == account_label), None)
                 if not account:
                     raise ValueError(f"unknown account {account_label!r}")
+                parent_id = body.get("parentId")
                 result = notion_sync.create_trade(
-                    account, ticker, date_opened, entry_price, shares, log=log)
+                    account, ticker, date_opened, entry_price, shares, log=log,
+                    initial_stop=body.get("initialStop") or None, parent_id=parent_id or None,
+                    entry_setup="Pyramid Add" if parent_id else None)
                 self._send(200, json.dumps(result), "application/json")
             except Exception as error:
                 self._send(400, json.dumps({"error": str(error)}), "application/json")
@@ -1619,6 +1622,10 @@ class Handler(BaseHTTPRequestHandler):
                     raise ValueError("pageId, dateClosed and exitPrice are all required")
                 import notion_sync
                 notion_sync.close_trade(page_id, date_closed, float(exit_price), log=log)
+                account = next((a for a in notion_sync.TRADE_DATABASES if a["label"] == body.get("account")), None)
+                if account:      # a position closed by hand closes its pyramid adds too
+                    import broker_sync
+                    broker_sync._close_children(account, {"id": page_id}, date_closed, float(exit_price), log)
                 self._send(200, json.dumps({"ok": True}), "application/json")
             except Exception as error:
                 self._send(400, json.dumps({"error": str(error)}), "application/json")
@@ -2016,6 +2023,7 @@ JOURNAL_PAGE = r"""<!doctype html>
       <h1>Trade Journal</h1>
       <p class="sub">Reads all three trade logs (NG-IBKR, ShG-AO, SuG-AO) directly — the full record, open and closed. New trades and closes are logged from each broker's own execution history; editing a chip or the thesis writes straight back to Notion; paste a chart (Ctrl/Cmd+V) right in the detail view. Chart and Entry Thesis are the only two things left to fill in by hand.</p>
     </div>
+    <button id="log-trade-btn" style="font-size:12px;font-weight:700;padding:8px 14px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--text);cursor:pointer;white-space:nowrap;margin-right:8px">+ Log a trade</button>
     <button id="sync-brokers-btn" style="font-size:12px;font-weight:700;padding:8px 14px;border-radius:8px;border:1px solid var(--line);background:var(--panel);color:var(--text);cursor:pointer;white-space:nowrap">&#8635; Sync from brokers</button>
   </div>
   <div id="sync-banner" hidden style="font-size:12px;background:color-mix(in srgb, var(--accent) 10%, transparent);border:1px solid color-mix(in srgb, var(--accent) 30%, transparent);border-radius:9px;padding:10px 13px;margin-bottom:12px;line-height:1.6"></div>
@@ -2103,6 +2111,29 @@ JOURNAL_PAGE = r"""<!doctype html>
   <div id="empty" hidden>No trades match this filter.</div>
   </div>
 </main>
+
+<div class="overlay" id="lt-overlay" hidden>
+  <div class="detail-page" style="max-width:520px">
+    <div class="detail-head"><b>Log a trade</b><button class="detail-close" id="lt-close">&times;</button></div>
+    <div class="detail-body">
+      <p style="font-size:12px;color:var(--dim);margin:0 0 10px;line-height:1.5">For a buy or sell you made today that IBKR&rsquo;s report does not have yet. When the report arrives, the sync recognises it (same ticker, day and price) and does not add it a second time.</p>
+      <div class="dseg" id="lt-mode" style="margin-bottom:12px"><button data-m="buy" class="on">I bought</button><button data-m="sell">I sold</button></div>
+      <div id="lt-buy">
+        <div class="field-label">Account</div><select class="edit-select" id="lt-acct"></select>
+        <div class="field-label">Ticker</div><input class="edit-select" id="lt-tk" placeholder="e.g. STLD" autocomplete="off" style="text-transform:uppercase">
+        <div class="field-label">Buy date</div><input class="edit-select" id="lt-date" type="date">
+        <div style="display:flex;gap:10px"><div style="flex:1"><div class="field-label">Price</div><input class="edit-select" id="lt-px" type="number" step="0.01"></div><div style="flex:1"><div class="field-label">Shares</div><input class="edit-select" id="lt-sh" type="number" step="1"></div><div style="flex:1"><div class="field-label">Stop (optional)</div><input class="edit-select" id="lt-stop" type="number" step="0.01"></div></div>
+        <label id="lt-addrow" style="display:none;margin-top:10px;font-size:12.5px"><input type="checkbox" id="lt-add" checked> This adds to my open <b id="lt-addtk"></b> position (pyramid add)</label>
+      </div>
+      <div id="lt-sell" hidden>
+        <div class="field-label">Open position</div><select class="edit-select" id="lt-pos"></select>
+        <div class="field-label">Sell date</div><input class="edit-select" id="lt-sdate" type="date">
+        <div class="field-label">Sell price</div><input class="edit-select" id="lt-spx" type="number" step="0.01">
+      </div>
+      <div class="rv-bar"><span id="lt-msg" class="rv-stat"></span><button class="rv-btn" id="lt-go" type="button">Save to journal</button></div>
+    </div>
+  </div>
+</div>
 
 <div class="overlay" id="overlay" hidden>
   <div class="detail-page">
@@ -3114,6 +3145,57 @@ document.getElementById("d-rv-next").addEventListener("click", () => {
   saveField("Reviewed", true, "reviewed");
   setTimeout(() => { if (q.length) openDetail(q[0]); else document.getElementById("overlay").hidden = true; if (jtab === "dash") drawDash(); }, 450);
 });
+
+
+// ================= Log a trade by hand =================
+(function () {
+  const $ = id => document.getElementById(id), today = () => new Date().toISOString().slice(0, 10);
+  let mode = "buy";
+  const msg = (t, c) => { $("lt-msg").textContent = t; $("lt-msg").style.color = c || "var(--dim)"; };
+  function openLT() {
+    const accts = [...new Set(ALL_TRADES.map(t => t.account))];
+    $("lt-acct").innerHTML = accts.map(a => '<option>' + esc(a) + '</option>').join("");
+    $("lt-date").value = today(); $("lt-sdate").value = today(); ["lt-tk", "lt-px", "lt-sh", "lt-stop", "lt-spx"].forEach(i => $(i).value = "");
+    fillPositions(); msg(""); $("lt-overlay").hidden = false; $("lt-tk").focus();
+  }
+  function openRows() { return ALL_TRADES.filter(t => !t.dateClosed && !t.parentId && t.account === $("lt-acct").value); }
+  function fillPositions() {
+    $("lt-pos").innerHTML = openRows().map(t => '<option value="' + esc(t.pageId) + '">' + esc(t.ticker) + ' &middot; ' + (t.shares ?? "?") + ' sh @ ' + t.entryPrice + ' &middot; opened ' + t.dateOpened + '</option>').join("") || '<option value="">No open positions in this account</option>';
+  }
+  function checkAdd() {
+    const tk = $("lt-tk").value.trim().toUpperCase(), row = openRows().find(t => (t.ticker || "").toUpperCase() === tk);
+    $("lt-addrow").style.display = row ? "block" : "none"; if (row) $("lt-addtk").textContent = tk;
+  }
+  $("log-trade-btn").addEventListener("click", openLT);
+  $("lt-close").addEventListener("click", () => { $("lt-overlay").hidden = true; });
+  $("lt-acct").addEventListener("change", () => { fillPositions(); checkAdd(); });
+  $("lt-tk").addEventListener("input", checkAdd);
+  $("lt-mode").addEventListener("click", e => {
+    const b = e.target.closest("button"); if (!b) return; mode = b.dataset.m;
+    document.querySelectorAll("#lt-mode button").forEach(x => x.classList.toggle("on", x === b));
+    $("lt-buy").hidden = mode !== "buy"; $("lt-sell").hidden = mode !== "sell"; msg("");
+  });
+  $("lt-go").addEventListener("click", () => {
+    $("lt-go").disabled = true; msg("Saving…");
+    let req;
+    if (mode === "buy") {
+      const tk = $("lt-tk").value.trim().toUpperCase(), row = openRows().find(t => (t.ticker || "").toUpperCase() === tk);
+      if (!tk || !$("lt-date").value || !$("lt-px").value || !$("lt-sh").value) { msg("Ticker, date, price and shares are needed.", "var(--down)"); $("lt-go").disabled = false; return; }
+      req = fetch("/api/journal/create-from-broker", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({
+        account: $("lt-acct").value, ticker: tk, dateOpened: $("lt-date").value, entryPrice: +$("lt-px").value, shares: +$("lt-sh").value,
+        initialStop: $("lt-stop").value ? +$("lt-stop").value : null, parentId: row && $("lt-add").checked ? row.pageId : null }) });
+    } else {
+      const id = $("lt-pos").value; if (!id || !$("lt-sdate").value || !$("lt-spx").value) { msg("Pick the position, a date and a price.", "var(--down)"); $("lt-go").disabled = false; return; }
+      req = fetch("/api/journal/close-from-broker", { method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({
+        pageId: id, dateClosed: $("lt-sdate").value, exitPrice: +$("lt-spx").value, account: $("lt-acct").value }) });
+    }
+    req.then(r => r.json()).then(res => {
+      $("lt-go").disabled = false;
+      if (res.error) { msg(res.error, "var(--down)"); return; }
+      msg("Saved ✓", "var(--up)"); setTimeout(() => { $("lt-overlay").hidden = true; loadJournal(); }, 500);
+    }).catch(() => { $("lt-go").disabled = false; msg("Server not reachable.", "var(--down)"); });
+  });
+})();
 
 setJTab(jtab);
 
