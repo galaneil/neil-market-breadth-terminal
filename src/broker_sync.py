@@ -313,6 +313,23 @@ def reconcile_ibkr(log=print):
             "datetime": t.get("datetime"),
         } for t in statement.get("trades", [])]
 
+        # IBKR's daily report stops at the last business day. With the gateway logged in, executions from the days after
+        # it are added, so a trade you just made is caught the moment you press sync. Only days AFTER the report's last
+        # day are taken from the gateway: the same day can be split into different fills in the two sources.
+        result["live"] = {"used": False, "added": 0, "reportThrough": None, "reason": None}
+        try:
+            import ibkr_cp
+            as_of = statement.get("as_of")
+            through = f"{as_of[:4]}-{as_of[4:6]}-{as_of[6:8]}" if as_of and len(as_of) == 8 else (as_of or "")[:10]
+            result["live"]["reportThrough"] = through
+            extra = [e for e in ibkr_cp.recent_executions(days=5) if e["datetime"][:10] > through]
+            fills.extend({k: e[k] for k in ("symbol", "quantity", "price", "side", "datetime")} for e in extra)
+            result["live"].update(used=True, added=len(extra))
+            log(f"  IBKR live gateway: {len(extra)} executions after {through}")
+        except Exception as error:
+            result["live"]["reason"] = str(error)[:120]
+            log(f"  IBKR live gateway not used: {error}")
+
         handled = set()  # tickers whose open/close state came from a real fill
         all_legs = _legs_from_fills(fills)
         stamps = [(l["opened"] or "")[:10] for ls in all_legs.values() for l in ls if l.get("opened")]

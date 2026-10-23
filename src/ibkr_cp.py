@@ -174,6 +174,31 @@ def positions(account_id):
     return _request(f"/portfolio/{account_id}/positions/0") or []
 
 
+def recent_executions(days=3):
+    """Executions straight from the live gateway: [{symbol, side, quantity, price, datetime (local, ET), id}].
+
+    IBKR's end-of-day Flex report stops at the last business day, so anything done today only exists here. Needs the
+    gateway logged in; raises NotAuthenticated / GatewayError otherwise.
+    """
+    from datetime import datetime
+    ensure_session()
+    _request("/iserver/accounts")
+    rows = _request(f"/iserver/account/trades?days={int(days)}") or []
+    out = []
+    for r in rows:
+        if (r.get("sec_type") or r.get("secType") or "STK").upper() not in ("STK", "STOCK"):
+            continue
+        symbol = (r.get("symbol") or r.get("ticker") or "").upper()
+        qty, price = _number(r.get("size")), _number(r.get("price"))
+        ms = r.get("trade_time_r")
+        if not symbol or not qty or not price or not ms:
+            continue
+        out.append({"symbol": symbol, "side": "BUY" if str(r.get("side", "")).upper().startswith("B") else "SELL",
+                    "quantity": abs(qty), "price": price, "id": r.get("execution_id"),
+                    "datetime": datetime.fromtimestamp(ms / 1000).strftime("%Y-%m-%d %H:%M:%S")})
+    return out
+
+
 def resting_stops(account_id=None, log=print):
     """{ticker: stop} from live orders — intended risk, not executed trades.
 

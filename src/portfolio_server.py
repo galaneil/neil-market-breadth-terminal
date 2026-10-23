@@ -1627,15 +1627,18 @@ class Handler(BaseHTTPRequestHandler):
         if route.path == "/api/journal/sync-brokers":
             try:
                 import broker_sync
+                try:
+                    start_gateway()          # so the login page is there if the live read needs it
+                except Exception as error:
+                    log(f"  gateway not started: {error}")
                 results = [broker_sync.reconcile_ibkr(log=log)]
+                # India (Angel One) is only synced when a session already exists; an account that is not logged in
+                # is left out of the result rather than reported as an error.
                 for broker, label in ANGELONE_ACCOUNT_LABEL.items():
                     session = _sessions.get(broker)
                     if session:
                         token, api_key = session
                         results.append(broker_sync.reconcile_angelone(token, api_key, label, log=log))
-                    else:
-                        results.append({"account": label, "created": [], "closed": [],
-                                        "error": "not logged in this session"})
                 self._send(200, json.dumps({"results": results}), "application/json")
             except Exception as error:
                 self._send(500, json.dumps({"error": str(error)}), "application/json")
@@ -2836,6 +2839,9 @@ function renderSyncBanner(results) {
     const closed = (r.closed || []).length;
     const possiblyClosed = r.possibly_closed || [];
     let line = "<b>" + esc(r.account) + "</b>: " + created + " new trade" + (created === 1 ? "" : "s") + " logged";
+    if (r.live) line += r.live.used
+      ? ' <span style="color:var(--up)">&middot; live gateway read (' + r.live.added + ' execution' + (r.live.added === 1 ? "" : "s") + ' after ' + esc(r.live.reportThrough) + ')</span>'
+      : ' <span style="color:var(--warn)">&middot; IBKR&rsquo;s report ends ' + esc(r.live.reportThrough || "yesterday") + ', and the live gateway is not logged in, so trades since then are not visible yet &mdash; log in to the gateway (Live Portfolio page) and press sync again</span>';
     if (closed) line += ", " + closed + " closed (real exit price from the trade book)";
     const added = r.added || [];
     if (added.length) line += ', <span style="color:var(--violet)">' + added.length + " pyramid add" + (added.length === 1 ? "" : "s")
