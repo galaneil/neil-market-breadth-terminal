@@ -94,7 +94,19 @@ def fetch_prices_fmp(client, tickers, index_tickers, drop_partial, price_cache,
     return price_cache
 
 
+def _drop_thin_latest(rows):
+    """Yahoo hands back the in-progress session as if it were final: for ^NDX the newest row can carry a
+    fraction of the real volume. Newest-first rows; drop the head row when its volume is under half the recent median."""
+    if len(rows) > 6 and rows[0].get("volume"):
+        recent = sorted(r.get("volume") or 0 for r in rows[1:6])
+        if rows[0]["volume"] < 0.5 * recent[2]:
+            return rows[1:]
+    return rows
+
+
 def index_ohlc_rows(country_cfg, client, symbol, drop_partial):
+    if symbol in country_cfg.get("yahoo_index_symbols", ()):
+        return _drop_thin_latest(drop_partial(yf_client.historical_index(symbol, period="max")))
     if country_cfg["price_source"] == "fmp":
         return drop_partial(client.historical_eod(symbol))
     return drop_partial(yf_client.historical_index(symbol, period="2y"))
@@ -140,6 +152,8 @@ def run_country(code, client=None):
         extra = []
 
     index_tickers = list(cfg["index_tickers"].values())
+    yahoo_idx = [t for t in index_tickers if t in cfg.get("yahoo_index_symbols", ())]
+    fmp_idx = [t for t in index_tickers if t not in yahoo_idx]
     all_price_tickers = sorted(set(stock_tickers) | set(extra) | set(industry_df["name"]))
     log(f"{code}: universe {len(stock_tickers)} breadth names, "
         f"{len(all_price_tickers)} priced names, {len(index_tickers)} indices")
@@ -149,9 +163,9 @@ def run_country(code, client=None):
     price_cache = cache_mod.load(cache_path)
     bulk = {}
     if cfg["price_source"] == "fmp":
-        fetch_prices_fmp(client, all_price_tickers + index_tickers, index_tickers,
+        fetch_prices_fmp(client, all_price_tickers + fmp_idx, fmp_idx,
                          drop_partial, price_cache, code)
-        targets = all_price_tickers + index_tickers
+        targets = all_price_tickers + fmp_idx
         # A short trailing window, not just today, and fetched regardless of
         # whether TODAY's own session has closed (drop_partial still strips
         # today's row when it hasn't). An already-cached ticker used to get
@@ -204,6 +218,9 @@ def run_country(code, client=None):
                     f"({coverage:.1%}, below the {config.MIN_DAILY_PRICE_COVERAGE:.0%} "
                     "floor) — treating this as a fetch failure, not a thin session, "
                     "and aborting before anything for today is committed.")
+        for symbol in yahoo_idx:      # indices the FMP plan cannot serve; closes join the shared cache
+            for row in _drop_thin_latest(drop_partial(yf_client.historical_index(symbol, period="5y")))[:config.PRICE_WINDOW_DAYS]:
+                cache_mod.set_value(price_cache, symbol, row["date"], row["close"])
     else:
         bulk = yf_client.download_many(
             all_price_tickers, period="2y",
@@ -349,7 +366,7 @@ def run_country(code, client=None):
     data_dir = config.data_dir(code)
     env_records = environment.backfill_environment(
         {key: store.read_jsonl(os.path.join(data_dir, f"index_{key}.jsonl"))
-         for key in cfg["index_tickers"]},
+         for key in cfg.get("environment_indices", cfg["index_tickers"])},
         store.read_jsonl(os.path.join(data_dir, "sector_ranks.jsonl")),
         store.read_jsonl(os.path.join(data_dir, "industry_ranks.jsonl")),
         store.read_jsonl(os.path.join(data_dir, "breadth_adv_decl.jsonl")),

@@ -45,7 +45,10 @@ def _load(country):
         last_dates[dates[-1]] = last_dates.get(dates[-1], 0) + 1
     if not raw:
         return None, None
-    latest = max(last_dates)
+    # The newest date most files agree on, not the newest date in any file: a handful of tickers topped up
+    # with today's partial bar must not become "the session" and leave every other name out (all-zero table).
+    top = max(last_dates.values())
+    latest = max(d for d, c in last_dates.items() if c >= 0.5 * top)
     master = max((v[0] for v in raw.values() if v[0][-1] == latest), key=len)
     return raw, master
 
@@ -159,9 +162,59 @@ def compute(country, log=print):
         snaps.append(snap(sec, [t for t, v in cls.items() if v and v[0] == sec], "sec"))
     snaps = [s for s in snaps if s]
 
+    names_file = _names_file(master, names, C, V, dv20, has_vol, r1, r21, r63, r24, ext, Cd, sma50, cls)
+
     note = (f"Liquid universe: price ≥ {min_price:g} and 20-day average dollar volume ≥ ${min_dv / 1e6:g}M" if has_vol
             else f"Universe: price ≥ {min_price:g} (volume is not reliable for this market)")
-    return {"rows": rows, "ts": ts, "snaps": snaps, "date": master[-1], "universe": len(liq), "note": note}
+    return {"rows": rows, "ts": ts, "snaps": snaps, "date": master[-1], "universe": len(liq), "note": note,
+            "_names": names_file}
+
+
+NAMES_DAYS = ROWS + 10      # the table's 30 sessions plus the 10 needed to roll the 5/10-day ratios from the first row
+
+# metric -> (frame, test, scale). Values are stored as ints: returns in tenths of a percent, extension in tenths of an ATR.
+def _names_file(master, names, C, V, dv20, has_vol, r1, r21, r63, r24, ext, Cd, sma50, cls):
+    """Everything the page needs to re-count the daily table for ANY liquidity setting and to say which stocks,
+    sectors and industries each number is made of. Counted over all names; the page applies the liquidity filter."""
+    n = len(master)
+    ks = list(range(n - NAMES_DAYS, n))
+    secs, inds = [], []
+    sec_ix, ind_ix = {}, {}
+    meta = []
+    for j, t in enumerate(names):
+        c = cls.get(t) or [None, None]
+        sc, ic = (c[0] or "Other"), (c[1] or "Other")
+        if sc not in sec_ix:
+            sec_ix[sc] = len(secs); secs.append(sc)
+        if ic not in ind_ix:
+            ind_ix[ic] = len(inds); inds.append(ic)
+        px = C[j, -1]
+        meta.append([round(float(px), 2) if np.isfinite(px) else 0,
+                     round(float(dv20[j]) / 1e6, 1) if has_vol and np.isfinite(dv20[j]) else None, sec_ix[sc], ind_ix[ic]])
+    spec = {"up4": (r1, ">=", .04, 1000), "dn4": (r1, "<=", -.04, 1000),
+            "up25q": (r63, ">=", .25, 1000), "dn25q": (r63, "<=", -.25, 1000),
+            "up25m": (r21, ">=", .25, 1000), "dn25m": (r21, "<=", -.25, 1000),
+            "up50m": (r21, ">=", .50, 1000), "dn50m": (r21, "<=", -.50, 1000),
+            "up13": (get_r24(r24), ">=", .13, 1000), "dn13": (get_r24(r24), "<=", -.13, 1000),
+            "ext": (ext, ">=", 10, 10)}
+    f = {}
+    for key, (df, op, thr, scale) in spec.items():
+        arr = df.iloc[ks].to_numpy()                           # days x names
+        mask = (arr >= thr) if op == ">=" else (arr <= thr)
+        mask &= np.isfinite(arr)
+        days = []
+        for d in range(len(ks)):
+            idx = np.nonzero(mask[d])[0]
+            days.append([[int(i), int(round(float(arr[d, i]) * scale))] for i in idx])
+        f[key] = days
+    above = (Cd.iloc[ks].to_numpy() > sma50.iloc[ks].to_numpy())
+    valid = np.isfinite(sma50.iloc[ks].to_numpy())
+    a50 = ["".join(("1" if above[d, j] else "0") if valid[d, j] else "-" for d in range(len(ks))) for j in range(len(names))]
+    return {"date": master[-1], "days": [master[k] for k in ks], "tk": names, "m": meta, "sectors": secs, "industries": inds, "f": f, "a50": a50}
+
+
+def get_r24(r):
+    return r
 
 
 def write(country, log=print):
@@ -169,6 +222,12 @@ def write(country, log=print):
     if data is None:
         log("  breadth internals: no price files, skipped")
         return None
+    names_file = data.pop("_names", None)
+    if names_file:
+        npath = os.path.join(config.data_dir(country), "breadth_internals_names.json")
+        with open(npath, "w", encoding="utf-8") as fh:
+            json.dump(names_file, fh, separators=(",", ":"))
+        log(f"  breadth internals: wrote {npath} ({os.path.getsize(npath) // 1024} KB)")
     path = os.path.join(config.data_dir(country), "breadth_internals.json")
     with open(path, "w", encoding="utf-8") as f:
         json.dump(data, f, separators=(",", ":"))

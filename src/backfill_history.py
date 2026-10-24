@@ -50,7 +50,7 @@ AUTO_ADJUST = {"US": False, "IN": True}
 
 # Yahoo's symbols for the index levels each market charts.
 INDEX_SYMBOLS = {
-    "US": {"nasdaq": "^IXIC", "sp500": "^GSPC", "russell2000": "^RUT"},
+    "US": {"nasdaq": "^IXIC", "sp500": "^GSPC", "russell2000": "^RUT", "nasdaq100": "^NDX"},
     "IN": {"sensex": "^BSESN", "nifty500": "^CRSLDX",
            "niftymidcap150": "NIFTYMIDCAP150.NS",
            "niftysmallcap250": "NIFTYSMLCAP250.NS"},
@@ -236,7 +236,7 @@ def run(country):
     data_dir = config.data_dir(country)
     env_records = environment.backfill_environment(
         {key: store.read_jsonl(os.path.join(data_dir, f"index_{key}.jsonl"))
-         for key in cfg["index_tickers"]},
+         for key in cfg.get("environment_indices", cfg["index_tickers"])},
         store.read_jsonl(os.path.join(data_dir, "sector_ranks.jsonl")),
         store.read_jsonl(os.path.join(data_dir, "industry_ranks.jsonl")),
         store.read_jsonl(os.path.join(data_dir, "breadth_adv_decl.jsonl")),

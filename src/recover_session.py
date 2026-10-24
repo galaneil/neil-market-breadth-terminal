@@ -148,7 +148,7 @@ def rebuild(country, price_cache):
     log("  environment...")
     env = environment.backfill_environment(
         {k: store.read_jsonl(os.path.join(data_dir, f"index_{k}.jsonl"))
-         for k in cfg["index_tickers"]},
+         for k in cfg.get("environment_indices", cfg["index_tickers"])},
         store.read_jsonl(os.path.join(data_dir, "sector_ranks.jsonl")),
         store.read_jsonl(os.path.join(data_dir, "industry_ranks.jsonl")),
         store.read_jsonl(os.path.join(data_dir, "breadth_adv_decl.jsonl")),

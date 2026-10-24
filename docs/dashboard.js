@@ -193,6 +193,33 @@
   // folder as this file, so every page that has a price chart gets it with no
   // template changes. The Terminal chart stays as the fallback and as a choice.
   const TVE_SRC = (document.currentScript && document.currentScript.src || "").replace(/dashboard\.js/, "tv_embed.js");
+  // One Escape rule for every page that loads this file: the most recently opened layer (a chart window, the pinned
+  // stock, a drill-down) closes first, one press at a time. Anything new that opens over the page registers here:
+  //   const layer = EscStack.push(function () { ...close it... });   and   EscStack.remove(layer) when it closes by other means.
+  if (!window.EscStack) {
+    const layers = [];
+    document.addEventListener("keydown", function (e) {
+      if (e.key !== "Escape" || e.defaultPrevented || !layers.length) return;
+      if (e.target && e.target.closest && e.target.closest(".tv-in")) return;      // a chart's own text box handles its own Escape
+      const top = layers[layers.length - 1];
+      e.preventDefault(); e.stopImmediatePropagation();
+      top.close();
+    }, true);
+    window.EscStack = {
+      push: function (fn) { const l = { close: function () { window.EscStack.remove(l); fn(); } }; layers.push(l); return l; },
+      remove: function (l) { const i = layers.indexOf(l); if (i >= 0) layers.splice(i, 1); },
+    };
+  }
+  const EscStack = window.EscStack;
+  const LIQ_SRC = (document.currentScript && document.currentScript.src || "").replace(/dashboard\.js/, "liq_presets.js");
+  function withLiq(cb) {
+    if (window.LiqPresets) return cb();
+    if (!LIQ_SRC) return;
+    const sc = document.createElement("script");
+    sc.src = LIQ_SRC;
+    sc.onload = cb;
+    document.head.appendChild(sc);
+  }
   let tveQueue = null;
   function withTVE(cb) {
     if (window.TVE) return cb();
@@ -654,7 +681,7 @@
     tvAttach({
       bar: card.querySelector(".tve-row"), host: card.querySelector(".tve-host"),
       hide: [card.querySelector(".tf-toggle"), container, card.querySelector(".vol-sub")],
-      canTV: ["index_nasdaq", "index_sp500", "index_russell2000", "index_sensex"].indexOf(seriesKey) >= 0,
+      canTV: ["index_nasdaq100", "index_nasdaq", "index_sp500", "index_russell2000", "index_sensex"].indexOf(seriesKey) >= 0,
       symbolFn: function () { return TVE.indexSymbol(seriesKey); }, height: 440, tf: "1Y",
       dataFn: function () {
         // an index series carries no open, so each bar opens at the previous close; no volume for some indices
@@ -1133,7 +1160,7 @@
     // every caller to have one.
     const tickerDir = DATA.tickerDir || "tickers";
     const tmleDir = DATA.tmleDir;
-    let pinChart = null;
+    let pinChart = null, pinLayer = null;
     openStockPin = function (ticker, context) {
       document.getElementById("pin-symbol").textContent = ticker;
       document.getElementById("pin-name").textContent = context || "";
@@ -1147,6 +1174,7 @@
       document.getElementById("pin-verdict").textContent = "";
       document.getElementById("pin-stats").innerHTML = "";
       pin.classList.add("open");
+      if (!pinLayer) pinLayer = EscStack.push(function () { pin.classList.remove("open"); pinLayer = null; });
 
       // The price fetch (ADR/turnover) and the TMLE fetch (Score/off-high)
       // both write into #pin-stats, and race against each other over the
@@ -1188,9 +1216,10 @@
               scaleMargins: hasVolume ? { top: 0.08, bottom: 0.26 } : { top: 0.08, bottom: 0.08 } },
             timeScale: { borderColor: th.border, rightOffset: 2 },
           });
-          const tail = 60;
-          const start = Math.max(0, n - tail);
-          const bars = pinChart.addBarSeries({ upColor: th.up, downColor: th.down, openVisible: false, thinBars: false });
+          // Every bar is loaded so you can scroll back through the earlier trend; the window opens on the last ~6 months.
+          const start = 0;
+          const SHOW = 126;
+          const bars = pinChart.addCandlestickSeries({ upColor: th.up, downColor: th.down, borderUpColor: th.up, borderDownColor: th.down, wickUpColor: th.up, wickDownColor: th.down, priceLineVisible: false });
           // Coloured by close vs prior close, same convention as every
           // other chart — openVisible is false, so this only changes colour.
           bars.setData(p.dates.slice(start, n + 1).map(function (dt, i) {
@@ -1268,10 +1297,11 @@
               + fmtTurnover(turnover) + '</div></div>';
           paintStats();
 
-          pinChart.timeScale().fitContent();
+          const showRecent = function () { pinChart.timeScale().setVisibleLogicalRange({ from: Math.max(-1, n - SHOW), to: n + 3 }); };
+          showRecent();
           requestAnimationFrame(function () {
             pinChart.applyOptions({ width: chartEl.clientWidth, height: chartEl.clientHeight || 120 });
-            pinChart.timeScale().fitContent();
+            showRecent();
           });
         })
         .catch(function () {
@@ -1305,16 +1335,13 @@
 
     document.getElementById("pin-close").addEventListener("click", function () {
       pin.classList.remove("open");
+      if (pinLayer) { EscStack.remove(pinLayer); pinLayer = null; }
     });
     // Escape closes the pin the same way the × does, from anywhere on the
     // page — not just when focus happens to be inside it. Checked against
     // .open rather than always firing so Escape still does nothing (rather
     // than something silently wrong) on a page where the pin was never opened.
-    document.addEventListener("keydown", function (e) {
-      if (e.key === "Escape" && pin.classList.contains("open")) {
-        pin.classList.remove("open");
-      }
-    });
+    // (Escape itself is handled by EscStack above, so layered windows close in order.)
     document.getElementById("pin-open").addEventListener("click", function (e) {
       e.preventDefault();
       Sync.publish({ ticker: document.getElementById("pin-symbol").textContent });
@@ -2797,31 +2824,165 @@
     const last = BI.rows[BI.rows.length - 1], rg = regime(last.a50);
     const upC = "34,197,94", dnC = "239,68,68";
 
-    function cell(v, max, kind) {
+    function cell(v, max, kind, attrs) {
       if (v == null) return "<td></td>";
       let st = "";
       if (kind === "up") st = "background:rgba(" + upC + "," + Math.min(0.85, 0.12 + v / max * 0.73).toFixed(2) + ")";
       else if (kind === "dn") st = "background:rgba(" + dnC + "," + Math.min(0.85, 0.1 + v / max * 0.75).toFixed(2) + ")";
       else if (kind === "ratio") st = v >= 1 ? "background:rgba(" + upC + "," + Math.min(0.8, 0.2 + (v - 1) * 0.3).toFixed(2) + ")" : "background:rgba(" + dnC + "," + Math.min(0.8, 0.2 + (1 - v) * 0.7).toFixed(2) + ")";
       else if (kind === "ext") st = v >= 20 ? "background:rgba(180,140,40,.6)" : "";
-      return '<td class="c" style="' + st + '">' + v + "</td>";
+      return '<td class="c' + (attrs ? " bi-click" : "") + '" style="' + st + '"' + (attrs || "") + ">" + v + "</td>";
     }
     const COLS = [["up4", "Stocks up 4%+ today", "up", "P"], ["dn4", "Stocks down 4%+ today", "dn", "P"], ["r5", "5-day ratio", "ratio", "P"], ["r10", "10-day ratio", "ratio", "P"],
       ["up25q", "Up 25%+ quarter", "up", "S"], ["dn25q", "Down 25%+ quarter", "dn", "S"], ["up25m", "Up 25%+ month", "up", "S"], ["dn25m", "Down 25%+ month", "dn", "S"],
       ["up50m", "Up 50%+ month", "up", "S"], ["dn50m", "Down 50%+ month", "dn", "S"], ["up13", "Up 13%+ 34 days", "up", "S"], ["dn13", "Down 13%+ 34 days", "dn", "S"]];
 
-    function dailyTable() {
-      const mx = {}; COLS.forEach(function (c) { mx[c[0]] = Math.max.apply(null, [1].concat(BI.rows.map(function (r) { return r[c[0]]; }))); });
-      const rows = BI.rows.slice().reverse();
-      return '<p class="bi-note">The daily internals table, newest first. Primary indicators in gold, secondary in green. Colour strength is relative to that column\'s own range over the days shown.</p>' +
+    // ---- Daily table: counted live over a liquidity setting you can save as a preset. Every count opens the stocks behind it. ----
+    const DD_PAIRS = { up4: ["up4", "dn4"], dn4: ["up4", "dn4"], up25q: ["up25q", "dn25q"], dn25q: ["up25q", "dn25q"], up25m: ["up25m", "dn25m"], dn25m: ["up25m", "dn25m"],
+      up50m: ["up50m", "dn50m"], dn50m: ["up50m", "dn50m"], up13: ["up13", "dn13"], dn13: ["up13", "dn13"], ext: ["ext"] };
+    const DD_LABEL = { up4: "Up 4%+ in a day", dn4: "Down 4%+ in a day", up25q: "Up 25%+ in a quarter", dn25q: "Down 25%+ in a quarter", up25m: "Up 25%+ in a month", dn25m: "Down 25%+ in a month",
+      up50m: "Up 50%+ in a month", dn50m: "Down 50%+ in a month", up13: "Up 13%+ in 34 days", dn13: "Down 13%+ in 34 days", ext: "10+ ATR above the 50-day average" };
+    let NM = null, nmState = "idle";
+    let lq = (DATA.country === "IN") ? { minPrice: 20, minDV: 0 } : { minPrice: 5, minDV: 5 };
+    let dd = null;
+    try { const saved = JSON.parse(localStorage.getItem("bi.liq") || "null"); if (saved && typeof saved.minPrice === "number") lq = saved; } catch (e) {}
+    const esc2 = function (t) { return String(t).replace(/[&<>"]/g, function (c) { return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]; }); };
+
+    function nmLoad(done) {
+      if (NM || nmState === "missing") return done();
+      if (nmState === "loading") return;
+      nmState = "loading";
+      fetch("bi_names.json", { cache: "no-cache" }).then(function (r) { return r.ok ? r.json() : null; })
+        .then(function (j) { NM = j; nmState = j ? "ready" : "missing"; done(); })
+        .catch(function () { nmState = "missing"; done(); });
+    }
+    const liqOk = function () { return NM.m.map(function (m) { return m[0] >= lq.minPrice && (m[1] == null || m[1] >= lq.minDV); }); };
+
+    function liveRows(ok) {
+      const F = NM.f, nd = NM.days.length, cnt = {};
+      Object.keys(F).forEach(function (k) { cnt[k] = F[k].map(function (day) { let c = 0; day.forEach(function (e) { if (ok[e[0]]) c++; }); return c; }); });
+      const rows = [], first = Math.max(9, nd - 30);
+      for (let d = first; d < nd; d++) {
+        const r = { d: NM.days[d], di: d };
+        Object.keys(F).forEach(function (k) { r[k] = cnt[k][d]; });
+        const sum = function (k, n) { let t = 0; for (let i = d - n + 1; i <= d; i++) t += cnt[k][i]; return t; };
+        r.r5 = +(sum("up4", 5) / Math.max(1, sum("dn4", 5))).toFixed(2);
+        r.r10 = +(sum("up4", 10) / Math.max(1, sum("dn4", 10))).toFixed(2);
+        let above = 0, valid = 0;
+        for (let j = 0; j < NM.a50.length; j++) { if (!ok[j]) continue; const ch = NM.a50[j].charAt(d); if (ch === "-") continue; valid++; if (ch === "1") above++; }
+        r.a50 = valid ? +(above / valid * 100).toFixed(1) : 0;
+        rows.push(r);
+      }
+      return rows;
+    }
+
+    function dailyTable(rows0) {
+      const rows = rows0 || BI.rows;
+      const mx = {}; COLS.forEach(function (c) { mx[c[0]] = Math.max.apply(null, [1].concat(rows.map(function (r) { return r[c[0]]; }))); });
+      const clickable = !!rows0;
+      const att = function (r, k) { return clickable && DD_PAIRS[k] ? ' data-di="' + r.di + '" data-k="' + k + '" title="Click to see the stocks, by sector and industry"' : ""; };
+      const list = rows.slice().reverse();
+      return '<p class="bi-note">The daily internals table, newest first. Primary indicators in gold, secondary in green. ' + (clickable ? "<b>Click any count</b> to see which sectors, industries and stocks it is made of. " : "") + 'Colour strength is relative to that column\'s own range over the days shown.</p>' +
         '<div class="table-wrap" style="max-height:none"><table class="bi-table" style="min-width:1100px"><thead>' +
         '<tr><th rowspan="2" style="background:#f2b705;color:#111;text-align:center">Date</th><th colspan="4" style="background:#f2b705;color:#111;text-align:center">Primary breadth indicators</th><th colspan="8" style="background:#22c55e;color:#06210f;text-align:center">Secondary breadth indicators</th><th rowspan="2" style="background:#a78bfa;color:#1b0f3a;text-align:center">10x ATR extended</th><th rowspan="2" style="background:#60a5fa;color:#071a33;text-align:center">&gt; 50 SMA</th></tr>' +
         "<tr>" + COLS.map(function (c) { return '<th style="text-align:center;white-space:normal;font-size:9.5px;background:' + (c[3] === "P" ? "#fbbf24" : "#34d399") + ';color:#111">' + c[1] + "</th>"; }).join("") + "</tr></thead><tbody>" +
-        rows.map(function (r) {
-          return '<tr><td style="font-weight:600">' + r.d + "</td>" + COLS.map(function (c) { return cell(r[c[0]], mx[c[0]], c[2]); }).join("") + cell(r.ext, 1, "ext") +
+        list.map(function (r) {
+          return '<tr><td style="font-weight:600">' + r.d + "</td>" + COLS.map(function (c) { return cell(r[c[0]], mx[c[0]], c[2], att(r, c[0])); }).join("") + cell(r.ext, 1, "ext", att(r, "ext")) +
             '<td class="c ' + (r.a50 >= 50 ? "up" : "down") + '">' + r.a50 + "%</td></tr>";
         }).join("") + "</tbody></table></div>";
     }
+
+    // The two sides of one reading, side by side: where the up-moves came from and where the down-moves came from.
+    function ddHTML(ok) {
+      const keys = DD_PAIRS[dd.k], di = dd.di;
+      const secTot = {}, indTot = {};
+      NM.m.forEach(function (m, j) { if (!ok[j]) return; secTot[m[2]] = (secTot[m[2]] || 0) + 1; indTot[m[3]] = (indTot[m[3]] || 0) + 1; });
+      const fmt = function (k, v) { return k === "ext" ? (v / 10).toFixed(1) + " ATR" : (v >= 0 ? "+" : "") + (v / 10).toFixed(1) + "%"; };
+      const cols = keys.map(function (k, ci) {
+        const items = NM.f[k][di].filter(function (e) { return ok[e[0]]; });
+        const st = dd.sel[ci], good = /^up|^ext/.test(k);
+        const color = good ? "var(--up,#16a34a)" : "var(--down,#dc2626)";
+        const head = '<div class="bi-dd-h"><b>' + DD_LABEL[k] + '</b><span>' + items.length + " stocks &middot; " + (items.length / Math.max(1, ok.filter(Boolean).length) * 100).toFixed(1) + "% of the liquid universe</span></div>";
+        let body = "";
+        const group = function (pick, tot, names, act) {
+          const g = {};
+          items.forEach(function (e) { const key = pick(NM.m[e[0]]); if (key == null) return; g[key] = (g[key] || 0) + 1; });
+          const arr = Object.keys(g).map(function (x) { return [+x, g[x]]; }).sort(function (a, b) { return b[1] - a[1]; });
+          const top = arr.length ? arr[0][1] : 1;
+          return arr.slice(0, 25).map(function (a) {
+            return '<button type="button" class="bi-dd-row" data-ci="' + ci + '" data-act="' + act + '" data-i="' + a[0] + '"><span class="n">' + esc2(names[a[0]]) + '</span><span class="b"><i style="width:' + (a[1] / top * 100).toFixed(0) + "%;background:" + color + '"></i></span><span class="c">' + a[1] + '</span><span class="p">' + (a[1] / Math.max(1, tot[a[0]]) * 100).toFixed(0) + "% of its group</span></button>";
+          }).join("") || '<div class="empty-note">None on this day.</div>';
+        };
+        if (st.ind != null) {
+          const rowsS = items.filter(function (e) { return NM.m[e[0]][3] === st.ind; }).sort(function (a, b) { return Math.abs(b[1]) - Math.abs(a[1]); });
+          body = '<div class="bi-dd-crumb"><button type="button" data-ci="' + ci + '" data-act="up">&lsaquo; ' + esc2(NM.industries[st.ind]) + "</button></div>" +
+            '<table class="bi-table"><thead><tr><th>Stock</th><th class="r">Price</th><th class="r">Move</th></tr></thead><tbody>' +
+            rowsS.map(function (e) { const m = NM.m[e[0]]; return '<tr class="bi-dd-stock" data-sym="' + esc2(NM.tk[e[0]]) + '"><td><b>' + esc2(NM.tk[e[0]]) + '</b></td><td class="r">' + m[0] + '</td><td class="r" style="color:' + color + '">' + fmt(k, e[1]) + "</td></tr>"; }).join("") + "</tbody></table>";
+        } else if (st.sec != null) {
+          const sub = items.filter(function (e) { return NM.m[e[0]][2] === st.sec; });
+          const g = {}; sub.forEach(function (e) { const x = NM.m[e[0]][3]; g[x] = (g[x] || 0) + 1; });
+          const arr = Object.keys(g).map(function (x) { return [+x, g[x]]; }).sort(function (a, b) { return b[1] - a[1]; }), top = arr.length ? arr[0][1] : 1;
+          body = '<div class="bi-dd-crumb"><button type="button" data-ci="' + ci + '" data-act="up">&lsaquo; ' + esc2(NM.sectors[st.sec]) + " &middot; industries</button></div>" +
+            arr.map(function (a) { return '<button type="button" class="bi-dd-row" data-ci="' + ci + '" data-act="ind" data-i="' + a[0] + '"><span class="n">' + esc2(NM.industries[a[0]]) + '</span><span class="b"><i style="width:' + (a[1] / top * 100).toFixed(0) + "%;background:" + color + '"></i></span><span class="c">' + a[1] + '</span><span class="p">' + (a[1] / Math.max(1, indTot[a[0]]) * 100).toFixed(0) + "% of its group</span></button>"; }).join("");
+        } else if (st.view === "ind") {
+          body = '<div class="bi-dd-crumb"><button type="button" data-ci="' + ci + '" data-act="up">&lsaquo; Sectors</button><span>top industries, all sectors</span></div>' + group(function (m) { return m[3]; }, indTot, NM.industries, "ind");
+        } else {
+          body = '<div class="bi-dd-crumb"><span>By sector</span><button type="button" data-ci="' + ci + '" data-act="allind">Top industries instead</button></div>' + group(function (m) { return m[2]; }, secTot, NM.sectors, "sec");
+        }
+        return '<div class="bi-dd-col">' + head + body + "</div>";
+      });
+      return '<div class="bi-dd-top"><b>' + NM.days[di] + "</b><span>Click a sector to see its industries, an industry to see its stocks, a stock to open its chart.</span><button type=\"button\" id=\"bi-dd-x\" class=\"tf-btn\">Close</button></div>" +
+        '<div class="bi-dd-cols' + (keys.length === 1 ? " one" : "") + '">' + cols.join("") + "</div>";
+    }
+
+    function dailyView() {
+      root.innerHTML = '<div class="bi-liqbar"><div id="bi-liq"></div><label>Min price $<input type="number" id="bi-minp" min="0" step="0.5" value="' + lq.minPrice + '"></label>' +
+        '<label>Min avg $ volume (M)<input type="number" id="bi-mindv" min="0" step="1" value="' + lq.minDV + '"></label><span class="bi-note" id="bi-liqn" style="margin:0"></span></div>' +
+        '<div id="bi-tab">Loading the stock lists…</div><div id="bi-dd" class="bi-dd" hidden></div>';
+      const tab = document.getElementById("bi-tab"), host = document.getElementById("bi-dd");
+      let picker = null, ddLayer = null;
+      function paint() {
+        if (nmState === "missing") { tab.innerHTML = dailyTable(null); return; }
+        const ok = liqOk(), rows = liveRows(ok);
+        tab.innerHTML = dailyTable(rows);
+        document.getElementById("bi-liqn").textContent = ok.filter(Boolean).length.toLocaleString() + " stocks counted · price ≥ $" + lq.minPrice + (NM.m.some(function (m) { return m[1] != null; }) ? " and 20-day avg $ volume ≥ $" + lq.minDV + "M" : "");
+        try { localStorage.setItem("bi.liq", JSON.stringify(lq)); } catch (e) {}
+        if (dd) { host.hidden = false; host.innerHTML = ddHTML(ok); if (!ddLayer) ddLayer = EscStack.push(function () { ddLayer = null; dd = null; paint(); }); }
+        else { host.hidden = true; if (ddLayer) { EscStack.remove(ddLayer); ddLayer = null; } }
+        if (picker) picker.refresh();
+      }
+      function setLq(o) { lq = { minPrice: o.minPrice, minDV: o.minDV }; document.getElementById("bi-minp").value = lq.minPrice; document.getElementById("bi-mindv").value = lq.minDV; paint(); }
+      let t = null;
+      ["bi-minp", "bi-mindv"].forEach(function (id) {
+        document.getElementById(id).addEventListener("input", function () {
+          clearTimeout(t); t = setTimeout(function () {
+            lq = { minPrice: +document.getElementById("bi-minp").value || 0, minDV: +document.getElementById("bi-mindv").value || 0 }; paint();
+          }, 250);
+        });
+      });
+      root.onclick = function (e) {
+        const c = e.target.closest("td[data-k]");
+        if (c) { dd = { k: c.dataset.k, di: +c.dataset.di, sel: [{}, {}] }; paint(); host.scrollIntoView({ block: "nearest", behavior: "smooth" }); return; }
+        if (e.target.closest("#bi-dd-x")) { dd = null; paint(); return; }
+        const sym = e.target.closest("tr[data-sym]");
+        if (sym) { tvModal(sym.dataset.sym); return; }
+        const b = e.target.closest("button[data-act]");
+        if (b && dd) {
+          const st = dd.sel[+b.dataset.ci], a = b.dataset.act;
+          if (a === "sec") st.sec = +b.dataset.i; else if (a === "ind") st.ind = +b.dataset.i;
+          else if (a === "allind") st.view = "ind";
+          else if (a === "up") { if (st.ind != null) st.ind = null; else if (st.sec != null) st.sec = null; else st.view = null; }
+          paint();
+        }
+      };
+      nmLoad(function () {
+        paint();
+        withLiq(function () {
+          picker = window.LiqPresets.mount(document.getElementById("bi-liq"), { scope: "breadth-internals", market: DATA.country === "IN" ? "IN" : "US", get: function () { return lq; }, set: setLq });
+        });
+      });
+    }
+
     function snapshot() {
       const tint = function (v, sc) { return v == null ? "" : "background:rgba(" + (v >= 0 ? "45,170,140" : "230,90,90") + "," + Math.min(0.4, Math.abs(v) / sc * 0.4).toFixed(2) + ")"; };
       const row = function (r) {
@@ -2885,7 +3046,7 @@
       over.hidden = cur !== "overview"; root.hidden = cur === "overview"; head.innerHTML = "";
       if (cur === "overview") return;
       head.innerHTML = '<p class="bi-note" style="display:flex;gap:12px;flex-wrap:wrap;align-items:center"><span class="badge on ' + rg[1] + '">Breadth regime: ' + rg[0] + " &middot; " + last.a50 + "% above 50 SMA</span><span>" + BI.universe.toLocaleString() + " stocks &middot; " + BI.note + " &middot; as of " + BI.date + "</span></p>";
-      if (cur === "daily") root.innerHTML = dailyTable();
+      if (cur === "daily") dailyView();
       else if (cur === "snap") root.innerHTML = snapshot();
       else charts(cur);
     }
@@ -2919,7 +3080,9 @@
       '<button data-e="std" class="on">Chart</button><button data-e="tv">TradingView</button></span><button class="tf-btn" type="button" id="tvm-x">Close</button></div><div class="tv-modal-body"></div></div>';
     document.body.appendChild(m);
     const body = m.querySelector(".tv-modal-body"), seg = m.querySelector("#tvm-seg");
-    const close = function () { m.remove(); };
+    let layer = null;
+    const close = function () { if (layer) EscStack.remove(layer); m.remove(); };
+    layer = EscStack.push(close);
     m.querySelector("#tvm-x").addEventListener("click", close);
     m.addEventListener("click", function (e) { if (e.target === m) close(); });
     const tvBtn = seg.querySelector('[data-e="tv"]');
@@ -4315,6 +4478,63 @@
         ], { yReverse: true });
       });
     }
+
+    // Search: type part of a name, press Enter (or click a suggestion) and the table jumps to that row,
+    // highlights it and opens its rank chart.
+    (function () {
+      const anchor = table.closest(".table-wrap") || table;
+      if (!anchor.parentNode || anchor.parentNode.querySelector(".rank-search[data-for='" + tableId + "']")) return;
+      const box = document.createElement("div");
+      box.className = "rank-search";
+      box.setAttribute("data-for", tableId);
+      box.innerHTML = '<input type="search" placeholder="Search ' + nameField + ' (e.g. steel) and press Enter" aria-label="Search ' + nameField + '" autocomplete="off"><div class="rank-search-list" hidden></div>';
+      anchor.parentNode.insertBefore(box, anchor);
+      const input = box.querySelector("input"), list = box.querySelector(".rank-search-list");
+      let matches = [];
+      function find(term) {
+        const t = term.trim().toLowerCase();
+        if (!t) return [];
+        const scored = [];
+        (latest[itemsField] || []).forEach(function (it) {
+          const n = String(it[nameField]).toLowerCase(), at = n.indexOf(t);
+          if (at < 0) return;
+          scored.push({ it: it, s: at === 0 ? 0 : (n.charAt(at - 1) === " " || n.charAt(at - 1) === "&" ? 1 : 2) });
+        });
+        scored.sort(function (a, b) { return a.s - b.s || a.it.rank - b.it.rank; });
+        return scored.map(function (x) { return x.it; });
+      }
+      function jump(item) {
+        list.hidden = true;
+        input.value = item[nameField];
+        selectItem(item[nameField]);
+        const row = tbody.querySelector("tr.selected");
+        if (row) {
+          row.scrollIntoView({ block: "center", behavior: "smooth" });
+          row.classList.add("rank-flash");
+          setTimeout(function () { row.classList.remove("rank-flash"); }, 1600);
+        }
+      }
+      function showList() {
+        matches = find(input.value);
+        if (!input.value.trim()) { list.hidden = true; return; }
+        list.innerHTML = matches.length
+          ? matches.slice(0, 8).map(function (it, i) {
+              return '<button type="button" data-i="' + i + '"><span>' + it[nameField] + '</span><b>#' + it.rank + "</b></button>";
+            }).join("")
+          : '<div class="rank-search-none">No ' + nameField + ' matches “' + input.value.replace(/</g, "&lt;") + "”</div>";
+        list.hidden = false;
+      }
+      input.addEventListener("input", showList);
+      input.addEventListener("keydown", function (e) {
+        if (e.key === "Enter") { e.preventDefault(); matches = find(input.value); if (matches.length) jump(matches[0]); }
+        else if (e.key === "Escape") { list.hidden = true; }
+      });
+      list.addEventListener("click", function (e) {
+        const b = e.target.closest("button[data-i]");
+        if (b && matches[+b.dataset.i]) jump(matches[+b.dataset.i]);
+      });
+      document.addEventListener("click", function (e) { if (!box.contains(e.target)) list.hidden = true; });
+    })();
 
     renderTable();
   }

@@ -123,16 +123,26 @@ COUNTRIES = {
         "exchanges": ["NASDAQ", "NYSE", "AMEX"],
         "min_market_cap": 300e6,
         "universe_limit": 5000,
+        # Order here is the order of the index panels: Nasdaq 100 first, the
+        # Composite last.
         "index_tickers": {
-            "nasdaq": "^IXIC",
+            "nasdaq100": "^NDX",
             "sp500": "^GSPC",
             "russell2000": "^RUT",
+            "nasdaq": "^IXIC",
         },
         "index_labels": {
-            "nasdaq": "NASDAQ Composite",
+            "nasdaq100": "Nasdaq 100",
             "sp500": "S&P 500",
             "russell2000": "Russell 2000",
+            "nasdaq": "NASDAQ Composite",
         },
+        # ^NDX is outside the FMP plan (402 "Special Endpoint"), so its history
+        # comes from Yahoo like the India indices do.
+        "yahoo_index_symbols": ["^NDX"],
+        # The market-environment verdict keeps scoring the original three indices, so adding Nasdaq 100 as a
+        # display index does not move its favourable/total counts.
+        "environment_indices": ["nasdaq", "sp500", "russell2000"],
         # Which indices show volume, and where that volume actually comes
         # from. An index has no volume of its own to trade — FMP mirrors one
         # composite figure onto both ^GSPC and ^RUT (identical, day for day),
@@ -142,6 +152,7 @@ COUNTRIES = {
         # use their own ticker's volume, which FMP does report distinctly for
         # each.
         "index_volume": {
+            "nasdaq100": "^NDX",
             "nasdaq": "^IXIC",
             "sp500": "^GSPC",
             "russell2000": "IWM",

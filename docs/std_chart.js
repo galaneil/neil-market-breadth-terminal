@@ -85,8 +85,8 @@
     setTF(L.tf);
     // ---- legend
     const lg = i => { const up = S.c[i] >= S.o[i]; const wide = wrap.clientWidth >= 640, nm = S.name && S.name !== t ? S.name : '';
-      q('lg').innerHTML = (wide && S.logoUrl ? '<img src="' + esc(S.logoUrl) + '" alt="" style="width:18px;height:18px;border-radius:4px;vertical-align:middle" onerror="this.remove()">' : '') + '<b>' + esc(t) + '</b>' + (wide && nm ? '<span style="color:var(--dim,var(--text-dim,#667085))">' + esc(nm) + ' &middot; 1D</span>' : '') + '<span style="color:var(--dim,var(--text-dim,#667085))">' + S.d[i] + '</span><span>O <b>' + fmtP(S.o[i]) + '</b></span><span>H <b>' + fmtP(S.h[i]) + '</b></span><span>L <b>' + fmtP(S.l[i]) + '</b></span><span>C <b style="color:var(--' + (up ? 'up' : 'down') + ')">' + fmtP(S.c[i]) + '</b></span>' + (i ? '<span style="color:var(--' + (S.c[i] >= S.c[i - 1] ? 'up' : 'down') + ')">' + (S.c[i] >= S.c[i - 1] ? '+' : '') + ((S.c[i] / S.c[i - 1] - 1) * 100).toFixed(2) + '%</span>' : '') +
-      (L.vol ? '<span>Vol <b>' + fmtV(S.v[i]) + '</b></span>' + (avg30[i] ? '<span>Vol avg 30 <b>' + fmtV(avg30[i]) + '</b></span>' : '') : '') + (L.ma ? MAS.map(m => m[2][i] == null ? '' : '<span style="color:' + m[1] + '">' + m[0] + m[3][0] + ' <b>' + fmtP(m[2][i]) + '</b></span>').join('') : ''); };
+      q('lg').innerHTML = (wide && S.logoUrl ? '<img src="' + esc(S.logoUrl) + '" alt="" style="width:18px;height:18px;border-radius:4px;vertical-align:middle" onerror="this.remove()">' : '') + '<b>' + esc(t) + '</b>' + (wide && nm ? '<span style="color:var(--dim,var(--text-dim,#667085))">' + esc(nm) + ' &middot; 1D</span>' : '') + '<span style="color:var(--dim,var(--text-dim,#667085))">' + S.d[i] + '</span><span><b style="color:var(--' + (up ? 'up' : 'down') + ')">' + fmtP(S.c[i]) + '</b></span>' + (i ? '<span style="color:var(--' + (S.c[i] >= S.c[i - 1] ? 'up' : 'down') + ')">' + (S.c[i] >= S.c[i - 1] ? '+' : '') + ((S.c[i] / S.c[i - 1] - 1) * 100).toFixed(2) + '%</span>' : '') +
+      (L.vol ? '<span>Vol <b>' + fmtV(S.v[i]) + '</b></span>' + (avg30[i] ? '<span>Vol avg 30 <b>' + fmtV(avg30[i]) + '</b></span>' : '') : ''); };
     lg(n - 1);
     chart.subscribeCrosshairMove(p => { if (p.time) { const i = idxOf[p.time]; if (i != null) lg(i); } else lg(n - 1); });
     // ---- overlay painting
@@ -211,7 +211,9 @@
       const s = TV.source && TV.source(t); if (!s) return;
       const m = document.createElement('div'); m.className = 'tv-modal'; m.innerHTML = '<div><div style="display:flex;align-items:center;gap:12px;margin-bottom:8px"><b style="font-size:16px">' + esc(t) + '</b><span class="tv-st">' + esc(s.name || '') + '</span><span style="flex:1"></span><button class="tv-b" id="x">Close</button></div><div id="m"></div></div>';
       document.body.appendChild(m); const h = TV.mount(m.querySelector('#m'), Object.assign({}, s, { t, ht: Math.max(380, Math.min(640, innerHeight - 250)) }, extra || {}));
-      const close = () => { h.destroy(); m.remove(); }; m.querySelector('#x').onclick = close; m.onclick = e => { if (e.target === m) close(); };
+      let layer = null; const close = () => { if (layer && window.EscStack) window.EscStack.remove(layer); h.destroy(); m.remove(); }; m.querySelector('#x').onclick = close; m.onclick = e => { if (e.target === m) close(); };
+      if (window.EscStack) layer = window.EscStack.push(close);      // Escape closes it (shared rule: the newest window first)
+      else { const k = e => { if (e.key === 'Escape') { document.removeEventListener('keydown', k); close(); } }; document.addEventListener('keydown', k); }
     },
     card(el, t, opt) { const s = TV.source && TV.source(t); if (!s) { el.innerHTML = '<div class="tv-st" style="padding:12px">No price history in this demo.</div>'; return null; } const h = TV.mount(el, Object.assign({}, s, { t, compact: true }, opt || {})); TV.live.push(h); return h; },
     killAll() { TV.live.forEach(h => { try { h.destroy(); } catch (e) {} }); TV.live = []; }

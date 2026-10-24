@@ -23,7 +23,7 @@ import pandas as pd
 import config
 from metrics import breadth_internals as bi
 
-INDEX_KEYS = {"US": ["nasdaq", "sp500", "russell2000"], "IN": []}
+INDEX_KEYS = {"US": ["nasdaq100", "sp500", "russell2000", "nasdaq"], "IN": []}
 
 
 def _index_series(country, key):
@@ -56,7 +56,7 @@ def _index_series(country, key):
 
 
 def compute_indices(country):
-    labels = {"index_nasdaq": "Nasdaq Composite", "index_sp500": "S&P 500", "index_russell2000": "Russell 2000"}
+    labels = {"index_nasdaq100": "Nasdaq 100", "index_nasdaq": "Nasdaq Composite", "index_sp500": "S&P 500", "index_russell2000": "Russell 2000"}
     out = {}
     for key in INDEX_KEYS.get(country, []):
         s = _index_series(country, key)

@@ -18,7 +18,8 @@
 
   // index panel key -> [TradingView symbol, label shown to the user]
   var INDEX = {
-    index_nasdaq: ["NASDAQ:QQQ", "Nasdaq via QQQ"],
+    index_nasdaq100: ["NASDAQ:QQQ", "Nasdaq 100 via QQQ"],
+    index_nasdaq: ["NASDAQ:ONEQ", "Nasdaq Composite via ONEQ"],
     index_sp500: ["AMEX:SPY", "S&P 500 via SPY"],
     index_russell2000: ["AMEX:IWM", "Russell 2000 via IWM"],
     index_sensex: ["BSE:SENSEX", "BSE Sensex"],
@@ -98,6 +99,13 @@
           { id: "MAExp@tv-basicstudies", inputs: { length: 20 } },
           { id: "MAExp@tv-basicstudies", inputs: { length: 50 } },
         ],
+        // Legend: name, price and the bar's % change only. No OHLC, no moving-average readouts (the lines say it).
+        overrides: {
+          "paneProperties.legendProperties.showSeriesOHLC": false,
+          "paneProperties.legendProperties.showStudyValues": false,
+          "paneProperties.legendProperties.showStudyArguments": false,
+          "paneProperties.legendProperties.showBarChange": true,
+        },
       });
     });
   }

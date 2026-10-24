@@ -1529,6 +1529,12 @@ def render_all_panels(country):
     generated_at = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M")
     paths = []
 
+    # Breadth Internals drill-down: which stocks sit behind every count (fetched by the page on demand).
+    names_src = os.path.join(config.data_dir(country), "breadth_internals_names.json")
+    if os.path.exists(names_src):
+        import shutil
+        shutil.copyfile(names_src, os.path.join(config.docs_dir(country), "bi_names.json"))
+
     paths.append(render_panel(
         country, "panel-summary.html", "Market Environment", _summary_body(),
         ["environment"], series, generated_at,
