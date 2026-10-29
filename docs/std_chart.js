@@ -121,10 +121,22 @@
         const fy = Y(it.tr.p); if (fy != null && it.tr.p) { ctx.beginPath(); ctx.arc(it.x, fy, 3, 0, 6.3); ctx.fillStyle = '#fff'; ctx.fill(); ctx.strokeStyle = col; ctx.lineWidth = 1.5; ctx.stroke(); }
       });
     }
-    let lastSig = '';
+    let lastSig = '', meas = null, measDrag = false;
+    // Shift + drag measures a move, like TradingView: % change, bars and the two prices. Esc or a plain click clears it.
+    function drawMeasure(cw) {
+      if (!meas) return;
+      const xa = X(meas.a.i), xb = X(meas.b.i), ya = Y(meas.a.p), yb = Y(meas.b.p); if ([xa, xb, ya, yb].some(v => v == null)) return;
+      const up = meas.b.p >= meas.a.p, col = up ? '#16a34a' : '#dc2626', pc = (meas.b.p / meas.a.p - 1) * 100, bars = Math.abs(meas.b.i - meas.a.i);
+      ctx.save(); ctx.globalAlpha = .14; ctx.fillStyle = col; ctx.fillRect(Math.min(xa, xb), Math.min(ya, yb), Math.abs(xb - xa), Math.abs(yb - ya)); ctx.globalAlpha = 1;
+      ctx.strokeStyle = col; ctx.lineWidth = 1.5; ctx.setLineDash([5, 4]); ctx.strokeRect(Math.min(xa, xb), Math.min(ya, yb), Math.abs(xb - xa), Math.abs(yb - ya)); ctx.setLineDash([]);
+      ctx.beginPath(); ctx.moveTo(xa, ya); ctx.lineTo(xb, yb); ctx.stroke();
+      const lab = (pc >= 0 ? '+' : '') + pc.toFixed(2) + '%   ' + bars + ' bars   ' + fmtP(meas.a.p) + ' → ' + fmtP(meas.b.p);
+      ctx.font = '600 11.5px IBM Plex Mono, monospace'; const w = ctx.measureText(lab).width + 14, bx = Math.max(2, Math.min(cw - w - 2, (xa + xb) / 2 - w / 2)), by = Math.max(2, (up ? Math.min(ya, yb) - 26 : Math.max(ya, yb) + 8));
+      ctx.fillStyle = col; ctx.fillRect(bx, by, w, 20); ctx.fillStyle = '#fff'; ctx.fillText(lab, bx + 7, by + 14); ctx.restore();
+    }
     function paint(force) {
       if (dead) return; const W = wrap.clientWidth, Hh = H, dpr = window.devicePixelRatio || 1;
-      const r = chart.timeScale().getVisibleLogicalRange(), sig = [W, r && r.from, r && r.to, Y(S.c[n - 1]), ver, sel, pend && pend.k, hoverPt && hoverPt.x + ':' + hoverPt.y, L.trades, L.log].join('|');
+      const r = chart.timeScale().getVisibleLogicalRange(), sig = [W, r && r.from, r && r.to, Y(S.c[n - 1]), ver, meas && (meas.a.i + ':' + meas.a.p + ':' + meas.b.i + ':' + meas.b.p), sel, pend && pend.k, hoverPt && hoverPt.x + ':' + hoverPt.y, L.trades, L.log].join('|');
       if (!force && sig === lastSig) return; lastSig = sig;
       if (ov.width !== W * dpr || ov.height !== Hh * dpr) { ov.width = W * dpr; ov.height = Hh * dpr; ov.style.width = W + 'px'; ov.style.height = Hh + 'px'; }
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0); ctx.clearRect(0, 0, W, Hh);
@@ -132,6 +144,7 @@
       ctx.save(); ctx.beginPath(); ctx.rect(0, 0, cw, Hh - 28); ctx.clip();
       st.draw.forEach(dr => drawOne(dr, dr.id === sel, cw));
       if (pend && hoverPt) { const tmp = { type: pend.type, color: color, pts: [pend.pt, hoverPt.pt] }; drawOne(tmp, false, cw); }
+      drawMeasure(cw);
       ctx.restore(); drawTrades(cw, Hh);
     }
     let raf = 0; (function loop() { if (dead) return; paint(false); raf = requestAnimationFrame(loop); })();
@@ -146,6 +159,14 @@
     function commit(dr) { dr.id = Date.now() + Math.random(); dr.color = color; st.draw.push(dr); sel = dr.id; persist(); setTool('cursor'); }
     // Trend line works both ways: press, drag, release; or click the start and click the end.
     // A note is one click, then type and press Enter.
+    const measPt = e => { const [x, y] = posIn(e); let i = Math.round(chart.timeScale().coordinateToLogical(x)); i = Math.max(0, Math.min(n - 1, i)); const p = cs.coordinateToPrice(y); return p == null || p <= 0 ? null : { i, p }; };      // below the price pane (volume area) gives no price
+    wrap.addEventListener('mousedown', e => {
+      if (e.button !== 0) return;
+      if (!e.shiftKey) { if (meas) { meas = null; } return; }
+      const a = measPt(e); if (!a) return; e.preventDefault(); e.stopPropagation(); meas = { a, b: a }; measDrag = true;
+    }, true);
+    window.addEventListener('mousemove', e => { if (!measDrag || dead) return; const b = measPt(e); if (b) meas.b = b; });
+    window.addEventListener('mouseup', () => { measDrag = false; });
     ov.addEventListener('mousedown', e => {
       if (e.button !== 0 || tool !== 'trend') return;
       const [x, y] = posIn(e); if (pend) return;
@@ -176,7 +197,7 @@
       return null;
     }
     chart.subscribeClick(p => { if (tool !== 'cursor' || !p.point) return; const h = hit(p.point.x, p.point.y); if (h !== sel) { sel = h; ver++; renderBar(); } });
-    const onKey = e => { if (dead) return; if ((e.key === 'Delete' || e.key === 'Backspace') && sel && !/INPUT|TEXTAREA|SELECT/.test((e.target || {}).tagName || '') && wrap.matches(':hover')) { st.draw = st.draw.filter(d => d.id !== sel); sel = null; persist(); renderBar(); } else if (e.key === 'Escape') { setTool('cursor'); } };
+    const onKey = e => { if (dead) return; if ((e.key === 'Delete' || e.key === 'Backspace') && sel && !/INPUT|TEXTAREA|SELECT/.test((e.target || {}).tagName || '') && wrap.matches(':hover')) { st.draw = st.draw.filter(d => d.id !== sel); sel = null; persist(); renderBar(); } else if (e.key === 'Escape') { meas = null; setTool('cursor'); } };
     document.addEventListener('keydown', onKey);
     const onSaved = e => { if (e.detail === t && !dead) { const o = load(t); if (o.draw.length !== st.draw.length) { st.draw = o.draw; ver++; renderBar(); } } };
     document.addEventListener('tv-saved', onSaved);

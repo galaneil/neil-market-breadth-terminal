@@ -77,6 +77,9 @@
       <div class="fld"><label>Liquidity preset</label><div id="liqp"></div></div>
       <div class="fld"><label>Min price at entry ($)</label><input type="number" id="minPrice" value="10" min="0" step="1"></div>
       <div class="fld"><label>Min avg $ volume, 50 days (M)</label><input type="number" id="minDv" value="20" min="0" step="5"></div>
+      <div class="fld"><label>Pullback before entry at least (%)</label><input type="number" id="minDepth" placeholder="any" min="0" step="5"></div>
+      <div class="fld"><label>Pullback at most (%)</label><input type="number" id="maxDepth" placeholder="any" min="0" step="5"></div>
+      <div class="fld"><label>Entry within (%) of prior high</label><input type="number" id="maxOffHigh" placeholder="any" min="0" step="1"></div>
       <div class="fld"><label>Min ADR (%)</label><input type="number" id="minAdr" value="3" min="0" step="0.5"></div>
       <div class="fld"><label>Max ADR (%)</label><input type="number" id="maxAdr" placeholder="any" min="0" step="0.5"></div>
       <div class="fld"><label>Sectors</label><details class="picker" id="picker"><summary id="picksum">All sectors</summary><div class="pop" id="pop"></div></details></div>
@@ -97,19 +100,19 @@ const YEARS = [2020, 2021, 2022, 2023, 2024, 2025, 2026];
 let ROWS = [], META = {}, ST = {edits: {}, filters: {}, suggestions: {}}, TYPES = [], sortKey = "gainEntry", sortDir = -1, years = new Set([2021]), picked = new Set(), allSectors = true, saveTimers = {};
 const num = id => { const v = $(id).value; return v === "" ? null : +v; };
 
-const COLS = [["t","Ticker"],["year","Year"],["sector","Sector"],["entry","Entry date"],["entryPx","Entry $",1],["entryType","Type"],["gainEntry","Gain from entry",1],["days","Sessions",1],["adr","ADR %",1],["dv","$ vol (M)",1],["sugg","Agent suggests"],["setup","Your setup"],["status","Status"],["note","Note"]];
+const COLS = [["t","Ticker"],["year","Year"],["sector","Sector"],["entry","Entry date"],["entryPx","Entry $",1],["entryType","Type"],["depth","Pullback before",1],["baseDays","Base (sessions)",1],["offHigh","Entry vs prior high",1],["gainEntry","Gain from entry",1],["days","Sessions",1],["adr","ADR %",1],["dv","$ vol (M)",1],["sugg","Agent suggests"],["setup","Your setup"],["status","Status"],["note","Note"],["save","Setups database"]];
 $("hdr").innerHTML = COLS.map(c => '<th data-k="' + c[0] + '"' + (c[2] ? ' class="r"' : '') + '>' + c[1] + '</th>').join("");
 
 function params() {
   const p = { years: [...years], window: num("window"), minGainStart: num("minGainStart"), minGainEntry: num("minGainEntry"), maxDays: num("maxDays"),
-    entryType: $("entryType").value, aboveSma50: $("aboveSma50").checked, minPrice: num("minPrice"), minDv: num("minDv"), minAdr: num("minAdr"), maxAdr: num("maxAdr"),
+    entryType: $("entryType").value, aboveSma50: $("aboveSma50").checked, minPrice: num("minPrice"), minDv: num("minDv"), minAdr: num("minAdr"), maxAdr: num("maxAdr"), minDepth: num("minDepth"), maxDepth: num("maxDepth"), maxOffHigh: num("maxOffHigh"),
     perYear: num("perYear") || 100, q: $("q").value };
   if (!allSectors) p.sectors = [...picked];
   return p;
 }
 function applyParams(p) {
   years = new Set(p.years || []); drawYears();
-  [["window","window"],["minGainStart","minGainStart"],["minGainEntry","minGainEntry"],["maxDays","maxDays"],["entryType","entryType"],["minPrice","minPrice"],["minDv","minDv"],["minAdr","minAdr"],["maxAdr","maxAdr"],["perYear","perYear"],["q","q"]]
+  [["window","window"],["minGainStart","minGainStart"],["minGainEntry","minGainEntry"],["maxDays","maxDays"],["entryType","entryType"],["minPrice","minPrice"],["minDv","minDv"],["minAdr","minAdr"],["maxAdr","maxAdr"],["minDepth","minDepth"],["maxDepth","maxDepth"],["maxOffHigh","maxOffHigh"],["perYear","perYear"],["q","q"]]
     .forEach(([id, k]) => { $(id).value = p[k] == null ? "" : p[k]; });
   $("aboveSma50").checked = !!p.aboveSma50;
   if (p.sectors && p.sectors.length) { allSectors = false; picked = new Set(p.sectors); } else { allSectors = true; picked.clear(); }
@@ -161,14 +164,16 @@ async function run() {
   ROWS = d.rows; META = d; drawPicker(); draw();
 }
 $("run").onclick = run;
-const eff = r => { const e = ST.edits[r.key] || {}; const px = e.entryPx != null ? e.entryPx : r.entryPx; return { entry: e.entry || r.entry, entryPx: px, setup: e.setup || "", status: e.status || "", note: e.note || "", gain: (r.peakPx / px - 1) * 100, edited: !!(e.entry || e.entryPx != null) }; };
+const eff = r => { const e = ST.edits[r.key] || {}; const px = e.entryPx != null ? e.entryPx : r.entryPx; const ed = !!(e.entry || e.entryPx != null), pick = k => (ed && e[k] !== undefined ? e[k] : r[k]);
+  return { entry: e.entry || r.entry, entryPx: px, setup: e.setup || "", status: e.status || "", note: e.note || "", gain: (r.peakPx / px - 1) * 100, edited: ed,
+    depth: pick("depth"), baseDays: pick("baseDays"), offHigh: pick("offHigh"), priorHigh: pick("priorHigh"), savedUrl: e.savedUrl || "", savedSetup: e.savedSetup || "" }; };
 function sortRows() {
-  const val = r => { const e = eff(r); return sortKey === "gainEntry" ? e.gain : sortKey === "entry" ? e.entry : sortKey === "setup" ? e.setup : sortKey === "status" ? e.status : sortKey === "sugg" ? ((ST.suggestions[r.key] || {}).setup || "") : r[sortKey]; };
+  const val = r => { const e = eff(r); return sortKey === "gainEntry" ? e.gain : sortKey === "depth" ? e.depth : sortKey === "baseDays" ? e.baseDays : sortKey === "offHigh" ? e.offHigh : sortKey === "entry" ? e.entry : sortKey === "setup" ? e.setup : sortKey === "status" ? e.status : sortKey === "sugg" ? ((ST.suggestions[r.key] || {}).setup || "") : r[sortKey]; };
   ROWS.sort((a, b) => { const x = val(a), y = val(b); if (x == null) return 1; if (y == null) return -1; return (x > y ? 1 : x < y ? -1 : 0) * sortDir; });
 }
 function typeSelect(key, cur) {
-  const opts = ['<option value=""></option>'].concat(TYPES.map(t => '<option' + (t === cur ? " selected" : "") + ">" + esc(t) + "</option>"));
-  if (cur && TYPES.indexOf(cur) < 0) opts.push('<option selected>' + esc(cur) + "</option>");
+  const opts = ['<option value=""></option>'].concat(TYPES.map(t => '<option' + (t.name === cur ? " selected" : "") + ">" + esc(t.name) + "</option>"));
+  if (cur && !TYPES.some(t => t.name === cur)) opts.push('<option selected>' + esc(cur) + "</option>");
   return '<select data-f="setup" data-key="' + esc(key) + '">' + opts.join("") + "</select>";
 }
 function draw() {
@@ -185,10 +190,14 @@ function draw() {
       '<td class="' + (e.edited ? "edited" : "") + '"><input type="date" data-f="entry" data-key="' + esc(r.key) + '" value="' + e.entry + '"></td>' +
       '<td class="r ' + (e.edited ? "edited" : "") + '"><input type="number" step="0.01" data-f="entryPx" data-key="' + esc(r.key) + '" value="' + e.entryPx + '"></td>' +
       '<td><span class="tag">' + (e.edited ? "edited" : r.entryType) + '</span></td>' +
+      '<td class="r mono down" title="Prior high ' + (e.priorHigh == null ? "" : "$" + e.priorHigh) + ', lowest low since, as a % below it">' + (e.depth == null ? "&ndash;" : e.depth.toFixed(1) + "%") + '</td>' +
+      '<td class="r mono">' + (e.baseDays == null ? "&ndash;" : e.baseDays) + '</td>' +
+      '<td class="r mono ' + (e.offHigh != null && e.offHigh >= 0 ? "up" : "") + '">' + (e.offHigh == null ? "&ndash;" : (e.offHigh > 0 ? "+" : "") + e.offHigh.toFixed(1) + "%") + '</td>' +
       '<td class="r up mono" style="font-weight:700">+' + e.gain.toFixed(0) + '%</td><td class="r mono">' + r.days + '</td><td class="r mono">' + (r.adr == null ? "&ndash;" : r.adr) + '</td><td class="r mono">' + (r.dv == null ? "&ndash;" : r.dv.toLocaleString()) + '</td>' +
       '<td>' + sg + '</td><td class="' + (e.setup ? "edited" : "") + '">' + typeSelect(r.key, e.setup) + '</td>' +
       '<td><select data-f="status" data-key="' + esc(r.key) + '"><option value=""></option>' + ["keep", "maybe", "skip"].map(x => "<option" + (x === e.status ? " selected" : "") + ">" + x + "</option>").join("") + '</select></td>' +
-      '<td><input class="note" data-f="note" data-key="' + esc(r.key) + '" value="' + esc(e.note) + '" placeholder="note"></td></tr>';
+      '<td><input class="note" data-f="note" data-key="' + esc(r.key) + '" value="' + esc(e.note) + '" placeholder="note"></td>' +
+      '<td>' + (e.savedUrl ? '<a class="tk" href="' + esc(e.savedUrl) + '" target="_blank" rel="noopener" title="Open in Notion">Saved to ' + esc(e.savedSetup) + ' &#8599;</a>' : '<button class="btn" data-save="' + esc(r.key) + '">Save to Setups</button>') + '</td></tr>';
   }).join("");
 }
 $("hdr").onclick = e => { const th = e.target.closest("th"); if (!th) return; const k = th.dataset.k; if (sortKey === k) sortDir *= -1; else { sortKey = k; sortDir = ["t", "sector", "setup", "status", "sugg", "entry", "year"].includes(k) ? 1 : -1; } draw(); };
@@ -200,11 +209,19 @@ function saveEdit(key, fields) {
   ST.edits[key] = Object.assign({}, ST.edits[key] || {}, fields);
 }
 const priceCache = {};
+// Same rule as setup_finder.base_stats: highest high in the 120 sessions before the entry, lowest low since it, entry close vs that high.
+function baseStats(p, k) {
+  const lo = Math.max(0, k - 120); if (k - lo < 5) return {};
+  let hi = -1, hiI = lo; for (let i = lo; i < k; i++) if (p.high[i] != null && p.high[i] > hi) { hi = p.high[i]; hiI = i; }
+  let tr = Infinity; for (let i = hiI; i <= k; i++) if (p.low[i] != null && p.low[i] < tr) tr = p.low[i];
+  if (!(hi > 0) || !isFinite(tr)) return {};
+  return {priorHigh: Math.round(hi * 100) / 100, depth: Math.round((tr / hi - 1) * 1000) / 10, baseDays: k - hiI, offHigh: Math.round((p.close[k] / hi - 1) * 1000) / 10};
+}
 const closeOn = async (t, date) => {
   priceCache[t] = priceCache[t] || fetch("/docs/tickers/" + encodeURIComponent(t) + ".json").then(r => r.ok ? r.json() : null).catch(() => null);
   const p = await priceCache[t]; if (!p) return null;
   let at = -1; for (let i = 0; i < p.dates.length; i++) if (p.dates[i] <= date) at = i; else break;
-  return at < 0 ? null : {date: p.dates[at], px: p.close[at]};
+  return at < 0 ? null : Object.assign({date: p.dates[at], px: p.close[at]}, baseStats(p, at));
 };
 $("rows").addEventListener("change", async e => {
   const el = e.target, key = el.dataset.key, f = el.dataset.f; if (!f) return;
@@ -212,13 +229,14 @@ $("rows").addEventListener("change", async e => {
   if (f === "entry") {
     const hit = await closeOn(r.t, el.value);
     if (!hit) { alert("No price for that date."); draw(); return; }
-    saveEdit(key, {entry: hit.date, entryPx: Math.round(hit.px * 100) / 100}); draw();
+    saveEdit(key, {entry: hit.date, entryPx: Math.round(hit.px * 100) / 100, priorHigh: hit.priorHigh, depth: hit.depth, baseDays: hit.baseDays, offHigh: hit.offHigh}); draw();
   } else if (f === "entryPx") { saveEdit(key, {entryPx: +el.value}); draw(); }
   else saveEdit(key, {[f]: el.value});
   if (f === "setup" || f === "status") draw();
 });
 $("rows").addEventListener("input", e => { if (e.target.dataset.f === "note") saveEdit(e.target.dataset.key, {note: e.target.value}); });
 document.addEventListener("click", e => {
+  const sv = e.target.closest("[data-save]"); if (sv) { saveToSetups(sv); return; }
   const u = e.target.closest("[data-use]"); if (u) { const k = u.dataset.use; saveEdit(k, {setup: ST.suggestions[k].setup}); draw(); return; }
   const o = e.target.closest("[data-open]"); if (o) { const r = ROWS.find(x => x.key === o.dataset.open); if (r) openChart(r); }
 });
@@ -227,7 +245,7 @@ document.addEventListener("click", e => {
 function openChart(r) {
   const e = eff(r);
   const m = document.createElement("div"); m.className = "cmodal";
-  m.innerHTML = '<div><div class="ch"><b>' + esc(r.t) + '</b><span class="dim">' + esc(r.sector || "") + ' · entry ' + esc(e.entry) + ' at $' + e.entryPx + ' · peak ' + esc(r.peak) + ' at $' + r.peakPx + ' (+' + e.gain.toFixed(0) + '%)</span><span style="flex:1"></span><button class="btn" id="cm-x">Close</button></div><div id="cm-body"></div></div>';
+  m.innerHTML = '<div><div class="ch"><b>' + esc(r.t) + '</b><span class="dim">' + esc(r.sector || "") + ' · entry ' + esc(e.entry) + ' at $' + e.entryPx + (e.depth != null ? ' · pullback ' + e.depth.toFixed(0) + '% from $' + e.priorHigh + ' over ' + e.baseDays + ' sessions' : '') + ' · peak ' + esc(r.peak) + ' at $' + r.peakPx + ' (+' + e.gain.toFixed(0) + '%)</span><span style="flex:1"></span><button class="btn" id="cm-x">Close</button></div><div id="cm-body"></div></div>';
   document.body.appendChild(m);
   const close = () => m.remove(); m.querySelector("#cm-x").onclick = close; m.onclick = ev => { if (ev.target === m) close(); };
   const data = fetch("/docs/tickers/" + encodeURIComponent(r.t) + ".json").then(x => x.json())
@@ -236,6 +254,23 @@ function openChart(r) {
     trades: [{d: e.entry, a: "buy", p: e.entryPx, label: "Entry $" + e.entryPx}, {d: r.peak, a: "sell", p: r.peakPx, label: "Peak $" + r.peakPx}]});
 }
 document.addEventListener("keydown", e => { if (e.key === "Escape") { const m = document.querySelector(".cmodal"); if (m) { e.preventDefault(); m.remove(); } } });
+
+// ---- save to the Setups database (Notion), under the setup type chosen here; it then shows in Setups > Browse & filter
+async function saveToSetups(btn) {
+  const key = btn.dataset.save, r = ROWS.find(x => x.key === key); if (!r) return;
+  const e = eff(r), type = TYPES.find(t => t.name === e.setup);
+  if (!e.setup) { alert("Pick a setup type for " + r.t + " first (the \u201cYour setup\u201d column)."); return; }
+  if (!type) { alert("That setup is not in the Setups database. Pick one from the list."); return; }
+  btn.disabled = true; btn.textContent = "Saving\u2026";
+  const thesis = [e.note, "Found by the Setup finder: +" + e.gain.toFixed(0) + "% from $" + e.entryPx + " to $" + r.peakPx + " (" + r.peak + ")." +
+    (e.depth != null ? " Pullback before entry " + e.depth.toFixed(0) + "% over " + e.baseDays + " sessions, entry " + (e.offHigh > 0 ? "+" : "") + e.offHigh.toFixed(1) + "% vs the prior high." : "")].filter(Boolean).join("\n");
+  try {
+    const res = await fetch("/api/setups/create", {method: "POST", headers: {"Content-Type": "application/json"}, body: JSON.stringify({setupId: type.id, country: "US", ticker: r.t, buyDate: e.entry, entryThesis: thesis, baseLengthDays: e.baseDays})}).then(x => x.json());
+    if (res.error) throw new Error(res.error);
+    saveEdit(key, {savedPageId: res.pageId, savedUrl: res.notionUrl || res.url || "https://www.notion.so/" + String(res.pageId || "").replace(/-/g, ""), savedSetup: e.setup, status: e.status || "keep"});
+    draw();
+  } catch (err) { alert("Could not save: " + err.message); btn.disabled = false; btn.textContent = "Save to Setups"; }
+}
 
 $("csv").onclick = () => {
   const head = ["Ticker", "Year", "Sector", "Industry", "Entry date", "Entry price", "Entry type", "Peak date", "Peak price", "Gain from entry %", "Sessions", "ADR %", "$ vol M", "Agent suggests", "Your setup", "Status", "Note"];
@@ -247,7 +282,7 @@ $("csv").onclick = () => {
 (async function init() {
   drawYears(); drawFilters("");
   try { ST = Object.assign(ST, await (await fetch("/api/setup-finder/state")).json()); drawFilters(""); } catch (e) {}
-  fetch("/api/setups/data").then(r => r.json()).then(d => { TYPES = (d.types || []).map(t => t.name); if (ROWS.length) draw(); }).catch(() => {});
+  fetch("/api/setups/data").then(r => r.json()).then(d => { TYPES = (d.types || []).map(t => ({id: t.id, name: t.name})); if (ROWS.length) draw(); }).catch(() => {});
 })();
 </script>
 </body></html>

@@ -126,6 +126,27 @@ def _entry(n, i, j):
     return i, "start"
 
 
+BASE_LOOKBACK = 120      # the base is measured from the highest high in the 120 sessions before the entry
+
+
+def base_stats(h, l, c, k):
+    """Depth of the pullback before an entry: prior high, the lowest low since it, how many sessions ago the high was,
+    and how far the entry close sits below that high. (The page repeats this rule when you change an entry.)"""
+    lo = max(0, k - BASE_LOOKBACK)
+    if k - lo < 5:
+        return None
+    seg = h[lo:k]
+    if not np.isfinite(seg).any():
+        return None
+    hi_i = lo + int(np.nanargmax(seg))
+    prior = float(h[hi_i])
+    trough = float(np.nanmin(l[hi_i:k + 1]))
+    if not (prior > 0 and trough > 0):
+        return None
+    return {"priorHigh": round(prior, 2), "depth": round((trough / prior - 1) * 100, 1), "baseDays": k - hi_i,
+            "offHigh": round((float(c[k]) / prior - 1) * 100, 1)}
+
+
 def _row(n, i, j, k, kind):
     c, h, l, v = n["c"], n["h"], n["l"], n["v"]
     lo20 = max(0, k - 20)
@@ -142,6 +163,7 @@ def _row(n, i, j, k, kind):
         "gainStart": round((float(c[j]) / float(c[i]) - 1) * 100, 1), "gainEntry": round((float(c[j]) / float(c[k]) - 1) * 100, 1),
         "adr": None if adr is None or adr != adr else round(adr, 1), "dv": None if dv is None or dv != dv else round(dv, 1),
         "aboveSma50": None if sma is None else bool(c[k] > sma),
+        **(base_stats(h, l, c, k) or {"priorHigh": None, "depth": None, "baseDays": None, "offHigh": None}),
     }
 
 
@@ -170,6 +192,7 @@ def scan(country, p):
     q = (p.get("q") or "").strip().upper()
     num = lambda k, d=None: (float(p[k]) if p.get(k) not in (None, "") else d)
     min_gain_e, max_days, min_px, min_dv, min_adr, max_adr = num("minGainEntry"), num("maxDays"), num("minPrice"), num("minDv"), num("minAdr"), num("maxAdr")
+    min_depth, max_depth, max_off = num("minDepth"), num("maxDepth"), num("maxOffHigh")
     out = []
     for r in rows:
         if years and r["year"] not in years:
@@ -189,6 +212,12 @@ def scan(country, p):
         if min_px is not None and r["entryPx"] < min_px:
             continue
         if min_dv is not None and (r["dv"] is None or r["dv"] < min_dv):
+            continue
+        if min_depth is not None and (r["depth"] is None or -r["depth"] < min_depth):      # depth is negative: -35 = a 35% pullback
+            continue
+        if max_depth is not None and (r["depth"] is None or -r["depth"] > max_depth):
+            continue
+        if max_off is not None and (r["offHigh"] is None or -r["offHigh"] > max_off):
             continue
         if min_adr is not None and (r["adr"] is None or r["adr"] < min_adr):
             continue
@@ -235,7 +264,7 @@ def state():
 def save_edit(key, fields):
     """Merge `fields` (entry date/price, setup, note, status) into one row's edits; an empty dict clears it."""
     d = _read()
-    allowed = {"entry", "entryPx", "setup", "note", "status"}
+    allowed = {"entry", "entryPx", "setup", "note", "status", "priorHigh", "depth", "baseDays", "offHigh", "savedPageId", "savedUrl", "savedSetup"}
     clean = {k: v for k, v in (fields or {}).items() if k in allowed}
     if clean:
         d["edits"][key] = {**d["edits"].get(key, {}), **clean, "editedAt": date.today().isoformat()}
