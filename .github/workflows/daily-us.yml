@@ -8,7 +8,10 @@ on:
     # is 7pm ET in summer and 6pm ET in winter, comfortably clear of both.
     # (An earlier 21:00 UTC schedule landed exactly on the closing bell every
     # winter, which risked ingesting an unfinished session.)
-    - cron: "0 23 * * 1-5"
+    # Moved from 23:00 to 22:17 UTC (2026-10-29): the run was starting ~3 hours after its slot (GitHub queues
+    # scheduled jobs at busy times, and the top of the hour is the busiest), so data landed near 02:50 UTC.
+    # 22:17 is still after the 21:30 UTC point where config treats the day's bar as final, and off the :00 rush.
+    - cron: "17 22 * * 1-5"
   workflow_dispatch: {}  # manual "Run workflow" button, for on-demand runs/testing
 
 concurrency:

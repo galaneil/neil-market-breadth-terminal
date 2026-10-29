@@ -95,12 +95,14 @@ def fetch_prices_fmp(client, tickers, index_tickers, drop_partial, price_cache,
 
 
 def _drop_thin_latest(rows):
-    """Yahoo hands back the in-progress session as if it were final: for ^NDX the newest row can carry a
-    fraction of the real volume. Newest-first rows; drop the head row when its volume is under half the recent median."""
+    """Yahoo hands back the newest session's PRICES final but can leave its VOLUME at a fraction of the real figure for
+    hours (^NDX: 0.75B against ~8B). Dropping that row hid the whole session (Nasdaq 100 sat a day behind), so the row is
+    kept and only its volume is blanked; the next run rewrites the last 252 days with the finished volume.
+    Newest-first rows."""
     if len(rows) > 6 and rows[0].get("volume"):
         recent = sorted(r.get("volume") or 0 for r in rows[1:6])
         if rows[0]["volume"] < 0.5 * recent[2]:
-            return rows[1:]
+            rows[0] = dict(rows[0], volume=None)
     return rows
 
 
