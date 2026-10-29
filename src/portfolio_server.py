@@ -110,6 +110,8 @@ HUB_PANELS = [
     {"label": "Screener", "path": "panel-screener.html"},
     # Native (hub-only): scans the local price files, so it is not published.
     {"label": "Movers", "native": "/movers"},
+    # Native (hub-only): big historical up-moves with entry points, for building the setups list by hand.
+    {"label": "Setup finder", "native": "/setup-finder"},
     {"label": "Market Replay", "path": "panel-replay.html"},
     {"label": "Stock Lookup", "path": "panel-stock.html"},
 ]
@@ -134,6 +136,7 @@ SYSTEM_PANELS = [
 ]
 
 MOVERS_PAGE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "movers_page.html")
+SETUP_FINDER_PAGE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "setup_finder_page.html")
 HOME_PAGE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "home_page.html")
 OUTPUT_DIR = os.path.join(os.path.dirname(config.ROOT_DIR), "Portfolio Local")
 STOPS_FILE = os.path.join(OUTPUT_DIR, "stops.json")
@@ -1158,6 +1161,22 @@ class Handler(BaseHTTPRequestHandler):
             with open(MOVERS_PAGE_FILE, encoding="utf-8") as f:
                 self._send(200, f.read(), "text/html; charset=utf-8")
             return
+        if route.path == "/setup-finder":
+            with open(SETUP_FINDER_PAGE_FILE, encoding="utf-8") as f:
+                self._send(200, f.read(), "text/html; charset=utf-8")
+            return
+        if route.path == "/api/setup-finder/state":
+            import setup_finder
+            self._send(200, json.dumps(setup_finder.state()), "application/json")
+            return
+        if route.path == "/api/setup-finder/scan":
+            import setup_finder
+            try:
+                p = json.loads((parse_qs(route.query).get("p") or ["{}"])[0])
+                self._send(200, json.dumps(setup_finder.scan("US", p)), "application/json")
+            except Exception as error:
+                self._send(400, json.dumps({"error": str(error)}), "application/json")
+            return
         if route.path == "/api/movers/sectors":
             import movers
             q = parse_qs(route.query)
@@ -1745,6 +1764,19 @@ class Handler(BaseHTTPRequestHandler):
                 self._send(400, json.dumps({"error": str(error)}), "application/json")
             return
 
+        if route.path in ("/api/setup-finder/edit", "/api/setup-finder/filter"):
+            import setup_finder
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                body = json.loads(self.rfile.read(length) or b"{}")
+                if route.path.endswith("/edit"):
+                    out = {"edit": setup_finder.save_edit(body.get("key") or "", body.get("fields") or {})}
+                else:
+                    out = {"filters": setup_finder.save_filter(body.get("name") or "", body.get("params") or {}, bool(body.get("delete")))}
+                self._send(200, json.dumps(out), "application/json")
+            except Exception as error:
+                self._send(400, json.dumps({"error": str(error)}), "application/json")
+            return
         if route.path == "/api/movers/watch":
             import movers
             length = int(self.headers.get("Content-Length") or 0)
@@ -2855,8 +2887,21 @@ document.getElementById("sync-brokers-btn").addEventListener("click", function (
     if (res.error) { banner.hidden = false; banner.textContent = "Sync failed: " + res.error; return; }
     renderSyncBanner(res.results);
     loadJournal();
+    // Gateway not logged in: try to open its login page straight away (the banner button is the fallback if the browser blocks the pop-up).
+    if ((res.results || []).some(r => r.live && !r.live.used)) { try { window.open("https://localhost:5000/", "_blank", "noopener"); } catch (e) {} }
   }).catch(err => { btn.disabled = false; btn.innerHTML = "&#8635; Sync from brokers";
     banner.hidden = false; banner.textContent = "Sync failed: " + err; });
+});
+
+document.addEventListener("click", async function (e) {
+  const b = e.target.closest(".gw-login");
+  if (!b) return;
+  b.disabled = true; const t = b.textContent; b.textContent = "Starting gateway…";
+  try {
+    const j = await (await fetch("/api/gateway/start", { method: "POST" })).json();
+    if (j.ok) window.open(j.url || "https://localhost:5000/", "_blank", "noopener"); else alert(j.error || "Could not start the gateway");
+  } catch (err) { alert("Could not reach the hub: " + err); }
+  b.disabled = false; b.textContent = t;
 });
 
 function renderSyncBanner(results) {
@@ -2872,7 +2917,7 @@ function renderSyncBanner(results) {
     let line = "<b>" + esc(r.account) + "</b>: " + created + " new trade" + (created === 1 ? "" : "s") + " logged";
     if (r.live) line += r.live.used
       ? ' <span style="color:var(--up)">&middot; live gateway read (' + r.live.added + ' execution' + (r.live.added === 1 ? "" : "s") + ' after ' + esc(r.live.reportThrough) + ')</span>'
-      : ' <span style="color:var(--warn)">&middot; IBKR&rsquo;s report ends ' + esc(r.live.reportThrough || "yesterday") + ', and the live gateway is not logged in, so trades since then are not visible yet &mdash; log in to the gateway (Live Portfolio page) and press sync again</span>';
+      : ' <span style="color:var(--warn)">&middot; IBKR&rsquo;s report ends ' + esc(r.live.reportThrough || "yesterday") + ', and the live gateway is not logged in, so trades since then are not visible yet.</span> <button type="button" class="gw-login" style="font-size:12px;font-weight:700;padding:4px 10px;border-radius:7px;border:1px solid var(--warn);background:none;color:var(--warn);cursor:pointer">Log in to IBKR gateway</button> <span style="color:var(--dim)">then press Sync again</span>';
     if (closed) line += ", " + closed + " closed (real exit price from the trade book)";
     const added = r.added || [];
     if (added.length) line += ', <span style="color:var(--violet)">' + added.length + " pyramid add" + (added.length === 1 ? "" : "s")
@@ -5174,6 +5219,8 @@ def main():
 
     import movers
     threading.Thread(target=movers.warm, daemon=True).start()   # build the Movers table in the background
+    import setup_finder
+    threading.Thread(target=setup_finder.warm, daemon=True).start()
     server = ThreadingHTTPServer((HOST, PORT), Handler)
     url = f"http://{HOST}:{PORT}/"
     log(f"  serving {url}")
