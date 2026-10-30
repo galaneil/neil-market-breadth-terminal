@@ -3584,6 +3584,21 @@ SETUPS_PAGE = r"""<!doctype html>
 <div class="overlay" id="overlay" hidden><div class="sheet" id="sheet"></div></div>
 
 <script>
+// Volume under a Lightweight chart: green/red bars in the bottom fifth plus the 30-day average line. Does nothing when there is no volume.
+function addVolume(chart, D, upCol, downCol, lineCol) {
+  if (!D || !D.volume || !D.volume.some(function (v) { return v != null; })) return;
+  chart.priceScale("right").applyOptions({ scaleMargins: { top: 0.06, bottom: 0.3 } });
+  var vs = chart.addHistogramSeries({ priceScaleId: "vol", priceFormat: { type: "volume" }, priceLineVisible: false, lastValueVisible: false });
+  chart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.72, bottom: 0 } });
+  var run = 0, q = [], avg = [];
+  D.volume.forEach(function (v, i) { v = v || 0; q.push(v); run += v; if (q.length > 30) run -= q.shift(); avg.push(i >= 4 ? run / q.length : null); });
+  // One news-day spike would otherwise flatten every other bar to a hairline, so bars are capped at 3x the typical 30-day average.
+  var typ = avg.filter(function (x) { return x != null; }).sort(function (a, b) { return a - b; }), cap = 3 * (typ.length ? typ[Math.floor(typ.length / 2)] : 0) || Infinity;
+  vs.setData(D.dates.map(function (d, i) { return { time: d, value: Math.min(D.volume[i] || 0, cap), color: (D.close[i] >= (i ? D.close[i - 1] : D.open[i]) ? upCol : downCol) }; }));
+  var al = chart.addLineSeries({ priceScaleId: "vol", color: lineCol, lineWidth: 1.2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
+  al.setData(D.dates.map(function (d, i) { return avg[i] == null ? null : { time: d, value: Math.min(avg[i], cap) }; }).filter(Boolean));
+}
+
 var STATE = { country:"US", types:[], entries:[], envNow:{}, schema:{},
   logSetup:null, browseSetup:null, kpiSetup:null, pick:null, exitRule:null };
 var EMOJI = { "VCP":0x1F4C9, "Cup Handle":0x2615, "Base Breakout":0x1F4C8,
@@ -3969,11 +3984,12 @@ function mountBacktest(e, patch){
     var cs=getComputedStyle(document.documentElement), css=function(n){ return cs.getPropertyValue(n).trim(); };
     var chart=null, cSeries=null, l20=null, lines=[];
     if(window.LightweightCharts){
-      chart=LightweightCharts.createChart($("bt-chart"),{width:$("bt-chart").clientWidth,height:280,
+      chart=LightweightCharts.createChart($("bt-chart"),{width:$("bt-chart").clientWidth,height:340,
         layout:{background:{color:"transparent"},textColor:css("--dim"),fontSize:10},grid:{vertLines:{color:css("--line")},horzLines:{color:css("--line")}},
         rightPriceScale:{borderColor:css("--line")},timeScale:{borderColor:css("--line")},crosshair:{mode:0}});
       cSeries=chart.addCandlestickSeries({upColor:css("--up"),downColor:css("--down"),borderUpColor:css("--up"),borderDownColor:css("--down"),wickUpColor:css("--up"),wickDownColor:css("--down")});
       cSeries.setData(D.dates.map(function(d,i){ return {time:d,open:D.open[i],high:D.high[i],low:D.low[i],close:D.close[i]}; }));
+      addVolume(chart, D, css("--up"), css("--down"), "#f59e0b");
       l20=chart.addLineSeries({color:"#8b5cf6",lineWidth:1.3,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false});
       l20.setData(D.dates.map(function(d,i){ return {time:d,value:E20[i]}; }));
     }
@@ -4053,12 +4069,13 @@ function mountMainChart(e){
     function idxFor(d){ for(var i=0;i<N;i++){ if(D.dates[i]>=d) return i; } return N-1; }
     function drawTerminal(){
       box.innerHTML="";
-      var chart=LightweightCharts.createChart(box,{width:box.clientWidth,height:330,
+      var chart=LightweightCharts.createChart(box,{width:box.clientWidth,height:400,
         layout:{background:{color:"transparent"},textColor:css("--dim"),fontSize:10},grid:{vertLines:{color:css("--line")},horzLines:{color:css("--line")}},
         rightPriceScale:{borderColor:css("--line")},timeScale:{borderColor:css("--line")},crosshair:{mode:0}});
       MC.chart=chart;
       var c=chart.addCandlestickSeries({upColor:css("--up"),downColor:css("--down"),borderUpColor:css("--up"),borderDownColor:css("--down"),wickUpColor:css("--up"),wickDownColor:css("--down")});
       c.setData(D.dates.map(function(d,i){ return {time:d,open:D.open[i],high:D.high[i],low:D.low[i],close:D.close[i]}; }));
+      addVolume(chart, D, css("--up"), css("--down"), "#f59e0b");
       [["#f0b429",10],["#8b5cf6",20],["#38bdf8",50]].forEach(function(p){
         var l=chart.addLineSeries({color:p[0],lineWidth:1.3,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false}), v=ema(D.close,p[1]);
         l.setData(D.dates.map(function(d,i){ return {time:d,value:v[i]}; })); });

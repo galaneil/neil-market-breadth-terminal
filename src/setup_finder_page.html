@@ -42,6 +42,8 @@
   td input[type=number] { width:76px; } td input.note { width:170px; font-family:inherit; border:1px solid var(--line); border-radius:6px; background:var(--bg); color:var(--text); }
   td select { max-width:150px; }
   td.edited input, td.edited select { border-color:var(--warn); }
+  .lg { display:inline-flex; align-items:center; justify-content:center; width:22px; height:22px; border-radius:6px; margin-right:7px; vertical-align:middle; font-size:9px; font-weight:700; color:#fff; position:relative; overflow:hidden; flex:none; }
+  .lg img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; background:#fff; }
   a.tk { color:var(--accent); font-weight:700; cursor:pointer; text-decoration:none; } a.tk:hover { text-decoration:underline; }
   .tag { display:inline-block; font-size:10.5px; font-weight:700; padding:2px 7px; border-radius:99px; background:var(--accent-a); color:var(--accent); }
   .sugg { font-size:12px; } .sugg button { font:600 11px inherit; font-family:inherit; border:1px solid var(--line); background:var(--bg); color:var(--accent); border-radius:6px; padding:2px 6px; cursor:pointer; margin-left:4px; }
@@ -98,6 +100,8 @@ const $ = id => document.getElementById(id);
 const esc = s => { const d = document.createElement("div"); d.textContent = s == null ? "" : String(s); return d.innerHTML; };
 const YEARS = [2020, 2021, 2022, 2023, 2024, 2025, 2026];
 let ROWS = [], META = {}, ST = {edits: {}, filters: {}, suggestions: {}}, TYPES = [], sortKey = "gainEntry", sortDir = -1, years = new Set([2021]), picked = new Set(), allSectors = true, saveTimers = {};
+const hue = s => { let h = 0; for (const c of s || "") h = (h * 31 + c.charCodeAt(0)) % 360; return "hsl(" + h + ",42%,45%)"; };
+const logoHtml = r => '<span class="lg" style="background:' + hue(r.t) + '">' + esc(r.t.slice(0, 2)) + (r.logo ? '<img loading="lazy" src="/api/logo/' + encodeURIComponent(r.logo) + '" alt="" onerror="this.remove()">' : "") + "</span>";
 const num = id => { const v = $(id).value; return v === "" ? null : +v; };
 
 const COLS = [["t","Ticker"],["year","Year"],["sector","Sector"],["entry","Entry date"],["entryPx","Entry $",1],["entryType","Type"],["depth","Pullback before",1],["baseDays","Base (sessions)",1],["offHigh","Entry vs prior high",1],["gainEntry","Gain from entry",1],["days","Sessions",1],["adr","ADR %",1],["dv","$ vol (M)",1],["sugg","Agent suggests"],["setup","Your setup"],["status","Status"],["note","Note"],["save","Setups database"]];
@@ -186,7 +190,7 @@ function draw() {
   $("rows").innerHTML = ROWS.map(r => {
     const e = eff(r), s = ST.suggestions[r.key];
     const sg = s ? '<span class="sugg" title="' + esc(s.reason || "") + '">' + esc(s.setup) + '<button data-use="' + esc(r.key) + '" title="Use this suggestion">use</button></span>' : '<span class="dim">&ndash;</span>';
-    return '<tr data-key="' + esc(r.key) + '"><td><a class="tk" data-open="' + esc(r.key) + '">' + esc(r.t) + '</a></td><td>' + r.year + '</td><td class="dim">' + esc(r.sector || "") + '</td>' +
+    return '<tr data-key="' + esc(r.key) + '"><td>' + logoHtml(r) + '<a class="tk" data-open="' + esc(r.key) + '">' + esc(r.t) + '</a></td><td>' + r.year + '</td><td class="dim">' + esc(r.sector || "") + '</td>' +
       '<td class="' + (e.edited ? "edited" : "") + '"><input type="date" data-f="entry" data-key="' + esc(r.key) + '" value="' + e.entry + '"></td>' +
       '<td class="r ' + (e.edited ? "edited" : "") + '"><input type="number" step="0.01" data-f="entryPx" data-key="' + esc(r.key) + '" value="' + e.entryPx + '"></td>' +
       '<td><span class="tag">' + (e.edited ? "edited" : r.entryType) + '</span></td>' +
@@ -245,11 +249,11 @@ document.addEventListener("click", e => {
 function openChart(r) {
   const e = eff(r);
   const m = document.createElement("div"); m.className = "cmodal";
-  m.innerHTML = '<div><div class="ch"><b>' + esc(r.t) + '</b><span class="dim">' + esc(r.sector || "") + ' · entry ' + esc(e.entry) + ' at $' + e.entryPx + (e.depth != null ? ' · pullback ' + e.depth.toFixed(0) + '% from $' + e.priorHigh + ' over ' + e.baseDays + ' sessions' : '') + ' · peak ' + esc(r.peak) + ' at $' + r.peakPx + ' (+' + e.gain.toFixed(0) + '%)</span><span style="flex:1"></span><button class="btn" id="cm-x">Close</button></div><div id="cm-body"></div></div>';
+  m.innerHTML = '<div><div class="ch">' + logoHtml(r) + '<b>' + esc(r.t) + '</b><span class="dim">' + esc(r.sector || "") + ' · entry ' + esc(e.entry) + ' at $' + e.entryPx + (e.depth != null ? ' · pullback ' + e.depth.toFixed(0) + '% from $' + e.priorHigh + ' over ' + e.baseDays + ' sessions' : '') + ' · peak ' + esc(r.peak) + ' at $' + r.peakPx + ' (+' + e.gain.toFixed(0) + '%)</span><span style="flex:1"></span><button class="btn" id="cm-x">Close</button></div><div id="cm-body"></div></div>';
   document.body.appendChild(m);
   const close = () => m.remove(); m.querySelector("#cm-x").onclick = close; m.onclick = ev => { if (ev.target === m) close(); };
   const data = fetch("/docs/tickers/" + encodeURIComponent(r.t) + ".json").then(x => x.json())
-    .then(p => ({t: r.t, name: r.t, d: p.dates, o: p.open, h: p.high, l: p.low, c: p.close, v: p.volume || null}));
+    .then(p => ({t: r.t, name: r.t, d: p.dates, o: p.open, h: p.high, l: p.low, c: p.close, v: p.volume || null, logoUrl: r.logo ? "/api/logo/" + encodeURIComponent(r.logo) : ""}));
   TVE.mountStd(m.querySelector("#cm-body"), data, {ht: Math.max(420, Math.round(innerHeight * 0.68)), tf: "Trade",
     trades: [{d: e.entry, a: "buy", p: e.entryPx, label: "Entry $" + e.entryPx}, {d: r.peak, a: "sell", p: r.peakPx, label: "Peak $" + r.peakPx}]});
 }

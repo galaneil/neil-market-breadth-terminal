@@ -84,7 +84,7 @@ def _load(country):
             continue
         t = fn[:-5]
         info = cls.get(t) or [None, None, None]
-        names.append({"t": t, "sector": info[0] or "", "industry": info[1] or "", "d": dates, "c": c, "h": h, "l": l, "v": v})
+        names.append({"t": t, "sector": info[0] or "", "industry": info[1] or "", "logo": (info[2] if len(info) > 2 else "") or "", "d": dates, "c": c, "h": h, "l": l, "v": v})
     with _LOCK:
         _TABLE[country] = {"stamp": stamp, "names": names}
         _CACHE.clear()
@@ -157,7 +157,7 @@ def _row(n, i, j, k, kind):
     sma = float(np.nanmean(c[max(0, k - 49):k + 1])) if k >= 49 else None
     d = n["d"]
     return {
-        "key": n["t"] + "|" + d[i], "t": n["t"], "sector": n["sector"], "industry": n["industry"], "year": int(d[i][:4]),
+        "key": n["t"] + "|" + d[i], "t": n["t"], "logo": n.get("logo", ""), "sector": n["sector"], "industry": n["industry"], "year": int(d[i][:4]),
         "start": d[i], "startPx": round(float(c[i]), 2), "entry": d[k], "entryPx": round(float(c[k]), 2), "entryType": kind,
         "peak": d[j], "peakPx": round(float(c[j]), 2), "days": j - i, "daysFromEntry": j - k,
         "gainStart": round((float(c[j]) / float(c[i]) - 1) * 100, 1), "gainEntry": round((float(c[j]) / float(c[k]) - 1) * 100, 1),
