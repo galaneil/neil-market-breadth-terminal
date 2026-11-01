@@ -136,6 +136,7 @@ SYSTEM_PANELS = [
 ]
 
 MOVERS_PAGE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "movers_page.html")
+JOURNAL_REVIEW_JS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "journal_review.js")
 SETUP_FINDER_PAGE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "setup_finder_page.html")
 HOME_PAGE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "home_page.html")
 OUTPUT_DIR = os.path.join(os.path.dirname(config.ROOT_DIR), "Portfolio Local")
@@ -1161,6 +1162,21 @@ class Handler(BaseHTTPRequestHandler):
             with open(MOVERS_PAGE_FILE, encoding="utf-8") as f:
                 self._send(200, f.read(), "text/html; charset=utf-8")
             return
+        if route.path == "/journal-review.js":
+            with open(JOURNAL_REVIEW_JS, encoding="utf-8") as f:
+                self._send(200, f.read(), "application/javascript; charset=utf-8")
+            return
+        if route.path == "/api/journal/review":
+            import monthly_review
+            q = parse_qs(route.query)
+            account = (q.get("account") or ["NG-IBKR"])[0]
+            months = [m for m in ((q.get("months") or [""])[0]).split(",") if m]
+            try:
+                out = {"available": monthly_review.available(account)} if not months else monthly_review.build(months, account)
+                self._send(200, json.dumps(out), "application/json")
+            except Exception as error:
+                self._send(400, json.dumps({"error": str(error)}), "application/json")
+            return
         if route.path == "/setup-finder":
             with open(SETUP_FINDER_PAGE_FILE, encoding="utf-8") as f:
                 self._send(200, f.read(), "text/html; charset=utf-8")
@@ -2060,8 +2076,9 @@ JOURNAL_PAGE = r"""<!doctype html>
   </div>
   <div id="sync-banner" hidden style="font-size:12px;background:color-mix(in srgb, var(--accent) 10%, transparent);border:1px solid color-mix(in srgb, var(--accent) 30%, transparent);border-radius:9px;padding:10px 13px;margin-bottom:12px;line-height:1.6"></div>
   <div id="load-err" hidden></div>
-  <div class="jtabs" id="jtabs"><button class="jtab" data-t="dash">Dashboard</button><button class="jtab" data-t="trades">Trades</button></div>
+  <div class="jtabs" id="jtabs"><button class="jtab" data-t="dash">Dashboard</button><button class="jtab" data-t="trades">Trades</button><button class="jtab" data-t="review">Monthly review</button></div>
   <div id="tab-dash" hidden></div>
+  <div id="tab-review" hidden></div>
   <div id="tab-trades">
 
   <div class="kpi-strip">
@@ -3033,7 +3050,9 @@ function setJTab(t) {
   jtab = t; try { localStorage.setItem("journal-tab", t); } catch (e) {}
   document.querySelectorAll("#jtabs .jtab").forEach(b => b.classList.toggle("on", b.dataset.t === t));
   document.getElementById("tab-dash").hidden = t !== "dash"; document.getElementById("tab-trades").hidden = t !== "trades";
+  document.getElementById("tab-review").hidden = t !== "review";
   if (t === "dash") drawDash();
+  if (t === "review" && window.drawReview) window.drawReview();
 }
 document.querySelectorAll("#jtabs .jtab").forEach(b => b.addEventListener("click", () => setJTab(b.dataset.t)));
 
@@ -3243,6 +3262,10 @@ document.getElementById("d-rv-next").addEventListener("click", () => {
 })();
 
 setJTab(jtab);
+</script>
+<script src="/journal-review.js"></script>
+<script>
+if (jtab === "review" && window.drawReview) window.drawReview();
 
 loadJournal();
 </script>
@@ -4344,7 +4367,23 @@ function loadData(){
       +'<br>If this is the first run, connect the Notion integration to the <code>Setups Database</code> page (••• &rarr; Connections), same step as the Trade Journal.';
   });
 }
-loadData();
+loadData().then(function(){ if (window.__mbtOpen) openFromHub(window.__mbtOpen); });
+// The Monthly review (and anything else) can ask for a setup by name: show it in Browse & Filter.
+function openFromHub(o){
+  if (!o || !o.setup) return;
+  var s = STATE.types.find(function(x){ return x.name === o.setup; });
+  if (!s) {                                   // the setups are still loading: try again shortly (up to ~12 s)
+    o.tries = (o.tries || 0) + 1; window.__mbtOpen = o;
+    if (o.tries < 20) setTimeout(function(){ if (window.__mbtOpen) openFromHub(window.__mbtOpen); }, 600);
+    return;
+  }
+  var tab = document.querySelector('.tab[data-tab="browse"]'); if (tab) tab.click();
+  pickBrowse(s); window.__mbtOpen = null;
+}
+window.addEventListener("message", function(e){
+  if (e.origin !== location.origin || !e.data || !e.data.mbtOpen) return;
+  openFromHub(e.data.mbtOpen);
+});
 </script>
 </body></html>"""
 
@@ -5939,7 +5978,16 @@ window.addEventListener("message", e => {
   if (e.origin !== location.origin || !e.data || !e.data.hubGo) return;
   const item = topLevelItems().find(p => p.label === e.data.hubGo);
   if (!item) return;
-  navTo({code: country.code, top: item.label, sub: 0}, {force: true});
+  // {child: "Nasdaq 100"} opens that member of a grouped page; {open: {...}} is handed to the page once it has loaded
+  const sub = item.children && e.data.child ? Math.max(0, item.children.findIndex(c => c.label === e.data.child)) : 0;
+  navTo({code: country.code, top: item.label, sub: sub}, {force: true});
+  if (e.data.open) {
+    const t0 = curTab(), f0 = t0 && t0.frames[currentUrl];
+    if (f0) {
+      const send0 = () => { try { f0.contentWindow.postMessage({mbtOpen: e.data.open}, location.origin); } catch (err) {} };
+      f0.addEventListener("load", send0); setTimeout(send0, 1200); setTimeout(send0, 3500);
+    }
+  }
   // A landing-page click can say which stretch of an index to shade; hand it to every
   // member frame of the page (they are created now, so wait for each to load).
   if (Array.isArray(e.data.focus) && item.children) {

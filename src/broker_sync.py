@@ -285,6 +285,11 @@ def reconcile_ibkr(log=print):
               "needs_date": [], "possibly_closed": [], "error": None}
     try:
         statement = ibkr_flex.parse(ibkr_flex.fetch_statement(log=log))
+        try:
+            import monthly_review
+            monthly_review.record_nav(statement)        # keep the account's daily value for the Monthly review
+        except Exception as error:
+            log(f"  account history not saved: {error}")
     except Exception as error:
         log(f"  IBKR reconcile skipped: {error}")
         result["error"] = str(error)
