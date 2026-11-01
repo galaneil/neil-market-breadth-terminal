@@ -2076,7 +2076,7 @@ JOURNAL_PAGE = r"""<!doctype html>
   </div>
   <div id="sync-banner" hidden style="font-size:12px;background:color-mix(in srgb, var(--accent) 10%, transparent);border:1px solid color-mix(in srgb, var(--accent) 30%, transparent);border-radius:9px;padding:10px 13px;margin-bottom:12px;line-height:1.6"></div>
   <div id="load-err" hidden></div>
-  <div class="jtabs" id="jtabs"><button class="jtab" data-t="dash">Dashboard</button><button class="jtab" data-t="trades">Trades</button><button class="jtab" data-t="review">Monthly review</button></div>
+  <div class="jtabs" id="jtabs"><button class="jtab" data-t="dash">Dashboard</button><button class="jtab" data-t="review">Monthly review</button><button class="jtab" data-t="trades">Trades</button></div>
   <div id="tab-dash" hidden></div>
   <div id="tab-review" hidden></div>
   <div id="tab-trades">
@@ -5600,6 +5600,7 @@ const ICONS = {
     + '<polyline points="15 7 21 7 21 13"/>'),
   "Screener": icon('<path d="M3 5h18l-7 8v6l-4 2v-8z"/>'
     + '<circle cx="12" cy="2.2" r="1.1" fill="currentColor" stroke="none"/>'),
+  "Setup finder": icon('<circle cx="11" cy="11" r="6.5"/><path d="M20 20l-4.35-4.35"/><path d="M8 13l2.2-2.6 1.8 1.6 2.4-3.2"/>'),
   "Market Replay": icon('<circle cx="12" cy="12" r="9"/>'
     + '<path d="M10 8.3l5.2 3.7-5.2 3.7z" fill="currentColor" stroke="none"/>'),
   "Stock Lookup": icon('<circle cx="10.5" cy="10.5" r="6.5"/><path d="M20 20l-4.35-4.35"/>'
