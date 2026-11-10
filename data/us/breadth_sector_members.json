@@ -3,11 +3,11 @@
  "Communications": 9,
  "Consumer Durables": 43,
  "Consumer Non-Durables": 65,
- "Consumer Services": 76,
+ "Consumer Services": 78,
  "Distribution Services": 29,
  "Electronic Technology": 124,
  "Energy Minerals": 39,
- "Finance": 345,
+ "Finance": 344,
  "Health Services": 32,
  "Health Technology": 108,
  "Industrial Services": 48,
@@ -16,7 +16,7 @@
  "Process Industries": 61,
  "Producer Manufacturing": 120,
  "Retail Trade": 66,
- "Technology Services": 133,
+ "Technology Services": 132,
  "Transportation": 45,
  "Utilities": 59
 }
