@@ -474,6 +474,98 @@ def _tmle_stock_body():
 """.strip()
 
 
+def _compute_price_stage2_signals(country, max_days=14, limit=60, min_adr=1.5):
+    """Stage 2 for markets where TMLE does not run (India), from each name's own price file with plain rules.
+
+    A name is in Stage 2 on a day when ALL of these hold: close above its 150-day average (the 30-week line), that
+    average higher than it was 20 sessions ago, and the 50-day average above the 150-day. The signal is the day that
+    run of 'yes' began, kept while it is at most max_days old and the name was NOT in Stage 2 for the 10 sessions
+    before. 'Actionable' means within 25% of its 52-week high and not more than 40% above its 150-day (not yet
+    stretched). The same fields as the US list, so the page treats both alike."""
+    data_dir_ = config.data_dir(country)
+    quotes = {}
+    qp = os.path.join(data_dir_, "hilo_quotes.json")
+    if os.path.exists(qp):
+        with open(qp, encoding="utf-8") as f:
+            quotes = json.load(f)
+    universe = _load_ticker_universe(country, quotes)
+    industry_rows = store.read_jsonl(os.path.join(data_dir_, "industry_ranks.jsonl"))
+
+    def rank_of(day, industry):
+        for item in day.get("industries", []):
+            if item.get("industry") == industry:
+                return item.get("rank")
+        return None
+    past = industry_rows[max(0, len(industry_rows) - 21)] if industry_rows else None
+    now = industry_rows[-1] if industry_rows else None
+
+    def sma(vals, i, w):
+        seg = vals[i - w + 1:i + 1]
+        return sum(seg) / w if len(seg) == w and None not in seg else None
+
+    tdir = config.ticker_dir(country)
+    out = []
+    for ticker, (sector, industry, adr, market_cap) in universe.items():
+        if adr is not None and adr < min_adr:
+            continue
+        path = os.path.join(tdir, ticker + ".json")
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path, encoding="utf-8") as f:
+                p = json.load(f)
+        except Exception:
+            continue
+        c, hi, lo, dates = p.get("close") or [], p.get("high") or [], p.get("low") or [], p.get("dates") or []
+        n = len(c) - 1
+        if n < 175 or c[n] is None:
+            continue
+        s50 = [None] * (n + 1)
+        s150 = [None] * (n + 1)
+        for i in range(max(149, n - 40), n + 1):
+            s50[i], s150[i] = sma(c, i, 50), sma(c, i, 150)
+
+        def stage2(i):
+            if i < 20 or c[i] is None or s150[i] is None or s50[i] is None:
+                return False
+            prev = sma(c, i - 20, 150)
+            return prev is not None and c[i] > s150[i] and s150[i] > prev and s50[i] > s150[i]
+        if not stage2(n):
+            continue
+        start = n
+        while start - 1 >= max(149, n - 40) and stage2(start - 1):
+            start -= 1
+        if start <= max(149, n - 40):
+            continue  # already in Stage 2 for the whole look-back, not a fresh flip
+        days = n - start
+        # the dates are sessions, so convert to calendar days for the same rule the US list uses
+        try:
+            cal = (datetime.strptime(dates[n], "%Y-%m-%d") - datetime.strptime(dates[start], "%Y-%m-%d")).days
+        except Exception:
+            cal = days
+        if cal > max_days:
+            continue
+        yr = slice(max(0, n - 251), n + 1)
+        high52 = max(x for x in (hi[yr] or c[yr]) if x is not None)
+        low_base = min(x for x in (lo[max(0, start - 60):n + 1] or c[max(0, start - 60):n + 1]) if x is not None)
+        off_high = (c[n] / high52 - 1) * 100
+        gain = (c[n] / low_base - 1) * 100 if low_base else None
+        ext = (c[n] / s150[n] - 1) * 100
+        vols = [v for v in (p.get("volume") or [])[-30:] if v is not None]
+        turnover = (sum(vols) / len(vols)) * c[n] if vols else None
+        q = quotes.get(ticker) or [None, None, None]
+        out.append({
+            "sym": ticker, "sector": sector, "industry": industry,
+            "price": c[n], "chg": q[1] if len(q) > 1 else None, "adr": adr, "turnover": turnover,
+            "daysInStage": cal, "offHigh": round(off_high, 1), "gain": round(gain, 1) if gain is not None else None,
+            "actionable": off_high >= -25 and ext <= 40,
+            "indRankFrom": rank_of(past, industry) if past else None,
+            "indRankTo": rank_of(now, industry) if now else None, "marketCap": market_cap,
+        })
+    out.sort(key=lambda x: x["daysInStage"])
+    return out[:limit]
+
+
 def _compute_breakout_signals(country, max_days=14, limit=60):
     """Names that flipped into Stage 2 within the last couple of weeks --
     exactly TMLE's own actionable logic, just surfaced the moment it fires
@@ -486,7 +578,7 @@ def _compute_breakout_signals(country, max_days=14, limit=60):
     """
     cfg = config.COUNTRIES[country]
     if not cfg.get("run_tmle"):
-        return []
+        return _compute_price_stage2_signals(country, max_days=max_days, limit=limit)
 
     data_dir_ = config.data_dir(country)
     leaders_rows = store.read_jsonl(os.path.join(data_dir_, "tmle_leaders.jsonl"))

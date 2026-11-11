@@ -951,3 +951,11 @@ tr.bi-dd-stock{cursor:pointer}tr.bi-dd-stock:hover td{background:rgba(120,140,16
 .stock-pin-who { margin-top: 8px; display: flex; flex-wrap: wrap; align-items: center; gap: 4px 8px; font-size: 12px; }
 .pin-ind { font-size: 12.5px; } .pin-cap { color: var(--text-dim); } .pin-off { font-weight: 400; color: var(--text-dim); font-size: 11px; }
 .stock-pin-head > span:last-child { margin-left: auto; }
+
+/* collapsible signals rail */
+.rail-fold { display: block; margin: 0 0 10px auto; font: inherit; font-size: 11.5px; font-weight: 700; color: var(--text-dim);
+  background: transparent; border: 1px solid var(--border); border-radius: 6px; padding: 3px 9px; cursor: pointer; }
+.rail-fold:hover { color: var(--text); border-color: var(--text-dim); }
+.signals-rail.collapsed { width: auto; padding: 8px; }
+.signals-rail.collapsed > *:not(.rail-fold) { display: none; }
+.signals-rail.collapsed .rail-fold { margin: 0; }

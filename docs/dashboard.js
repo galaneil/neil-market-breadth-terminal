@@ -1734,9 +1734,11 @@
           ["From base low", s.gain != null ? "+" + Math.round(s.gain) + "%" : "—", "up"],
         ];
       },
-      note: "TMLE-scored, US only — this signal needs Stage classification, which "
-        + "doesn't run for India yet. Earnings/gap and Cup formation don't depend on "
-        + "TMLE at all, which is why those two work for both markets.",
+      note: DATA.tmleDir
+        ? "US: scored by TMLE's own Stage classification, the same read the Leaders page shows."
+        : "India: TMLE does not run here, so Stage 2 is read from each name's own prices with plain rules — "
+          + "above a rising 30-week (150-day) average, with the 50-day above the 150-day. It counts the day that run began; "
+          + "'Actionable' means within 25% of its 52-week high and not more than 40% above its 150-day.",
     },
     earnings: {
       title: "Earnings / gap turnaround",
@@ -1904,7 +1906,7 @@
     // breakout needs TMLE, which only runs for the US -- defaulting to it
     // anyway on the India page meant every visit opened on "nothing
     // qualifies" with the real signals one click away and easy to miss.
-    let activeSig = DATA.tmleDir ? "breakout" : "earnings";
+    let activeSig = "breakout";
     let adrMin = 2.0, turnMin = 20, mcapMin = 0;
     let hideExtended = false;
     let gapMin = 5, volMultMin = 2;
@@ -2121,18 +2123,13 @@
         : "the last " + Math.max(recentDays().length, 1) + " session" + (recentDays().length === 1 ? "" : "s");
       document.getElementById("signals-count").textContent = merged.length
         ? rows.length + " of " + merged.length + " candidates clear the filters, from " + windowLabel
-        : "Nothing qualifies right now" + (activeSig === "breakout" && !DATA.tmleDir
-            ? " — TMLE isn't scored for this market yet, so this signal has nothing to show here."
-            : " — check back after the next update, or after the market's had a chance to move.");
+        : "Nothing qualifies right now — check back after the next update, or after the market's had a chance to move.";
 
       const feed = document.getElementById("signals-feed");
       if (!rows.length) {
         feed.innerHTML = '<div class="empty-note">' + (merged.length
           ? "Nothing clears these filters right now. Loosen the liquidity floor or the signal-specific filter on the left."
-          : (activeSig === "breakout" && !DATA.tmleDir
-              ? "TMLE isn't scored for this market yet — Stage 2 breakout has nothing to show here. "
-                + "Try Earnings/gap turnaround or Cup formation instead; those read straight off price data and cover every market."
-              : "Nothing qualifies right now — check back after the next update."))
+          : "Nothing qualifies right now — check back after the next update.")
           + "</div>";
         return;
       }
@@ -2419,6 +2416,24 @@
     document.querySelectorAll("#signals-rail .sig-item[data-sig]").forEach(function (i) {
       i.classList.toggle("active", i.dataset.sig === activeSig);
     });
+    // The left panel folds away to a slim strip, remembered between visits, to give the list the full width.
+    (function () {
+      const rail = document.getElementById("signals-rail");
+      if (!rail || document.getElementById("rail-fold")) return;
+      const btn = document.createElement("button");
+      btn.id = "rail-fold"; btn.type = "button"; btn.className = "rail-fold";
+      rail.insertBefore(btn, rail.firstChild);
+      function set(c) {
+        rail.classList.toggle("collapsed", c);
+        btn.textContent = c ? "› Filters" : "‹ Hide";
+        btn.title = c ? "Show the signal types and filters" : "Hide the signal types and filters";
+        try { localStorage.setItem("sig-rail-collapsed", c ? "1" : "0"); } catch (e) {}
+      }
+      btn.addEventListener("click", function () { set(!rail.classList.contains("collapsed")); });
+      let c0 = false;
+      try { c0 = localStorage.getItem("sig-rail-collapsed") === "1"; } catch (e) {}
+      set(c0);
+    })();
     drawTypeFilters();
     drawDayStrip();
     draw();
