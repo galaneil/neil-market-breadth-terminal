@@ -791,6 +791,54 @@ def _compute_cup_signals(country, min_correction=15.0, max_correction=40.0,
 # day's entry rather than duplicating it; a new date appends. Trimmed to the
 # last 10 sessions on write -- two trading weeks is plenty for a "what did I
 # miss" glance without the file growing forever.
+def _signal_profiles(country, symbols, budget_s=100):
+    """Company name, exchange and a short description for every name that has fired a signal, from FMP's profile
+    endpoint. Cached in data/<country>/signal_profiles.json so a nightly run only fetches the names it has not seen."""
+    if country != "US":
+        return {}
+    path = os.path.join(config.data_dir(country), "signal_profiles.json")
+    cache = {}
+    try:
+        with open(path, encoding="utf-8") as f:
+            cache = json.load(f)
+    except (OSError, ValueError):
+        pass
+    todo = [s for s in sorted(set(symbols)) if s not in cache]
+    if todo:
+        import time
+        import requests
+        key = os.environ.get("FMP_API_KEY")
+        if not key:
+            try:
+                import main as _main
+                key = _main.api_key_from_env_file()
+            except Exception:
+                key = None
+        started = time.time()
+        for sym in todo:
+            if not key or time.time() - started > budget_s:
+                break
+            try:
+                r = requests.get("https://financialmodelingprep.com/stable/profile", params={"symbol": sym, "apikey": key}, timeout=15)
+                row = (r.json() or [{}])[0] if r.status_code == 200 else {}
+            except Exception:
+                row = {}
+            desc = (row.get("description") or "").strip()
+            if len(desc) > 260:
+                desc = desc[:260].rsplit(" ", 1)[0] + "\u2026"
+            name = (row.get("companyName") or "").replace(" Common Stock", "").strip()
+            cache[sym] = {"n": name, "x": row.get("exchange") or "", "d": desc}
+            time.sleep(0.2)
+        try:
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(cache, f, separators=(",", ":"))
+            os.replace(tmp, path)
+        except OSError:
+            pass
+    return {s: cache[s] for s in symbols if s in cache}
+
+
 def _update_signals_log(country, date, breakout, earnings, cup):
     if not date:
         return
@@ -944,11 +992,13 @@ def _stock_pin_html():
   <div class="stock-pin-head">
     <div class="stock-pin-title"><img class="stock-pin-logo" id="pin-logo" alt=""
       onerror="this.style.visibility='hidden'"><b id="pin-symbol"></b> <span id="pin-name"></span></div>
-    <button class="stock-pin-close" id="pin-close" aria-label="Close">&times;</button>
+    <span style="display:flex;gap:4px;align-items:center"><button class="pin-star" id="pin-star" title="Add to watchlist" aria-label="Add to watchlist">&#9733;</button>
+    <button class="stock-pin-close" id="pin-close" aria-label="Close">&times;</button></span>
   </div>
   <div class="stock-pin-body">
     <span class="stock-pin-price" id="pin-price"></span><span class="stock-pin-chg" id="pin-chg"></span>
     <span class="stock-pin-stage" id="pin-stage"></span>
+    <div class="stock-pin-who" id="pin-who"></div>
     <div class="stock-pin-verdict" id="pin-verdict"></div>
     <div class="stock-pin-stats" id="pin-stats"></div>
     <div class="lw-chart" id="pin-chart" style="flex:1 1 auto; min-height:80px; margin-top:10px"></div>
@@ -1635,6 +1685,11 @@ def render_all_panels(country):
     as_of = env_rows[-1]["date"] if env_rows else None
     sig_extra["signalsLog"] = _update_signals_log(
         country, as_of, breakout_signals, earnings_signals, cup_signals)
+    seen_syms = {x["sym"] for lst in (breakout_signals, earnings_signals, cup_signals) for x in lst}
+    for day in sig_extra["signalsLog"]:
+        for typ in ("breakout", "earnings", "cup"):
+            seen_syms.update(day.get(typ) or [])
+    sig_extra["signalProfiles"] = _signal_profiles(country, seen_syms)
     paths.append(_write_panel(
         country, "panel-signals.html", "Signals",
         _signals_body(), sig_extra, generated_at,

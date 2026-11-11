@@ -543,7 +543,7 @@
   // the chart is scrollable/zoomable like a real charting package.
   // EMA colours match Neil's own TradingView layout so the two read the same:
   // 10 blue, 20 red, 50 orange.
-  const EMA_COLORS = { ema10: "#2962FF", ema20: "#F23645", ema50: "#FF9800" };
+  const EMA_COLORS = { ema10: "#2962FF", ema20: "#F23645", ema50: "#FF9800", ema200: "#0B2A7A", ema200Dark: "#5B7DFF" };
   const lwUpdaters = [];
 
   // Shift-drag anywhere on a chart to measure the move between two points,
@@ -1160,10 +1160,17 @@
     // every caller to have one.
     const tickerDir = DATA.tickerDir || "tickers";
     const tmleDir = DATA.tmleDir;
-    let pinChart = null, pinLayer = null;
+    let pinChart = null, pinLayer = null, pinSym = null;
     openStockPin = function (ticker, context) {
+      pinSym = ticker;
       document.getElementById("pin-symbol").textContent = ticker;
-      document.getElementById("pin-name").textContent = context || "";
+      const co = companyName(ticker), bs = basicsOf(ticker);
+      document.getElementById("pin-name").textContent = (co ? co + (context ? " \u00b7 " : "") : "") + (context || "");
+      document.getElementById("pin-who").innerHTML = secChip(bs.sector) + (bs.industry ? ' <b class="pin-ind">' + bs.industry + "</b>" : "")
+        + (bs.marketCap ? ' <span class="pin-cap">' + fmtMcap2(bs.marketCap) + " mkt cap</span>" : "");
+      pin.classList.toggle("wide", !!document.getElementById("signals-rail"));
+      const starEl = document.getElementById("pin-star");
+      if (starEl) { starEl.dataset.sym = ticker; starEl.classList.toggle("on", inWatchlist(ticker)); }
       const pinLogo = document.getElementById("pin-logo");
       const logoTags = (DATA.classification || {})[ticker];
       const logoid = logoTags && logoTags[2];
@@ -1248,6 +1255,18 @@
             });
             line.setData(toTail(emaSeries(p.close, spec[0])));
           });
+          // The 200 EMA, bold and dark blue, computed over the whole history so it is already settled when the window starts.
+          const l200 = pinChart.addLineSeries({
+            color: isDarkTheme() ? EMA_COLORS.ema200Dark : EMA_COLORS.ema200, lineWidth: 3, priceLineVisible: false, lastValueVisible: true,
+            title: "200", crosshairMarkerVisible: false,
+          });
+          l200.setData(toTail(emaSeries(p.close, 200)));
+          // 52-week high and low: dashed lines with their values on the axis, from the last 252 sessions.
+          const yr0 = Math.max(0, n - 251);
+          const hi52 = Math.max.apply(null, p.high.slice(yr0, n + 1).filter(function (x) { return x != null; }));
+          const lo52 = Math.min.apply(null, p.low.slice(yr0, n + 1).filter(function (x) { return x != null; }));
+          bars.createPriceLine({ price: hi52, color: th.text, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: "52w high" });
+          bars.createPriceLine({ price: lo52, color: th.text, lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: "52w low" });
 
           // Volume, squeezed into that reserved bottom strip via its own
           // price scale ("vol") rather than the main one — plus its own
@@ -1290,7 +1309,12 @@
             if (v >= 1e9) return "$" + fmtNum(v / 1e9, 2) + "B";
             return "$" + fmtNum(v / 1e6, 1) + "M";
           }
+          const offHi = (p.close[n] / hi52 - 1) * 100, offLo = (p.close[n] / lo52 - 1) * 100;
           priceStatsHtml =
+            '<div><div class="stock-pin-stat-label">52w high</div><div class="stock-pin-stat-val">' + fmtNum(hi52, 2)
+              + ' <span class="pin-off">' + (offHi >= 0 ? "+" : "") + fmtNum(offHi, 0) + '%</span></div></div>' +
+            '<div><div class="stock-pin-stat-label">52w low</div><div class="stock-pin-stat-val">' + fmtNum(lo52, 2)
+              + ' <span class="pin-off">+' + fmtNum(offLo, 0) + '%</span></div></div>' +
             '<div><div class="stock-pin-stat-label">ADR</div><div class="stock-pin-stat-val">'
               + (adr == null ? "—" : fmtNum(adr, 1) + "%") + '</div></div>' +
             '<div><div class="stock-pin-stat-label">Avg turnover</div><div class="stock-pin-stat-val">'
@@ -1333,6 +1357,11 @@
       }
     };
 
+    document.getElementById("pin-star").addEventListener("click", function () {
+      if (!pinSym) return;
+      const live = ((DATA.signals || []).concat(DATA.earningsSignals || [], DATA.cupSignals || [])).find(function (x) { return x.sym === pinSym; });
+      toggleWatch(live || basicsOf(pinSym), sigPinType || (live ? "breakout" : null));
+    });
     document.getElementById("pin-close").addEventListener("click", function () {
       pin.classList.remove("open");
       if (pinLayer) { EscStack.remove(pinLayer); pinLayer = null; }
@@ -1771,6 +1800,50 @@
     },
   };
 
+  // ---- shared by the Signals tracker and the stock pin: sector colours, company names, watchlist state ----
+  let sigPinType = null;       // the signal type the pinned name was opened from, so the pin's star saves it with that setup
+  function secHue(sector) { let h = 0; String(sector || "").split("").forEach(function (c) { h = (h * 31 + c.charCodeAt(0)) % 360; }); return h; }
+  function secChip(sector) {
+    if (!sector) return "";
+    const h = secHue(sector);
+    return '<span class="sec-chip" style="background:hsl(' + h + ' 70% 50% / .15);color:hsl(' + h + ' 65% 40%)"><span class="sec-dot" style="background:hsl(' + h + ' 65% 48%)"></span>' + sector + "</span>";
+  }
+  function companyName(sym) {
+    const n = ((DATA.signalProfiles || {})[sym] || {}).n || "";
+    return n.replace(/,? (Inc\.?|Corporation|Corp\.?|Class [A-C].*|Ordinary Shares.*)\s*$/i, "");
+  }
+  function isDarkTheme() {
+    const t = document.documentElement.getAttribute("data-theme");
+    return t ? t === "dark" : !!(window.matchMedia && matchMedia("(prefers-color-scheme: dark)").matches);
+  }
+  // A name's basics for the watchlist and the pin, from what the page already carries (classification + quotes).
+  function basicsOf(sym) {
+    const c = (DATA.classification || {})[sym] || [], q = (DATA.quotes || {})[sym] || [];
+    return { sym: sym, sector: c[0] || "", industry: c[1] || "", marketCap: c[3] != null ? c[3] : null, price: q[0], chg: q[1], adr: q[2], turnover: q[3] != null ? q[3] * 1e6 : null };
+  }
+  function fmtMcap2(v) {
+    if (v == null) return "\u2014";
+    return v >= 1e12 ? "$" + (v / 1e12).toFixed(2) + "T" : v >= 1e9 ? "$" + (v / 1e9).toFixed(1) + "B" : "$" + Math.round(v / 1e6) + "M";
+  }
+  function inWatchlist(sym) {
+    const L = loadWatchlists();
+    return Object.keys(L).some(function (n) { return L[n].some(function (r) { return r.sym === sym; }); });
+  }
+  function removeFromWatchlists(sym) {
+    const L = loadWatchlists();
+    Object.keys(L).forEach(function (n) { L[n] = L[n].filter(function (r) { return r.sym !== sym; }); });
+    saveWatchlists(L);
+  }
+  function toggleWatch(item, type) {
+    if (inWatchlist(item.sym)) removeFromWatchlists(item.sym); else addToWatchlist(item, type);
+    document.querySelectorAll('[data-star="' + item.sym + '"]').forEach(function (b) {
+      const on = inWatchlist(item.sym);
+      b.classList.toggle("on", on); b.title = on ? "On your watchlist (click to remove)" : "Add to watchlist";
+    });
+    const ps = document.getElementById("pin-star");
+    if (ps && ps.dataset.sym === item.sym) { ps.classList.toggle("on", inWatchlist(item.sym)); }
+  }
+
   function sigLogoImg(sym, cls) {
     const tags = cls[sym];
     const logoid = tags && tags[2];
@@ -1838,6 +1911,8 @@
     let corrMin = 15, corrMax = 40;
     let searchTerm = "";
     let sigSector = "", sigIndustry = "", chgMin = -20;
+    const trackerSort = { k: "default", d: -1 };      // Tracker column sort; "default" keeps the scan's own order
+    const drawSignals = function () {};              // holds the since-signal cache across redraws
     // Which day-strip buttons are toggled on. Empty = no day filter at all --
     // show the full window (today's live list unioned with whatever the log
     // has for earlier days), which is also just what today alone looks like
@@ -2024,6 +2099,23 @@
         return a.historical ? a.sym.localeCompare(b.sym) : SORTERS[activeSig](a, b);
       });
 
+      if (trackerSort.k !== "default") {
+        const qs = DATA.quotes || {}, cc = DATA.classification || {};
+        const val = {
+          sym: function (r) { return r.sym; }, sector: function (r) { return ((cc[r.sym] || [])[0] || "") + ((cc[r.sym] || [])[1] || ""); },
+          mcap: function (r) { return r.marketCap != null ? r.marketCap : ((cc[r.sym] || [])[3] || 0); }, price: function (r) { return r.price != null ? r.price : ((qs[r.sym] || [])[0] || 0); },
+          chg: function (r) { return r.chg != null ? r.chg : ((qs[r.sym] || [])[1] || 0); },
+          since: function (r) { const v = drawSignals.sinceCache && drawSignals.sinceCache[r.sym + "|" + firedDay(r.sym)]; return v == null ? -999 : v; },
+          fired: function (r) { return firedDay(r.sym) || ""; },
+        }[trackerSort.k];
+        rows.sort(function (a, b) { const x = val(a), y = val(b); return (x > y ? 1 : x < y ? -1 : a.sym.localeCompare(b.sym)) * trackerSort.d; });
+      }
+      function firedDay(sym) {
+        const w = selectedDays.length ? selectedDays : (DATA.signalsLog || []).map(function (d) { return d.date; });
+        const l = DATA.signalsLog || [];
+        for (let k = 0; k < l.length; k++) if (w.indexOf(l[k].date) !== -1 && (l[k][activeSig] || []).indexOf(sym) !== -1) return l[k].date;
+        return "";
+      }
       const windowLabel = selectedDays.length
         ? selectedDays.length + " selected day" + (selectedDays.length === 1 ? "" : "s")
         : "the last " + Math.max(recentDays().length, 1) + " session" + (recentDays().length === 1 ? "" : "s");
@@ -2045,46 +2137,49 @@
         return;
       }
 
-      feed.innerHTML = rows.map(function (s) {
-        if (s.historical) {
-          return '<div class="sig-card historical" data-sym="' + s.sym + '">'
-            + '<div class="sig-top">'
-              + sigLogoImg(s.sym, cls)
-              + '<span class="sig-sym-block"><span class="sig-sym">' + s.sym + '</span><span class="sig-ind">from the log — not in today\'s live scan</span></span>'
-              + '<span class="sig-chip forming">Historical</span>'
-            + '</div>'
-          + '</div>';
+      // ---- three ways to read the same list: Tracker (default), Cards, By day ----
+      const layout = (function () { try { return localStorage.getItem("sig-layout") || "tracker"; } catch (e) { return "tracker"; } })();
+      (function layoutSwitch() {
+        let sw = document.getElementById("sig-layout");
+        if (!sw) {
+          sw = document.createElement("div");
+          sw.id = "sig-layout"; sw.className = "sig-layout";
+          const strip = document.getElementById("sig-daystrip");
+          strip.parentNode.insertBefore(sw, strip);
+          sw.addEventListener("click", function (e) {
+            const b = e.target.closest("button[data-l]"); if (!b) return;
+            try { localStorage.setItem("sig-layout", b.dataset.l); } catch (x) {}
+            draw();
+          });
         }
-        const up = (s.chg || 0) >= 0;
-        const chip = cfg.chip(s);
-        return '<div class="sig-card" data-sym="' + s.sym + '">'
-          + '<div class="sig-top">'
-            + sigLogoImg(s.sym, cls)
-            + '<span class="sig-sym-block"><span class="sig-sym">' + s.sym + '</span><span class="sig-ind">'
-              + (s.industry || "") + '</span></span>'
-            + '<span class="sig-price-block"><span class="sig-price">' + fmtNum(s.price, 2) + '</span>'
-              + '<span class="sig-chg ' + (up ? "up" : "down") + '">' + (up ? "+" : "") + fmtNum(s.chg, 2) + '%</span></span>'
-            + '<span class="sig-stat"><span class="sig-stat-label">ADR</span>' + fmtNum(s.adr, 1) + '%</span>'
-            + '<span class="sig-stat"><span class="sig-stat-label">Turnover</span>' + fmtTurnover(s.turnover) + '</span>'
-            + '<span class="sig-chip ' + chip[0] + '">' + chip[1] + '</span>'
-          + '</div>'
-          + '<div class="sig-reason">' + cfg.reason(s) + '</div>'
-          + '<div class="sig-expand">'
-            + '<div class="sig-facts">'
-              + cfg.facts(s).map(function (f) {
-                  return '<div class="sig-fact"><span>' + f[0] + '</span><b class="' + (f[2] || "") + '">' + f[1] + '</b></div>';
-                }).join("")
-              + '<div class="sig-actions">'
-                + '<button class="sig-open-lookup">Open Stock Lookup</button>'
-                + '<button class="primary sig-add-wl" data-sym="' + s.sym + '">Add to '
-                  + (Object.keys(loadWatchlists())[0] || "Default") + '</button>'
-              + '</div>'
-              + (feedbackReady ? feedbackRowHTML(s.sym) : '')
-            + '</div>'
-          + '</div>'
-        + '</div>';
-      }).join("");
-
+        sw.innerHTML = '<span class="sig-layout-l">View</span>' + [["tracker", "Tracker"], ["cards", "Cards"], ["day", "By day"]].map(function (l) {
+          return '<button type="button" data-l="' + l[0] + '" class="' + (layout === l[0] ? "on" : "") + '">' + l[1] + "</button>";
+        }).join("");
+      })();
+      const logDays = DATA.signalsLog || [];
+      const firedOn = {};
+      rows.forEach(function (r) {
+        const w = selectedDays.length ? selectedDays : logDays.map(function (d) { return d.date; });
+        for (let k = 0; k < logDays.length; k++) {
+          if (w.indexOf(logDays[k].date) !== -1 && (logDays[k][activeSig] || []).indexOf(r.sym) !== -1) { firedOn[r.sym] = logDays[k].date; break; }
+        }
+      });
+      const itemOf = function (r) { return r.historical ? Object.assign(basicsOf(r.sym), { historical: true, firedDate: firedOn[r.sym] }) : r; };
+      const dayLabel = function (d) { return d ? new Date(d + "T12:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "—"; };
+      const starBtn = function (sym) {
+        const on = inWatchlist(sym);
+        return '<button type="button" class="sig-star' + (on ? " on" : "") + '" data-star="' + sym + '" title="' + (on ? "On your watchlist (click to remove)" : "Add to watchlist") + '" aria-label="Watchlist">&#9733;</button>';
+      };
+      const statusOf = function (r) {
+        if (r.historical) return ["old", "Not in today's scan"];
+        const c = cfg.chip(r); return [c[0] === "watch" ? "ext" : "act", c[1]];
+      };
+      const nameLine = function (r) { const n = companyName(r.sym); return n ? '<span class="sig-co">' + n + "</span>" : ""; };
+      const whyHTML = function (r) {
+        return r.historical
+          ? "Fired " + dayLabel(firedOn[r.sym]) + ", and it is no longer in today's scan. Price and basics below are today's."
+          : cfg.reason(r);
+      };
       function feedbackRowHTML(sym) {
         const r = feedbackFor(sym, fbDate(), activeSig);
         const editing = feedbackEditing === sym;
@@ -2099,31 +2194,119 @@
                     + (r.note || "").replace(/"/g, "&quot;") + '">' : ''))
         + '</div>';
       }
+      const detailHTML = function (r) {
+        return '<div class="sig-why">' + whyHTML(r) + '</div>'
+          + (r.historical ? "" : '<div class="sig-facts">' + cfg.facts(r).map(function (f) {
+              return '<div class="sig-fact"><span>' + f[0] + '</span><b class="' + (f[2] || "") + '">' + f[1] + '</b></div>';
+            }).join("") + "</div>")
+          + '<div class="sig-actions"><button class="sig-open-lookup" data-sym="' + r.sym + '">Open Stock Lookup</button></div>'
+          + (feedbackReady && !r.historical ? feedbackRowHTML(r.sym) : "");
+      };
 
-      feed.querySelectorAll(".sig-card").forEach(function (card) {
-        card.addEventListener("click", function (e) {
-          if (e.target.closest("button")) return;
-          const sym = card.dataset.sym;
-          card.classList.toggle("expanded");
-          openStockPin(sym, cfg.title);
+      let html = "";
+      if (layout === "tracker") {
+        const cols = [["", "&#9733;"], ["sym", "Name"], ["sector", "Sector \u203a industry"], ["mcap", "Mkt cap", 1], ["price", "Price", 1], ["chg", "Day", 1], ["since", "Since signal", 1], ["fired", "Fired"], ["", "Status"]];
+        html = '<div class="sig-tw"><table class="sig-table"><thead><tr>' + cols.map(function (c) {
+          return "<th" + (c[0] ? ' data-sort="' + c[0] + '"' : "") + (c[2] ? ' class="r"' : "") + ">" + c[1] + (c[0] && c[0] === trackerSort.k ? (trackerSort.d < 0 ? " \u25BE" : " \u25B4") : "") + "</th>";
+        }).join("") + "</tr></thead><tbody>" + rows.map(function (r) {
+          const it = itemOf(r), st = statusOf(r), up = (it.chg || 0) >= 0;
+          return '<tr class="sig-row" data-sym="' + r.sym + '" tabindex="0"><td>' + starBtn(r.sym) + '</td><td><div class="sig-nm">' + sigLogoImg(r.sym, cls)
+            + '<span><b>' + r.sym + "</b>" + nameLine(r) + "</span></div></td><td>" + secChip(it.sector) + '<div class="sig-ind2">' + (it.industry || "") + "</div></td>"
+            + '<td class="r mono">' + fmtMcap(it.marketCap) + '</td><td class="r mono">' + (it.price == null ? "—" : fmtNum(it.price, 2)) + '</td><td class="r mono ' + (up ? "up" : "down") + '">' + (it.chg == null ? "—" : (up ? "+" : "") + fmtNum(it.chg, 2) + "%") + "</td>"
+            + '<td class="r mono sig-since" data-sym="' + r.sym + '">…</td><td class="mono">' + dayLabel(firedOn[r.sym]) + '</td><td><span class="sig-tag ' + st[0] + '">' + st[1] + "</span></td></tr>"
+            + '<tr class="sig-exp" data-for="' + r.sym + '"><td colspan="9">' + detailHTML(r) + "</td></tr>";
+        }).join("") + "</tbody></table></div>";
+      } else if (layout === "cards") {
+        html = '<div class="sig-grid">' + rows.map(function (r) {
+          const it = itemOf(r), st = statusOf(r), up = (it.chg || 0) >= 0;
+          return '<div class="sig-tile" data-sym="' + r.sym + '" tabindex="0"><div class="sig-tile-top">' + sigLogoImg(r.sym, cls) + "<b>" + r.sym + '</b><span class="sig-tag ' + st[0] + '" style="margin-left:auto">' + st[1] + "</span>" + starBtn(r.sym) + "</div>"
+            + '<div class="sig-co">' + (companyName(r.sym) || "") + (it.marketCap ? " · " + fmtMcap(it.marketCap) : "") + "</div><div>" + secChip(it.sector) + '</div><div class="sig-ind2">' + (it.industry || "") + "</div>"
+            + '<div class="sig-tile-bot"><span class="mono">' + (it.price == null ? "—" : fmtNum(it.price, 2)) + ' <span class="' + (up ? "up" : "down") + '">' + (it.chg == null ? "" : (up ? "+" : "") + fmtNum(it.chg, 2) + "%") + '</span></span><span class="mono sig-since" data-sym="' + r.sym + '">…</span></div></div>';
+        }).join("") + "</div>";
+      } else {
+        const days = logDays.map(function (d) { return d.date; }).slice().reverse().filter(function (d) { return rows.some(function (r) { return firedOn[r.sym] === d; }); });
+        html = '<div class="sig-cols">' + days.map(function (d) {
+          const g = rows.filter(function (r) { return firedOn[r.sym] === d; });
+          return '<div class="sig-col"><h3><span>' + new Date(d + "T12:00:00").toLocaleDateString(undefined, { weekday: "short" }) + " " + dayLabel(d) + ' <span class="dim">' + g.length + " new</span></span></h3>" + g.map(function (r) {
+            const it = itemOf(r);
+            return '<div class="sig-mini" data-sym="' + r.sym + '" tabindex="0">' + sigLogoImg(r.sym, cls) + '<span class="sig-mini-n"><b>' + r.sym + '</b><span class="sec-dot" style="background:hsl(' + secHue(it.sector) + ' 65% 48%)" title="' + (it.sector || "") + '"></span><span class="sig-ind2">' + (it.industry || "") + '</span></span><span class="mono sig-since" data-sym="' + r.sym + '">…</span>' + starBtn(r.sym) + "</div>";
+          }).join("") + "</div>";
+        }).join("") + "</div>";
+      }
+      feed.innerHTML = html;
+
+      // "Since signal": the move from the close on the day it fired to the latest close, read from each name's price file
+      const sinceCache = drawSignals.sinceCache = drawSignals.sinceCache || {};
+      function paintSince(sym, v) {
+        feed.querySelectorAll('.sig-since[data-sym="' + sym + '"]').forEach(function (el) {
+          el.textContent = v == null ? "—" : (v >= 0 ? "+" : "\u2212") + Math.abs(v).toFixed(1) + "%";
+          el.className = "mono sig-since " + (v == null ? "" : v >= 0 ? "up" : "down");
         });
+      }
+      (function loadSince() {
+        const list = rows.map(function (r) { return r.sym; }).slice(0, 160), key = function (sym) { return sym + "|" + firedOn[sym]; };
+        let k = 0;
+        function next() {
+          if (k >= list.length) return;
+          const sym = list[k++];
+          if (sinceCache[key(sym)] !== undefined) { paintSince(sym, sinceCache[key(sym)]); return next(); }
+          loadTicker(sym).then(function (p) {
+            const at = p.dates.indexOf(firedOn[sym]), n = p.close.length - 1;
+            sinceCache[key(sym)] = at >= 0 && p.close[at] ? (p.close[n] / p.close[at] - 1) * 100 : null;
+          }).catch(function () { sinceCache[key(sym)] = null; }).then(function () { paintSince(sym, sinceCache[key(sym)]); next(); });
+        }
+        for (let w = 0; w < 6; w++) next();
+      })();
+
+      // clicks: star = watchlist (works for names that are no longer in today's scan), anything else opens the pin
+      feed.querySelectorAll("[data-star]").forEach(function (btn) {
+        btn.addEventListener("click", function (e) {
+          e.stopPropagation();
+          const sym = btn.dataset.star, r = rows.find(function (x) { return x.sym === sym; });
+          toggleWatch(r ? itemOf(r) : basicsOf(sym), activeSig);
+        });
+      });
+      feed.querySelectorAll("[data-sort]").forEach(function (th) {
+        th.addEventListener("click", function () {
+          const k = th.dataset.sort;
+          if (trackerSort.k === k) trackerSort.d *= -1; else { trackerSort.k = k; trackerSort.d = (k === "sym" || k === "sector") ? 1 : -1; }
+          draw();
+        });
+      });
+      function openRow(sym) {
+        feed.querySelectorAll(".sig-row.sel").forEach(function (x) { x.classList.remove("sel"); });
+        const tr = feed.querySelector('.sig-row[data-sym="' + sym + '"]');
+        if (tr) tr.classList.add("sel");
+        sigPinType = activeSig;
+        openStockPin(sym, cfg.title);
+      }
+      feed.querySelectorAll(".sig-row").forEach(function (tr) {
+        tr.addEventListener("click", function (e) {
+          if (e.target.closest("button")) return;
+          const exp = feed.querySelector('.sig-exp[data-for="' + tr.dataset.sym + '"]');
+          const was = exp.classList.contains("open");
+          feed.querySelectorAll(".sig-exp.open").forEach(function (x) { x.classList.remove("open"); });
+          if (!was) exp.classList.add("open");
+          openRow(tr.dataset.sym);
+        });
+        tr.addEventListener("keydown", function (e) {
+          if (e.key === "Enter") tr.click();
+          if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+            e.preventDefault();
+            const all = Array.prototype.slice.call(feed.querySelectorAll(".sig-row")), i = all.indexOf(tr), n = all[i + (e.key === "ArrowDown" ? 1 : -1)];
+            if (n) { n.focus(); openRow(n.dataset.sym); }
+          }
+        });
+      });
+      feed.querySelectorAll(".sig-tile, .sig-mini").forEach(function (el) {
+        el.addEventListener("click", function (e) { if (e.target.closest("button")) return; openRow(el.dataset.sym); });
+        el.addEventListener("keydown", function (e) { if (e.key === "Enter") el.click(); });
       });
       feed.querySelectorAll(".sig-open-lookup").forEach(function (btn) {
         btn.addEventListener("click", function (e) {
           e.stopPropagation();
-          const sym = btn.closest(".sig-card").dataset.sym;
-          Sync.publish({ ticker: sym });
+          Sync.publish({ ticker: btn.dataset.sym });
           window.location.href = "panel-stock.html";
-        });
-      });
-      feed.querySelectorAll(".sig-add-wl").forEach(function (btn) {
-        btn.addEventListener("click", function (e) {
-          e.stopPropagation();
-          const sym = btn.dataset.sym;
-          const item = liveById[sym];
-          if (item) addToWatchlist(item, activeSig);
-          btn.textContent = "Added ✓";
-          setTimeout(function () { draw(); }, 1200);
         });
       });
 
@@ -2374,7 +2557,8 @@
       feed.innerHTML = items.map(function (it) {
         const cfg = SIGNAL_CONFIG[it.signalType];
         const up = (it.chg || 0) >= 0;
-        const chip = cfg ? cfg.chip(it) : ["watch", it.signalType];
+        const chip = cfg && !it.historical && it.daysInStage !== undefined || (cfg && !it.historical && it.gap !== undefined) || (cfg && !it.historical && it.correction !== undefined)
+          ? cfg.chip(it) : ["watch", it.signalType ? "Added from " + (cfg ? cfg.title : it.signalType) : "Watching"];
         return '<div class="sig-card" data-sym="' + it.sym + '">'
           + '<div class="sig-top">'
             + sigLogoImg(it.sym, cls)
@@ -2387,7 +2571,7 @@
             + '<span class="sig-chip ' + chip[0] + '">' + chip[1] + '</span>'
             + '<button class="wl-remove" data-sym="' + it.sym + '" title="Remove from ' + activeList + '">&times;</button>'
           + '</div>'
-          + '<div class="sig-reason">' + (cfg ? cfg.reason(it) : "") + ' <span class="wl-added">added '
+          + '<div class="sig-reason">' + (cfg && !it.historical && (it.daysInStage !== undefined || it.gap !== undefined || it.correction !== undefined) ? cfg.reason(it) : (it.historical ? "Fired " + (it.firedDate || "earlier") + "." : "")) + ' <span class="wl-added">added '
             + new Date(it.addedAt).toLocaleDateString() + '</span></div>'
         + '</div>';
       }).join("");
