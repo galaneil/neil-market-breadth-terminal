@@ -1824,7 +1824,7 @@
     return { sym: sym, sector: c[0] || "", industry: c[1] || "", marketCap: c[3] != null ? c[3] : null, price: q[0], chg: q[1], adr: q[2], turnover: q[3] != null ? q[3] * 1e6 : null };
   }
   function fmtMcap2(v) {
-    if (v == null) return "\u2014";
+    if (v != null && DATA.country === "IN") return "₹" + Math.round(v / 1e7).toLocaleString("en-IN") + " Cr"; if (v == null) return "\u2014";
     return v >= 1e12 ? "$" + (v / 1e12).toFixed(2) + "T" : v >= 1e9 ? "$" + (v / 1e9).toFixed(1) + "B" : "$" + Math.round(v / 1e6) + "M";
   }
   function inWatchlist(sym) {
@@ -1941,7 +1941,7 @@
       return m >= 1e9 ? "$" + fmtNum(m / 1e9, 2) + "B" : "$" + fmtNum(m / 1e6, 1) + "M";
     }
     function fmtMcap(v) {
-      if (v == null) return "—";
+      if (v != null && DATA.country === "IN") return "₹" + Math.round(v / 1e7).toLocaleString("en-IN") + " Cr"; if (v == null) return "—";
       return v >= 1e9 ? "$" + fmtNum(v / 1e9, 1) + "B" : "$" + fmtNum(v / 1e6, 0) + "M";
     }
     function passes(s) {
