@@ -1237,6 +1237,26 @@
           // Shift-drag to measure a move, exactly like every other chart in
           // the app — the pin is still a real chart, not a stripped-down one.
           enableMeasure(pinChart, bars, chartEl);
+          // The day the signal fired, marked with an arrow when the pin was opened from the Signals page.
+          if (sigPinType && document.getElementById("signals-rail")) {
+            const live = ((sigPinType === "breakout" ? DATA.signals : sigPinType === "earnings" ? DATA.earningsSignals : DATA.cupSignals) || [])
+              .find(function (x) { return x.sym === ticker; });
+            let at = null;
+            if (live && sigPinType === "earnings" && live.daysAgo != null) at = p.dates[Math.max(0, n - live.daysAgo)];
+            else if (live && sigPinType === "breakout" && live.daysInStage != null) {
+              const t0 = new Date(p.dates[n] + "T12:00:00"); t0.setDate(t0.getDate() - live.daysInStage);
+              const iso = t0.toISOString().slice(0, 10);
+              at = p.dates.find(function (d) { return d >= iso; });
+            } else if (live && sigPinType === "cup" && live.cupDays != null) at = p.dates[Math.max(0, n - live.cupDays)];
+            if (!at) {
+              const lg = DATA.signalsLog || [];
+              for (let k = 0; k < lg.length; k++) if ((lg[k][sigPinType] || []).indexOf(ticker) !== -1) { at = lg[k].date; break; }
+            }
+            if (at && p.dates.indexOf(at) !== -1) {
+              bars.setMarkers([{ time: at, position: "belowBar", color: "#2E7D32", shape: "arrowUp",
+                text: sigPinType === "cup" ? "cup high" : "signal fired" }]);
+            }
+          }
 
           // Support/resistance at a glance: 10/20/50-session EMAs, each
           // computed over the FULL price history (so they're already warmed
@@ -2594,6 +2614,7 @@
       feed.querySelectorAll(".sig-card").forEach(function (card) {
         card.addEventListener("click", function (e) {
           if (e.target.closest("button")) return;
+          sigPinType = activeSig;
           openStockPin(card.dataset.sym, activeList);
         });
       });
