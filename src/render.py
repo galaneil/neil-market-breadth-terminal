@@ -30,6 +30,7 @@ from jinja2 import Environment, FileSystemLoader
 
 import config
 import flags
+import signal_scan
 import store
 
 # Series that exist for every country under the same filename. Index series are
@@ -736,6 +737,7 @@ def _compute_earnings_signals(country, lookback_days=5, min_gap=5.0, min_range=8
         if n < 35:
             continue
         opens, highs, lows, vols = p.get("open") or [], p.get("high") or [], p.get("low") or [], p.get("volume") or []
+        e200 = signal_scan.ema(closes, 200) if n >= 215 else None
 
         best = None
         for days_ago in range(0, min(lookback_days, n)):
@@ -766,6 +768,11 @@ def _compute_earnings_signals(country, lookback_days=5, min_gap=5.0, min_range=8
             # while dropping anything that finished the session net negative.
             if chg < 0:
                 continue
+            # Trend gate: the name must already be at or above its 200 EMA (within 3% below counts as converging)
+            # and that average must not be falling hard. Gaps out of a deep decline belong to the Stage 4->1 list.
+            if e200 is not None and i >= 22 and e200[i - 1] and e200[i - 21]:
+                if closes[i - 1] < e200[i - 1] * 0.97 or e200[i - 1] < e200[i - 21] * 0.97:
+                    continue
             giveback = 0.0
             if h > o:
                 giveback = max(0.0, (h - c) / (h - o) * 100) if h != o else 0.0
@@ -931,17 +938,136 @@ def _signal_profiles(country, symbols, budget_s=100):
     return {s: cache[s] for s in symbols if s in cache}
 
 
-def _update_signals_log(country, date, breakout, earnings, cup):
+SIGNAL_TYPES = ("breakout", "earnings", "cup", "vcp", "breakdown")
+
+
+def _scan_price_setups(country, quotes=None):
+    """One pass over every classified name for the price-only setups: Stage 4->1 reclaim, VCP, Stage 4 breakdown."""
+    data_dir_ = config.data_dir(country)
+    quotes = quotes or {}
+    qp = os.path.join(data_dir_, "hilo_quotes.json")
+    if not quotes and os.path.exists(qp):
+        with open(qp, encoding="utf-8") as f:
+            quotes = json.load(f)
+    universe = _load_ticker_universe(country, quotes)
+    industry_rows = store.read_jsonl(os.path.join(data_dir_, "industry_ranks.jsonl"))
+
+    def rank_of(day, industry):
+        for item in (day or {}).get("industries", []):
+            if item.get("industry") == industry:
+                return item.get("rank")
+        return None
+    past = industry_rows[max(0, len(industry_rows) - 21)] if industry_rows else None
+    now = industry_rows[-1] if industry_rows else None
+    tdir = config.ticker_dir(country)
+    out = {"breakout": [], "vcp": [], "breakdown": []}
+    hist = {}   # {date: {type: [symbols]}} for the sessions whose log rows still need the current rules
+    # Which of the last 10 sessions still carry rows from the old rules (or none): those are re-derived by running the same
+    # scanners as of each past session, so the day-by-day views are real history, not "everything fired today".
+    log_rows = {r["date"]: r for r in store.read_jsonl(os.path.join(data_dir_, "signals_log.jsonl"))}
+    ref_dates = None
+    for ticker in universe:
+        path = os.path.join(tdir, ticker + ".json")
+        if os.path.exists(path):
+            try:
+                with open(path, encoding="utf-8") as f:
+                    ref_dates = json.load(f).get("dates") or None
+            except Exception:
+                ref_dates = None
+            if ref_dates and len(ref_dates) > 300:
+                break
+    offsets = [0]
+    state = {}   # {offset: {type: set(symbols)}} -- the full "is it true that day" set, to find which names are NEW each day
+    if ref_dates:
+        for off in range(1, 10):
+            d = ref_dates[-1 - off]
+            if (log_rows.get(d) or {}).get("v") != 2:
+                offsets.append(off)
+    ref_set = set(ref_dates[-10:]) if ref_dates else set()
+    for ticker, (sector, industry, adr, market_cap) in universe.items():
+        path = os.path.join(tdir, ticker + ".json")
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path, encoding="utf-8") as f:
+                p = json.load(f)
+        except Exception:
+            continue
+        if not signal_scan._clean(p):
+            continue
+        for off in sorted(set(offsets) | {o + 1 for o in offsets}):
+            if off == 0:
+                continue
+            n0 = len(p["close"]) - 1 - off
+            if n0 < 150:
+                continue
+            for key, fn in (("breakout", signal_scan.reclaim), ("vcp", signal_scan.vcp), ("breakdown", signal_scan.breakdown)):
+                try:
+                    if fn(p, n=n0):
+                        state.setdefault(off, {}).setdefault(key, set()).add(ticker)
+                except Exception:
+                    pass
+        c = p["close"]
+        vols = [v for v in (p.get("volume") or [])[-30:] if v is not None]
+        base = {"sym": ticker, "sector": sector, "industry": industry, "adr": adr, "marketCap": market_cap,
+                "price": c[-1], "chg": round((c[-1] / c[-2] - 1) * 100, 2) if len(c) > 1 and c[-2] else None,
+                "turnover": (sum(vols) / len(vols)) * c[-1] if vols and c[-1] else None,
+                "indRankFrom": rank_of(past, industry), "indRankTo": rank_of(now, industry)}
+        for key, fn in (("breakout", signal_scan.reclaim), ("vcp", signal_scan.vcp), ("breakdown", signal_scan.breakdown)):
+            try:
+                r = fn(p)
+            except Exception:
+                r = None
+            if r:
+                out[key].append(dict(base, **r))
+    # New each day = true that day but not the day before. Today's live lists are the offset-0 state.
+    if ref_dates:
+        state[0] = {k: {x["sym"] for x in v} for k, v in out.items()}
+        for off in offsets:
+            day = ref_dates[-1 - off]
+            hist[day] = {k: sorted(state.get(off, {}).get(k, set()) - state.get(off + 1, {}).get(k, set())) for k in out}
+    out["breakout"].sort(key=lambda x: x["daysAgo"])
+    out["vcp"].sort(key=lambda x: (x["sub"] != "Breakout", abs(x.get("distPct") or 0)))
+    out["breakdown"].sort(key=lambda x: x["daysAgo"])
+    return {k: v[:120] for k, v in out.items()}, hist
+
+
+def _attach_stage(country, lists):
+    """A plain Stage chip (1-4) on every signal row, from the 50/200 EMAs of the name's own price file."""
+    tdir = config.ticker_dir(country)
+    cache = {}
+    for lst in lists:
+        for s in lst:
+            sym = s["sym"]
+            if sym not in cache:
+                try:
+                    with open(os.path.join(tdir, sym + ".json"), encoding="utf-8") as f:
+                        p = json.load(f)
+                    c = p["close"]
+                    cache[sym] = signal_scan.stage_chip(c, signal_scan.ema(c, 50), signal_scan.ema(c, 200), len(c) - 1)
+                except Exception:
+                    cache[sym] = None
+            s["stage"] = cache[sym]
+
+
+def _update_signals_log(country, date, lists, hist=None):
     if not date:
         return
     path = os.path.join(config.data_dir(country), "signals_log.jsonl")
     rows = store.read_jsonl(path)
-    entry = {
-        "date": date,
-        "breakout": [s["sym"] for s in breakout],
-        "earnings": [s["sym"] for s in earnings],
-        "cup": [s["sym"] for s in cup],
-    }
+    by_date = {r["date"]: r for r in rows}
+    for day, types in (hist or {}).items():
+        row = by_date.setdefault(day, {"date": day})
+        for typ in ("breakout", "vcp", "breakdown"):
+            row[typ] = types.get(typ, [])
+        row["v"] = 2
+    rows = list(by_date.values())
+    entry = {"date": date, "v": 2}
+    old = by_date.get(date) or {}
+    for typ in SIGNAL_TYPES:
+        entry[typ] = [s["sym"] for s in lists.get(typ, [])]
+        if hist and date in hist and typ in hist[date]:
+            entry[typ] = hist[date][typ]
     rows = [r for r in rows if r.get("date") != date]
     rows.append(entry)
     rows.sort(key=lambda r: r["date"])
@@ -1349,12 +1475,12 @@ def _signals_body():
     <div class="rail-h">Signal type</div>
     <div class="sig-item active" data-sig="breakout">
       <span class="sig-dot" style="background:var(--up)"></span>
-      <span class="sig-label">Stage 2 breakout</span>
+      <span class="sig-label">Stage 4&rarr;1 reclaim</span>
       <span class="sig-count" id="sig-count-breakout">0</span>
     </div>
     <div class="sig-item" data-sig="earnings">
       <span class="sig-dot" style="background:var(--warn)"></span>
-      <span class="sig-label">Earnings / gap turnaround</span>
+      <span class="sig-label">Earnings gap in an uptrend</span>
       <span class="sig-count" id="sig-count-earnings">0</span>
     </div>
     <div class="sig-item" data-sig="cup">
@@ -1362,8 +1488,16 @@ def _signals_body():
       <span class="sig-label">Cup formation</span>
       <span class="sig-count" id="sig-count-cup">0</span>
     </div>
-    <div class="sig-item soon"><span class="sig-dot" style="background:var(--down)"></span>
-      <span class="sig-label">Stage 4 breakdown (short)</span><span class="soon-tag">soon</span></div>
+    <div class="sig-item" data-sig="vcp">
+      <span class="sig-dot" style="background:#8E5BD9"></span>
+      <span class="sig-label">VCP</span>
+      <span class="sig-count" id="sig-count-vcp">0</span>
+    </div>
+    <div class="sig-item" data-sig="breakdown">
+      <span class="sig-dot" style="background:var(--down)"></span>
+      <span class="sig-label">Stage 4 breakdown</span>
+      <span class="sig-count" id="sig-count-breakdown">0</span>
+    </div>
 
     <div class="rail-h">Filter</div>
     <div class="filter-row">
@@ -1765,21 +1899,28 @@ def render_all_panels(country):
 
     sig_extra = dict(_screener_payload(country))
     sig_extra["country"] = country
-    breakout_signals = _compute_breakout_signals(country)
+    scanned, sig_hist = _scan_price_setups(country)
+    breakout_signals = scanned["breakout"]
     earnings_signals = _compute_earnings_signals(country)
     cup_signals = _compute_cup_signals(country)
+    vcp_signals, breakdown_signals = scanned["vcp"], scanned["breakdown"]
+    _attach_stage(country, (breakout_signals, earnings_signals, cup_signals, vcp_signals, breakdown_signals))
     sig_extra["signals"] = breakout_signals
     sig_extra["earningsSignals"] = earnings_signals
     sig_extra["cupSignals"] = cup_signals
+    sig_extra["vcpSignals"] = vcp_signals
+    sig_extra["breakdownSignals"] = breakdown_signals
+    sig_lists = {"breakout": breakout_signals, "earnings": earnings_signals, "cup": cup_signals,
+                 "vcp": vcp_signals, "breakdown": breakdown_signals}
     if cfg.get("run_tmle"):
         sig_extra["tmleDir"] = "tmle"
     env_rows = series.get("environment") or []
     as_of = env_rows[-1]["date"] if env_rows else None
-    sig_extra["signalsLog"] = _update_signals_log(
-        country, as_of, breakout_signals, earnings_signals, cup_signals)
-    seen_syms = {x["sym"] for lst in (breakout_signals, earnings_signals, cup_signals) for x in lst}
+    # dated by the ticker files the scans just read, which can be a session ahead of the environment series
+    sig_extra["signalsLog"] = _update_signals_log(country, max(sig_hist) if sig_hist else as_of, sig_lists, sig_hist)
+    seen_syms = {x["sym"] for lst in sig_lists.values() for x in lst}
     for day in sig_extra["signalsLog"]:
-        for typ in ("breakout", "earnings", "cup"):
+        for typ in SIGNAL_TYPES:
             seen_syms.update(day.get(typ) or [])
     sig_extra["signalProfiles"] = _signal_profiles(country, seen_syms)
     paths.append(_write_panel(

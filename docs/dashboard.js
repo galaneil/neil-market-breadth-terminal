@@ -1166,7 +1166,7 @@
       document.getElementById("pin-symbol").textContent = ticker;
       const co = companyName(ticker), bs = basicsOf(ticker);
       document.getElementById("pin-name").textContent = (co ? co + (context ? " \u00b7 " : "") : "") + (context || "");
-      document.getElementById("pin-who").innerHTML = secChip(bs.sector) + (bs.industry ? ' <b class="pin-ind">' + bs.industry + "</b>" : "")
+      document.getElementById("pin-who").innerHTML = secLine(bs.sector, bs.industry)
         + (bs.marketCap ? ' <span class="pin-cap">' + fmtMcap2(bs.marketCap) + " mkt cap</span>" : "");
       pin.classList.toggle("wide", !!document.getElementById("signals-rail"));
       const starEl = document.getElementById("pin-star");
@@ -1239,22 +1239,20 @@
           enableMeasure(pinChart, bars, chartEl);
           // The day the signal fired, marked with an arrow when the pin was opened from the Signals page.
           if (sigPinType && document.getElementById("signals-rail")) {
-            const live = ((sigPinType === "breakout" ? DATA.signals : sigPinType === "earnings" ? DATA.earningsSignals : DATA.cupSignals) || [])
-              .find(function (x) { return x.sym === ticker; });
-            let at = null;
-            if (live && sigPinType === "earnings" && live.daysAgo != null) at = p.dates[Math.max(0, n - live.daysAgo)];
-            else if (live && sigPinType === "breakout" && live.daysInStage != null) {
-              const t0 = new Date(p.dates[n] + "T12:00:00"); t0.setDate(t0.getDate() - live.daysInStage);
-              const iso = t0.toISOString().slice(0, 10);
-              at = p.dates.find(function (d) { return d >= iso; });
-            } else if (live && sigPinType === "cup" && live.cupDays != null) at = p.dates[Math.max(0, n - live.cupDays)];
+            const srcs = { breakout: DATA.signals, earnings: DATA.earningsSignals, cup: DATA.cupSignals, vcp: DATA.vcpSignals, breakdown: DATA.breakdownSignals };
+            const live = (srcs[sigPinType] || []).find(function (x) { return x.sym === ticker; });
+            let at = live && live.firedDate ? live.firedDate : null;
+            if (!at && live && sigPinType === "earnings" && live.daysAgo != null) at = p.dates[Math.max(0, n - live.daysAgo)];
+            else if (!at && live && sigPinType === "cup" && live.cupDays != null) at = p.dates[Math.max(0, n - live.cupDays)];
             if (!at) {
               const lg = DATA.signalsLog || [];
               for (let k = 0; k < lg.length; k++) if ((lg[k][sigPinType] || []).indexOf(ticker) !== -1) { at = lg[k].date; break; }
             }
             if (at && p.dates.indexOf(at) !== -1) {
-              bars.setMarkers([{ time: at, position: "belowBar", color: "#2E7D32", shape: "arrowUp",
-                text: sigPinType === "cup" ? "cup high" : "signal fired" }]);
+              const down = sigPinType === "breakdown";
+              const label = { breakout: "reclaim", earnings: "gap", cup: "cup high", vcp: "breakout", breakdown: "broke 50" }[sigPinType] || "signal";
+              bars.setMarkers([{ time: at, position: down ? "aboveBar" : "belowBar", color: down ? "#C62828" : "#2E7D32", shape: down ? "arrowDown" : "arrowUp", text: label }]);
+              if (sigPinType === "vcp" && live && live.pivot) bars.createPriceLine({ price: live.pivot, color: "#8E5BD9", lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: "pivot" });
             }
           }
 
@@ -1379,7 +1377,7 @@
 
     document.getElementById("pin-star").addEventListener("click", function () {
       if (!pinSym) return;
-      const live = ((DATA.signals || []).concat(DATA.earningsSignals || [], DATA.cupSignals || [])).find(function (x) { return x.sym === pinSym; });
+      const live = ((DATA.signals || []).concat(DATA.earningsSignals || [], DATA.cupSignals || [], DATA.vcpSignals || [], DATA.breakdownSignals || [])).find(function (x) { return x.sym === pinSym; });
       toggleWatch(live || basicsOf(pinSym), sigPinType || (live ? "breakout" : null));
     });
     document.getElementById("pin-close").addEventListener("click", function () {
@@ -1729,39 +1727,65 @@
   const EARNINGS_GAP_LABEL_THRESHOLD = 5;
   const SIGNAL_CONFIG = {
     breakout: {
-      title: "Stage 2 breakout",
-      sub: "Flipped into Stage 2 within the last two weeks, computed straight from the same "
-        + "TMLE data the Leaders page already shows. <b>Actionable</b> clears the extension "
-        + "check too; <b>watchlist-only</b> broke out but already ran too far to chase.",
-      chip: function (s) { return s.actionable ? ["breakout", "Actionable"] : ["watch", "Watchlist · extended"]; },
+      title: "Stage 4\u21921 reclaim",
+      sub: "Early trend detection: a liquid name closing back above its <b>200 EMA</b> after a deep, long decline "
+        + "(about 40% or more off the high, mostly below the 200 for months), or a flat base sitting on the 200 that breaks out on volume. "
+        + "Names that fail and re-cross show again, tagged <b>re-reclaim</b>.",
+      chip: function (s) { return s.above200 === false ? ["watch", s.sub + " \u00b7 back under"] : s.extPct > 25 ? ["watch", s.sub + " \u00b7 extended"] : ["breakout", s.sub]; },
       reason: function (s) {
         const rankImproved = s.indRankFrom != null && s.indRankTo != null && s.indRankTo < s.indRankFrom;
-        return "Broke into <b>Stage 2</b> " + s.daysInStage + " day" + (s.daysInStage === 1 ? "" : "s") + " ago"
-          + (s.offHigh != null ? " · <b>" + Math.abs(Math.round(s.offHigh)) + "%</b> off high" : "")
-          + (s.gain != null ? ", <b>+" + Math.round(s.gain) + "%</b> from its base" : "")
-          + (rankImproved ? " · <b>" + (s.industry || "its industry") + "</b> industry rank improving ("
-              + s.indRankFrom + "→" + s.indRankTo + " over 20d)" : "")
-          + (s.actionable ? "" : " — <b>already extended</b>, this is a watch-only name, not an entry");
+        return (s.sub === "Base breakout at the 200" ? "Broke out of a flat base on the 200 EMA" : "Closed back above the <b>200 EMA</b>")
+          + " " + (s.daysAgo === 0 ? "today" : s.daysAgo + " session" + (s.daysAgo === 1 ? "" : "s") + " ago")
+          + (s.declinePct != null ? " after a <b>" + Math.abs(s.declinePct) + "%</b> decline, <b>" + s.sessionsBelow + "</b> of the prior 120 sessions below it" : "")
+          + " \u00b7 now <b>" + (s.extPct >= 0 ? "+" : "") + s.extPct + "%</b> vs the 200"
+          + (rankImproved ? " \u00b7 industry rank improving (" + s.indRankFrom + "\u2192" + s.indRankTo + ")" : "");
       },
       facts: function (s) {
-        const rankImproved = s.indRankFrom != null && s.indRankTo != null && s.indRankTo < s.indRankFrom;
         return [
-          ["Sector", s.sector || "—"], ["Industry", s.industry || "—"],
-          ["Industry rank (20d)", (s.indRankFrom != null && s.indRankTo != null) ? (s.indRankFrom + " → " + s.indRankTo) : "—",
-            rankImproved ? "up" : "down"],
-          ["Days in Stage 2", s.daysInStage],
-          ["Off 52w high", s.offHigh != null ? Math.round(s.offHigh) + "%" : "—", "down"],
-          ["From base low", s.gain != null ? "+" + Math.round(s.gain) + "%" : "—", "up"],
+          ["Type", s.sub], ["Reclaimed", s.firedDate || "\u2014"],
+          ["Prior decline", s.declinePct != null ? s.declinePct + "%" : "\u2014", "down"],
+          ["Sessions under 200", s.sessionsBelow != null ? s.sessionsBelow + " of 120" : "\u2014"],
+          ["Vs the 200 EMA now", (s.extPct >= 0 ? "+" : "") + s.extPct + "%", s.extPct >= 0 ? "up" : "down"],
+          ["Industry rank (20d)", (s.indRankFrom != null && s.indRankTo != null) ? (s.indRankFrom + " \u2192 " + s.indRankTo) : "\u2014"],
         ];
       },
-      note: DATA.tmleDir
-        ? "US: scored by TMLE's own Stage classification, the same read the Leaders page shows."
-        : "India: TMLE does not run here, so Stage 2 is read from each name's own prices with plain rules — "
-          + "above a rising 30-week (150-day) average, with the 50-day above the 150-day. It counts the day that run began; "
-          + "'Actionable' means within 25% of its 52-week high and not more than 40% above its 150-day.",
+    },
+    vcp: {
+      title: "VCP",
+      sub: "Volatility contraction: weekly swings of 10% or more, each pullback no more than a quarter deeper than the one before, "
+        + "the last under 18%, with price above its 50 and 200 EMA and within 5% of the pivot. <b>Breakout</b> means it has closed above the pivot; "
+        + "<b>Forming</b> means it is still coiling. Names that fell more than about 40% first belong to the reclaim list instead.",
+      chip: function (s) { return s.sub === "Breakout" ? ["breakout", "VCP breakout"] : ["forming", "VCP forming"]; },
+      reason: function (s) {
+        return "Contractions <b>" + (s.contractions || []).map(function (x) { return Math.abs(x) + "%"; }).join(" \u2192 ") + "</b>, pivot <b>" + fmtNum(s.pivot, 2) + "</b>"
+          + (s.sub === "Breakout" ? " cleared" : " \u00b7 " + Math.abs(s.distPct) + "% below it");
+      },
+      facts: function (s) {
+        return [
+          ["Contractions", (s.contractions || []).map(function (x) { return Math.abs(x) + "%"; }).join(" \u2192 ")],
+          ["Pivot", fmtNum(s.pivot, 2)], ["Vs pivot", (s.distPct >= 0 ? "+" : "") + s.distPct + "%", s.distPct >= 0 ? "up" : "down"],
+          ["Worst drop, 12 months", s.declinePct + "%", "down"], ["State", s.sub],
+        ];
+      },
+    },
+    breakdown: {
+      title: "Stage 4 breakdown",
+      sub: "The leaders that cracked: a run of 100% or more that held its 200 EMA, and has now closed under the 50 on heavy volume (1.3\u00d7 average or more). "
+        + "A range-bound name slipping under a moving average does not count. <b>Below the 200</b> is the deeper break.",
+      chip: function (s) { return ["breakdown", s.sub === "Below the 200" ? "Below the 200" : "Below the 50"]; },
+      reason: function (s) {
+        return "Up <b>" + s.runPct + "%</b> into its peak, now <b>" + Math.abs(s.offPeakPct) + "%</b> off it \u00b7 first closed under the 50 EMA "
+          + (s.daysAgo === 0 ? "today" : s.daysAgo + " session" + (s.daysAgo === 1 ? "" : "s") + " ago") + ", heavy volume on " + (s.volDate || "");
+      },
+      facts: function (s) {
+        return [
+          ["Run into the peak", "+" + s.runPct + "%", "up"], ["Off the peak", s.offPeakPct + "%", "down"],
+          ["Broke the 50", s.firedDate || "\u2014"], ["Heavy volume", s.volDate || "\u2014"], ["State", s.sub],
+        ];
+      },
     },
     earnings: {
-      title: "Earnings / gap turnaround",
+      title: "Earnings gap in an uptrend",
       sub: "Either a clean gap up, or a wide-range day that gave back some of its gain but "
         + "still closed green — both say the same thing: something changed. Volume multiple "
         + "(today vs. its own 30-day average) is what tells a real move apart from noise. "
@@ -1830,6 +1854,14 @@
     const h = secHue(sector);
     return '<span class="sec-chip" style="background:hsl(' + h + ' 70% 50% / .15);color:hsl(' + h + ' 65% 40%)"><span class="sec-dot" style="background:hsl(' + h + ' 65% 48%)"></span>' + sector + "</span>";
   }
+  function secLine(sector, industry) {
+    if (!sector) return '<span class="sec-line dim">\u2014</span>';
+    const h = secHue(sector);
+    return '<span class="sec-line"><b style="color:' + (isDarkTheme() ? "hsl(" + h + " 70% 68%)" : "hsl(" + h + " 62% 36%)") + '">' + sector + "</b>"
+      + (industry ? '<i>\u203A</i><span>' + industry + "</span>" : "") + "</span>";
+  }
+  const STAGE_LABEL = { 1: "Stage 1", 2: "Stage 2", 3: "Stage 3", 4: "Stage 4" };
+  function stageBadge2(st) { return st ? '<span class="stg stg' + st + '">' + STAGE_LABEL[st] + "</span>" : ""; }
   function companyName(sym) {
     const n = ((DATA.signalProfiles || {})[sym] || {}).n || "";
     return n.replace(/,? (Inc\.?|Corporation|Corp\.?|Class [A-C].*|Ordinary Shares.*)\s*$/i, "");
@@ -1916,9 +1948,13 @@
       breakout: DATA.signals || [],
       earnings: DATA.earningsSignals || [],
       cup: DATA.cupSignals || [],
+      vcp: DATA.vcpSignals || [],
+      breakdown: DATA.breakdownSignals || [],
     };
     const SORTERS = {
-      breakout: function (a, b) { return a.daysInStage - b.daysInStage; },
+      breakout: function (a, b) { return a.daysAgo - b.daysAgo; },
+      vcp: function (a, b) { return (a.sub === "Breakout" ? 0 : 1) - (b.sub === "Breakout" ? 0 : 1) || Math.abs(a.distPct) - Math.abs(b.distPct); },
+      breakdown: function (a, b) { return (b.runPct || 0) - (a.runPct || 0); },
       earnings: function (a, b) { return a.daysAgo - b.daysAgo || b.volMult - a.volMult; },
       cup: function (a, b) { return Math.abs(a.recovery - 100) - Math.abs(b.recovery - 100); },
     };
@@ -1975,7 +2011,7 @@
       if (sigSector && s.sector !== sigSector) return false;
       if (sigIndustry && s.industry !== sigIndustry) return false;
       if ((s.chg == null ? 0 : s.chg) < chgMin) return false;
-      if (activeSig === "breakout") return !hideExtended || s.actionable;
+      if (activeSig === "breakout") return !hideExtended || (s.above200 !== false && !(s.extPct > 25));
       if (activeSig === "earnings") return s.gap >= gapMin || s.range >= gapMin * 1.6;
       if (activeSig === "cup") return s.correction >= corrMin && s.correction <= corrMax;
       return true;
@@ -2025,7 +2061,7 @@
       if (activeSig === "breakout") {
         host.innerHTML = '<div class="rail-h">Extension</div>'
           + '<div class="filter-row" style="margin-bottom:0"><label style="display:flex;align-items:center;gap:7px;margin-bottom:0">'
-          + '<input type="checkbox" id="sig-hide-extended" style="margin:0">Hide extended (watchlist-only)</label></div>';
+          + '<input type="checkbox" id="sig-hide-extended" style="margin:0">Hide extended (over 25% above the 200) and failed</label></div>';
         document.getElementById("sig-hide-extended").checked = hideExtended;
         document.getElementById("sig-hide-extended").addEventListener("change", function (e) { hideExtended = e.target.checked; draw(); });
       } else if (activeSig === "earnings") {
@@ -2112,7 +2148,10 @@
       // today still gets a row, just without live price/ADR/etc. to show.
       const liveById = {};
       liveSignals.forEach(function (s) { liveById[s.sym] = s; });
+      // With no day picked ("All") the list is every name in the live scan plus anything that fired inside the log window;
+      // picking days narrows it to the names that newly qualified on those days.
       const symbols = symbolsForDays(activeSig, selectedDays);
+      if (!selectedDays.length) liveSignals.forEach(function (s) { symbols.add(s.sym); });
       const merged = Array.from(symbols).map(function (sym) {
         return liveById[sym] || { sym: sym, historical: true };
       });
@@ -2140,7 +2179,7 @@
       }
       const windowLabel = selectedDays.length
         ? selectedDays.length + " selected day" + (selectedDays.length === 1 ? "" : "s")
-        : "the last " + Math.max(recentDays().length, 1) + " session" + (recentDays().length === 1 ? "" : "s");
+        : "the live scan and the last " + Math.max(recentDays().length, 1) + " sessions";
       document.getElementById("signals-count").textContent = merged.length
         ? rows.length + " of " + merged.length + " candidates clear the filters, from " + windowLabel
         : "Nothing qualifies right now — check back after the next update, or after the market's had a chance to move.";
@@ -2171,7 +2210,13 @@
         }
         sw.innerHTML = '<span class="sig-layout-l">View</span>' + [["tracker", "Tracker"], ["cards", "Cards"], ["day", "By day"]].map(function (l) {
           return '<button type="button" data-l="' + l[0] + '" class="' + (layout === l[0] ? "on" : "") + '">' + l[1] + "</button>";
-        }).join("");
+        }).join("")
+          + '<span class="sig-layout-l" style="margin-left:14px">Sort</span><select id="sig-sortsel" class="sig-sortsel">'
+          + [["default", "Scan order"], ["mcap", "Market cap"], ["price", "Price"], ["chg", "Day %"], ["since", "Since signal"], ["fired", "Fired"], ["sym", "Name"], ["sector", "Sector"]].map(function (o) {
+              return '<option value="' + o[0] + '"' + (trackerSort.k === o[0] ? " selected" : "") + ">" + o[1] + "</option>";
+            }).join("") + '</select><button type="button" id="sig-sortdir" class="sig-sortdir" title="Reverse the order">' + (trackerSort.d < 0 ? "\u25BE" : "\u25B4") + "</button>";
+        sw.querySelector("#sig-sortsel").addEventListener("change", function (e) { trackerSort.k = e.target.value; trackerSort.d = (e.target.value === "sym" || e.target.value === "sector") ? 1 : -1; draw(); });
+        sw.querySelector("#sig-sortdir").addEventListener("click", function () { trackerSort.d *= -1; draw(); });
       })();
       const logDays = DATA.signalsLog || [];
       const firedOn = {};
@@ -2181,6 +2226,7 @@
           if (w.indexOf(logDays[k].date) !== -1 && (logDays[k][activeSig] || []).indexOf(r.sym) !== -1) { firedOn[r.sym] = logDays[k].date; break; }
         }
       });
+      rows.forEach(function (r) { if (!r.historical && r.firedDate) firedOn[r.sym] = r.firedDate; });
       const itemOf = function (r) { return r.historical ? Object.assign(basicsOf(r.sym), { historical: true, firedDate: firedOn[r.sym] }) : r; };
       const dayLabel = function (d) { return d ? new Date(d + "T12:00:00").toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "—"; };
       const starBtn = function (sym) {
@@ -2189,7 +2235,7 @@
       };
       const statusOf = function (r) {
         if (r.historical) return ["old", "Not in today's scan"];
-        const c = cfg.chip(r); return [c[0] === "watch" ? "ext" : "act", c[1]];
+        const c = cfg.chip(r); return [c[0] === "watch" ? "ext" : c[0] === "breakdown" ? "dn" : c[0] === "forming" ? "frm" : "act", c[1]];
       };
       const nameLine = function (r) { const n = companyName(r.sym); return n ? '<span class="sig-co">' + n + "</span>" : ""; };
       const whyHTML = function (r) {
@@ -2228,16 +2274,16 @@
         }).join("") + "</tr></thead><tbody>" + rows.map(function (r) {
           const it = itemOf(r), st = statusOf(r), up = (it.chg || 0) >= 0;
           return '<tr class="sig-row" data-sym="' + r.sym + '" tabindex="0"><td>' + starBtn(r.sym) + '</td><td><div class="sig-nm">' + sigLogoImg(r.sym, cls)
-            + '<span><b>' + r.sym + "</b>" + nameLine(r) + "</span></div></td><td>" + secChip(it.sector) + '<div class="sig-ind2">' + (it.industry || "") + "</div></td>"
+            + '<span class="sig-id"><b>' + r.sym + "</b>" + nameLine(r) + "</span></div></td><td>" + secLine(it.sector, it.industry) + "</td>"
             + '<td class="r mono">' + fmtMcap(it.marketCap) + '</td><td class="r mono">' + (it.price == null ? "—" : fmtNum(it.price, 2)) + '</td><td class="r mono ' + (up ? "up" : "down") + '">' + (it.chg == null ? "—" : (up ? "+" : "") + fmtNum(it.chg, 2) + "%") + "</td>"
-            + '<td class="r mono sig-since" data-sym="' + r.sym + '">…</td><td class="mono">' + dayLabel(firedOn[r.sym]) + '</td><td><span class="sig-tag ' + st[0] + '">' + st[1] + "</span></td></tr>"
+            + '<td class="r mono sig-since" data-sym="' + r.sym + '">…</td><td class="mono">' + dayLabel(firedOn[r.sym]) + '</td><td><span class="sig-tag ' + st[0] + '">' + st[1] + "</span>" + stageBadge2(it.stage) + "</td></tr>"
             + '<tr class="sig-exp" data-for="' + r.sym + '"><td colspan="9">' + detailHTML(r) + "</td></tr>";
         }).join("") + "</tbody></table></div>";
       } else if (layout === "cards") {
         html = '<div class="sig-grid">' + rows.map(function (r) {
           const it = itemOf(r), st = statusOf(r), up = (it.chg || 0) >= 0;
           return '<div class="sig-tile" data-sym="' + r.sym + '" tabindex="0"><div class="sig-tile-top">' + sigLogoImg(r.sym, cls) + "<b>" + r.sym + '</b><span class="sig-tag ' + st[0] + '" style="margin-left:auto">' + st[1] + "</span>" + starBtn(r.sym) + "</div>"
-            + '<div class="sig-co">' + (companyName(r.sym) || "") + (it.marketCap ? " · " + fmtMcap(it.marketCap) : "") + "</div><div>" + secChip(it.sector) + '</div><div class="sig-ind2">' + (it.industry || "") + "</div>"
+            + '<div class="sig-co">' + (companyName(r.sym) || "") + (it.marketCap ? " \u00b7 " + fmtMcap(it.marketCap) : "") + "</div><div>" + secLine(it.sector, it.industry) + "</div><div>" + stageBadge2(it.stage) + "</div>"
             + '<div class="sig-tile-bot"><span class="mono">' + (it.price == null ? "—" : fmtNum(it.price, 2)) + ' <span class="' + (up ? "up" : "down") + '">' + (it.chg == null ? "" : (up ? "+" : "") + fmtNum(it.chg, 2) + "%") + '</span></span><span class="mono sig-since" data-sym="' + r.sym + '">…</span></div></div>';
         }).join("") + "</div>";
       } else {
@@ -2246,7 +2292,7 @@
           const g = rows.filter(function (r) { return firedOn[r.sym] === d; });
           return '<div class="sig-col"><h3><span>' + new Date(d + "T12:00:00").toLocaleDateString(undefined, { weekday: "short" }) + " " + dayLabel(d) + ' <span class="dim">' + g.length + " new</span></span></h3>" + g.map(function (r) {
             const it = itemOf(r);
-            return '<div class="sig-mini" data-sym="' + r.sym + '" tabindex="0">' + sigLogoImg(r.sym, cls) + '<span class="sig-mini-n"><b>' + r.sym + '</b><span class="sec-dot" style="background:hsl(' + secHue(it.sector) + ' 65% 48%)" title="' + (it.sector || "") + '"></span><span class="sig-ind2">' + (it.industry || "") + '</span></span><span class="mono sig-since" data-sym="' + r.sym + '">…</span>' + starBtn(r.sym) + "</div>";
+            return '<div class="sig-mini" data-sym="' + r.sym + '" tabindex="0">' + sigLogoImg(r.sym, cls) + '<span class="sig-mini-n"><b>' + r.sym + "</b>" + secLine(it.sector, it.industry) + "</span>" + '<span class="mono sig-since" data-sym="' + r.sym + '">…</span>' + starBtn(r.sym) + "</div>";
           }).join("") + "</div>";
         }).join("") + "</div>";
       }

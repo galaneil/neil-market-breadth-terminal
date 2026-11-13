@@ -959,3 +959,40 @@ tr.bi-dd-stock{cursor:pointer}tr.bi-dd-stock:hover td{background:rgba(120,140,16
 .signals-rail.collapsed { width: auto; padding: 8px; }
 .signals-rail.collapsed > *:not(.rail-fold) { display: none; }
 .signals-rail.collapsed .rail-fold { margin: 0; }
+
+/* Signals, second pass: tidy table, one-line sector > industry, stage badges, sort control */
+.sig-table { table-layout: fixed; min-width: 860px; }
+.sig-table th:nth-child(1) { width: 34px; } .sig-table th:nth-child(2) { width: 21%; } .sig-table th:nth-child(3) { width: 27%; }
+.sig-table th:nth-child(4) { width: 82px; } .sig-table th:nth-child(5) { width: 78px; } .sig-table th:nth-child(6) { width: 66px; }
+.sig-table th:nth-child(7) { width: 84px; } .sig-table th:nth-child(8) { width: 62px; } .sig-table th:nth-child(9) { width: 168px; }
+.sig-table td { padding: 9px 8px; overflow: hidden; text-overflow: ellipsis; }
+.sig-table td.r, .sig-table th.r { text-align: right; padding-right: 12px; font-variant-numeric: tabular-nums; }
+.sig-table .sig-row { height: 54px; cursor: pointer; } .sig-table .sig-row:hover td { background: color-mix(in srgb, var(--accent) 5%, transparent); }
+.sig-table .sig-row.sel td { background: color-mix(in srgb, var(--accent) 9%, transparent); }
+.sig-id { min-width: 0; display: block; } .sig-id b { font-size: 13px; letter-spacing: .01em; } .sig-id .sig-co { max-width: 100%; }
+.sec-line { display: inline-flex; align-items: baseline; gap: 6px; max-width: 100%; min-width: 0; font-size: 12px; }
+.sec-line b { font-weight: 700; white-space: nowrap; } .sec-line i { font-style: normal; color: var(--text-dim); opacity: .7; }
+.sec-line span { color: var(--text-dim); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.stg { display: inline-block; margin-left: 6px; border-radius: 5px; padding: 1px 6px; font-size: 10.5px; font-weight: 700; border: 1px solid var(--border); color: var(--text-dim); }
+.stg.stg2 { color: var(--up); border-color: color-mix(in srgb, var(--up) 40%, transparent); }
+.stg.stg4 { color: var(--down); border-color: color-mix(in srgb, var(--down) 40%, transparent); }
+.stg.stg3 { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, transparent); }
+.sig-tag.dn { background: color-mix(in srgb, var(--down) 16%, transparent); color: var(--down); }
+.sig-tag.frm { background: color-mix(in srgb, #8E5BD9 16%, transparent); color: #8E5BD9; }
+.sig-tile .stg { margin-left: 0; }
+.sig-layout { flex-wrap: wrap; row-gap: 6px; }
+.sig-sortsel { border: 1px solid var(--border); background: var(--panel-bg); color: var(--text); border-radius: 8px; padding: 5px 8px; font: inherit; font-size: 12.5px; font-weight: 600; }
+.sig-layout .sig-sortdir { padding: 5px 9px; }
+.sig-exp > td { padding: 14px 18px; } .sig-exp .sig-facts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 4px 28px; max-width: none; }
+.sig-exp .sig-why { font-size: 13px; line-height: 1.5; margin-bottom: 10px; }
+.sig-mini-n { display: flex; flex-direction: column; gap: 1px; } .sig-mini-n .sec-line { font-size: 11px; }
+.pin-cap { margin-left: 8px; }
+
+.sig-table td, .sig-table th { text-align: left; } .sig-table td.r, .sig-table th.r { text-align: right; }
+.sig-table .sig-nm { justify-content: flex-start; text-align: left; } .sig-id { text-align: left; } .sig-id b { display: block; }
+.sig-table td .sec-line { display: flex; width: 100%; }
+
+/* the Signals pin: taller chart, roomier stats */
+.stock-pin.wide { width: 620px; height: min(760px, calc(100vh - 40px)); }
+.stock-pin.wide #pin-chart { min-height: 330px; }
+.stock-pin.wide .stock-pin-body { gap: 6px 10px; }
