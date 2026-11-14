@@ -1495,7 +1495,7 @@ def _signals_body():
     </div>
     <div class="sig-item" data-sig="breakdown">
       <span class="sig-dot" style="background:var(--down)"></span>
-      <span class="sig-label">Stage 4 breakdown</span>
+      <span class="sig-label">Short: rally into resistance</span>
       <span class="sig-count" id="sig-count-breakdown">0</span>
     </div>
 

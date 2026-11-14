@@ -1250,7 +1250,7 @@
             }
             if (at && p.dates.indexOf(at) !== -1) {
               const down = sigPinType === "breakdown";
-              const label = { breakout: "reclaim", earnings: "gap", cup: "cup high", vcp: "breakout", breakdown: "broke 50" }[sigPinType] || "signal";
+              const label = { breakout: "reclaim", earnings: "gap", cup: "cup high", vcp: "breakout", breakdown: "in range" }[sigPinType] || "signal";
               bars.setMarkers([{ time: at, position: down ? "aboveBar" : "belowBar", color: down ? "#C62828" : "#2E7D32", shape: down ? "arrowDown" : "arrowUp", text: label }]);
               if (sigPinType === "vcp" && live && live.pivot) bars.createPriceLine({ price: live.pivot, color: "#8E5BD9", lineWidth: 1, lineStyle: 2, axisLabelVisible: true, title: "pivot" });
             }
@@ -1769,18 +1769,22 @@
       },
     },
     breakdown: {
-      title: "Stage 4 breakdown",
-      sub: "The leaders that cracked: a run of 100% or more that held its 200 EMA, and has now closed under the 50 on heavy volume (1.3\u00d7 average or more). "
-        + "A range-bound name slipping under a moving average does not count. <b>Below the 200</b> is the deeper break.",
-      chip: function (s) { return ["breakdown", s.sub === "Below the 200" ? "Below the 200" : "Below the 50"]; },
+      title: "Short: rally into resistance",
+      sub: "A downtrending name that was extended to the downside (15% or more under its 50 EMA at the low), has rallied, often on earnings, "
+        + "and now sits within 10% of a <b>falling</b> 20, 50 or 200 EMA while still under its 50. The moving average is the spot to risk against. "
+        + "Not a breakdown signal: it is the rally into resistance that makes the short.",
+      chip: function (s) { return ["breakdown", s.sub]; },
       reason: function (s) {
-        return "Up <b>" + s.runPct + "%</b> into its peak, now <b>" + Math.abs(s.offPeakPct) + "%</b> off it \u00b7 first closed under the 50 EMA "
-          + (s.daysAgo === 0 ? "today" : s.daysAgo + " session" + (s.daysAgo === 1 ? "" : "s") + " ago") + ", heavy volume on " + (s.volDate || "");
+        return "Fell to a low " + (s.extPct != null ? "<b>" + Math.abs(s.extPct) + "%</b> under its 50 EMA" : "") + " on " + (s.lowDate || "\u2014")
+          + ", rallied <b>+" + s.rallyPct + "%</b>" + (s.popDate ? " (pop on <b>" + s.popDate + "</b>)" : "") + " \u00b7 now "
+          + (s.near || []).map(function (x) { return "<b>" + (x[1] >= 0 ? x[1] + "% under" : Math.abs(x[1]) + "% over") + "</b> the falling " + x[0]; }).join(", ");
       },
       facts: function (s) {
         return [
-          ["Run into the peak", "+" + s.runPct + "%", "up"], ["Off the peak", s.offPeakPct + "%", "down"],
-          ["Broke the 50", s.firedDate || "\u2014"], ["Heavy volume", s.volDate || "\u2014"], ["State", s.sub],
+          ["Resistance", (s.near || []).map(function (x) { return x[0] + " (" + (x[1] >= 0 ? "-" : "+") + Math.abs(x[1]) + "%)"; }).join(", ")],
+          ["Low", (s.lowDate || "\u2014") + (s.extPct != null ? " \u00b7 " + s.extPct + "% vs 50 EMA" : ""), "down"],
+          ["Rally from the low", "+" + s.rallyPct + "%", "up"], ["Earnings-style pop", s.popDate || "none"],
+          ["In range since", s.firedDate || "\u2014"],
         ];
       },
     },
@@ -1954,7 +1958,7 @@
     const SORTERS = {
       breakout: function (a, b) { return a.daysAgo - b.daysAgo; },
       vcp: function (a, b) { return (a.sub === "Breakout" ? 0 : 1) - (b.sub === "Breakout" ? 0 : 1) || Math.abs(a.distPct) - Math.abs(b.distPct); },
-      breakdown: function (a, b) { return (b.runPct || 0) - (a.runPct || 0); },
+      breakdown: function (a, b) { return (b.popDate ? 1 : 0) - (a.popDate ? 1 : 0) || Math.abs(a.distPct) - Math.abs(b.distPct); },
       earnings: function (a, b) { return a.daysAgo - b.daysAgo || b.volMult - a.volMult; },
       cup: function (a, b) { return Math.abs(a.recovery - 100) - Math.abs(b.recovery - 100); },
     };

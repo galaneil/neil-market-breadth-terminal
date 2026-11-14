@@ -22,7 +22,7 @@ def ema(vals, w):
 
 def _clean(p):
     c = p.get("close") or []
-    if len(c) < 150 or c[-1] is None:
+    if len(c) < 100 or c[-1] is None:
         return None
     return p
 
@@ -169,37 +169,55 @@ def vcp(p, n=None, thr=0.10, max_decline=0.40, grow=1.25, last_max=0.18, near=0.
             "firedDate": d[n] if broke else None, "daysAgo": 0 if broke else None}
 
 
-def breakdown(p, n=None, run_min=1.0, max_age=90, vol_mult=1.3, min_off=0.12):
-    """Stage 4 breakdown: a run of at least +100% that held its 200 EMA, peaked above its 50, and has since closed
-    under the 50 on volume. Shown for up to 90 sessions after the first close under the 50, with the days since, so fresh breaks sort first."""
+def _short_state(c, v, E20, E50, E200, n, ext_min=0.15, rally_min=0.08, band=0.10):
+    """The short setup at index n: a downtrend that was extended to the downside, has rallied, and now sits within
+    10% below (or up to 3% above) a DECLINING 20, 50 or 200 EMA, still under the 50 and not reclaimed over the 200."""
+    if n < 100 or c[n] is None or E200[n] is None or E200[n - 20] is None:
+        return None
+    if c[n] > E200[n] * 1.03 or c[n] > E50[n] * 1.03 or E200[n] > E200[n - 20] * 0.995:
+        return None                     # not in a downtrend: price over the 200, over the 50, or the 200 is not falling
+    w0 = n - 40
+    seg = [(c[j], j) for j in range(w0, n + 1) if c[j] is not None]
+    lo, lo_i = min(seg)
+    if lo_i >= n - 1 or c[lo_i] / E50[lo_i] - 1 > -ext_min:
+        return None                     # was never extended to the downside, or today is the low
+    rally = c[n] / lo - 1
+    if rally < rally_min:
+        return None
+    near = []
+    for lab, E, back in (("20 EMA", E20, 5), ("50 EMA", E50, 10), ("200 EMA", E200, 20)):
+        if E[n] is None or E[n - back] is None or E[n] >= E[n - back] * 0.999:
+            continue                    # only a falling average counts as resistance
+        gap = (E[n] / c[n] - 1) * 100   # +% = how far the average is above price
+        if -3.0 <= gap <= band * 100:
+            near.append((lab, round(gap, 1)))
+    if not near:
+        return None
+    pop = None                          # an earnings-style pop inside the rally: gap >= 5% on 1.5x volume
+    for j in range(lo_i + 1, n + 1):
+        if c[j] is None or c[j - 1] is None:
+            continue
+        vol30 = [x for x in v[max(0, j - 31):j] if x]
+        if c[j] / c[j - 1] - 1 >= 0.05 and vol30 and (v[j] or 0) >= 1.5 * sum(vol30) / len(vol30):
+            pop = j
+    return {"near": near, "low": lo_i, "lowPx": lo, "rally": rally, "extAtLow": c[lo_i] / E50[lo_i] - 1, "pop": pop}
+
+
+def breakdown(p, n=None):
+    """Short setup (internal key 'breakdown'): downtrending name, extended to the downside, rallied -- often on earnings --
+    into a falling 20/50/200 EMA. Fired = the first day of the current run of 'yes'."""
     c, v, d = p["close"], p.get("volume") or [], p["dates"]
     n = len(c) - 1 if n is None else n
-    if n < 150:
+    if n < 100:      # recent IPOs (CBRS) are allowed: their 200 EMA is seeded from the first print
         return None
-    E50, E200 = ema(c, 50), ema(c, 200)
-    pk = max(range(max(0, n - 70), n + 1), key=lambda j: c[j] if c[j] is not None else -1)
-    if pk >= n - 2 or c[pk] is None or E50[pk] is None or c[pk] < E50[pk]:
+    E20, E50, E200 = ema(c, 20), ema(c, 50), ema(c, 200)
+    st = _short_state(c, v, E20, E50, E200, n)
+    if not st:
         return None
-    w0 = max(0, pk - 300)
-    lo = min(x for x in c[w0:pk + 1] if x is not None)
-    if lo <= 0 or c[pk] / lo - 1 < run_min:
-        return None
-    run = range(max(w0 + 5, pk - 150), pk)
-    bad200 = sum(1 for j in run if c[j] is not None and E200[j] is not None and c[j] < E200[j] * 0.97)
-    if run and bad200 / len(run) > 0.10:
-        return None
-    if c[n] is None or c[n] >= E50[n] or c[n] / c[pk] - 1 > -min_off:
-        return None
-    hit = next((i for i in range(pk + 1, n + 1) if c[i] is not None and E50[i] is not None and c[i] < E50[i]), None)
-    if hit is None or n - hit > max_age:
-        return None
-    on_vol = None
-    for i in range(hit, n + 1):
-        vol30 = [x for x in v[max(0, i - 31):i] if x]
-        if c[i] is not None and c[i] < E50[i] and vol30 and (v[i] or 0) >= vol_mult * sum(vol30) / len(vol30):
-            on_vol = i
-            break
-    if on_vol is None:
-        return None
-    return {"kind": "breakdown", "sub": "Below the 200" if c[n] < E200[n] else "Below the 50", "daysAgo": n - hit, "firedDate": d[hit],
-            "runPct": round((c[pk] / lo - 1) * 100), "offPeakPct": round((c[n] / c[pk] - 1) * 100, 1), "volDate": d[on_vol]}
+    start = n
+    while start - 1 > n - 40 and _short_state(c, v, E20, E50, E200, start - 1):
+        start -= 1
+    near = sorted(st["near"], key=lambda x: abs(x[1]))
+    return {"kind": "breakdown", "sub": "Into the " + near[0][0], "near": [[a, b] for a, b in near], "daysAgo": n - start, "firedDate": d[start],
+            "lowDate": d[st["low"]], "rallyPct": round(st["rally"] * 100, 1), "extPct": round(st["extAtLow"] * 100, 1),
+            "popDate": d[st["pop"]] if st["pop"] is not None else None, "distPct": near[0][1]}
