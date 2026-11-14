@@ -1968,7 +1968,7 @@
     // qualifies" with the real signals one click away and easy to miss.
     let activeSig = "breakout";
     let adrMin = 2.0, turnMin = 20, mcapMin = 0;
-    let hideExtended = false;
+    let hideExtended = false, popOnly = false;
     let gapMin = 5, volMultMin = 2;
     let corrMin = 15, corrMax = 40;
     let searchTerm = "";
@@ -2016,6 +2016,7 @@
       if (sigIndustry && s.industry !== sigIndustry) return false;
       if ((s.chg == null ? 0 : s.chg) < chgMin) return false;
       if (activeSig === "breakout") return !hideExtended || (s.above200 !== false && !(s.extPct > 25));
+      if (activeSig === "breakdown") return !popOnly || !!s.popDate;
       if (activeSig === "earnings") return s.gap >= gapMin || s.range >= gapMin * 1.6;
       if (activeSig === "cup") return s.correction >= corrMin && s.correction <= corrMax;
       return true;
@@ -2068,6 +2069,12 @@
           + '<input type="checkbox" id="sig-hide-extended" style="margin:0">Hide extended (over 25% above the 200) and failed</label></div>';
         document.getElementById("sig-hide-extended").checked = hideExtended;
         document.getElementById("sig-hide-extended").addEventListener("change", function (e) { hideExtended = e.target.checked; draw(); });
+      } else if (activeSig === "breakdown") {
+        host.innerHTML = '<div class="rail-h">Earnings</div>'
+          + '<div class="filter-row" style="margin-bottom:0"><label style="display:flex;align-items:center;gap:7px;margin-bottom:0">'
+          + '<input type="checkbox" id="sig-pop-only" style="margin:0">Only names that popped on earnings</label></div>';
+        document.getElementById("sig-pop-only").checked = popOnly;
+        document.getElementById("sig-pop-only").addEventListener("change", function (e) { popOnly = e.target.checked; draw(); });
       } else if (activeSig === "earnings") {
         host.innerHTML = '<div class="rail-h">Move size</div>'
           + '<div class="filter-row"><label>Min gap / wide-range <b id="sig-gap-val">5.0%</b></label>'
