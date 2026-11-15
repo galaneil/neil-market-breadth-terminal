@@ -3474,7 +3474,7 @@ SETUPS_PAGE = r"""<!doctype html>
   .bt-rule.on { border-color:var(--accent); background:rgba(37,99,235,.10); }
   .bt-rule i { width:9px; height:9px; border-radius:50%; display:inline-block; }
   .bt-rule small { font-size:9px; font-weight:800; color:var(--violet); background:rgba(124,58,237,.14); padding:1px 6px; border-radius:99px; }
-  #bt-chart { height:280px; margin:6px 0; }
+  #bt-chart { height:340px; margin:6px 0 16px; overflow:hidden; position:relative; }
   .bt-tbl { width:100%; border-collapse:collapse; font-size:12px; }
   .bt-tbl th { text-align:left; font-size:9.5px; color:var(--dim); text-transform:uppercase; padding:5px 7px; border-bottom:1px solid var(--line); white-space:nowrap; }
   .bt-tbl td { padding:7px; border-bottom:1px solid var(--line); } .bt-tbl .r { text-align:right; }
@@ -4015,6 +4015,8 @@ function mountBacktest(e, patch){
       addVolume(chart, D, css("--up"), css("--down"), "#f59e0b");
       l20=chart.addLineSeries({color:"#8b5cf6",lineWidth:1.3,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false});
       l20.setData(D.dates.map(function(d,i){ return {time:d,value:E20[i]}; }));
+      // Follow the box: if the sheet had no width yet when the chart was built, or the window is resized, fit the chart to it.
+      if(window.ResizeObserver) new ResizeObserver(function(){ var w=$("bt-chart").clientWidth; if(w>0) chart.applyOptions({width:w}); }).observe($("bt-chart"));
     }
     function run(){
       var i0=idxFor($("bt-date").value), entry=+$("bt-entry").value, stop=+$("bt-stop").value||null;
