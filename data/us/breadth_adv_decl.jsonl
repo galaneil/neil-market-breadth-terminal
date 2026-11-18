@@ -1651,11 +1651,11 @@
 {"date":"2026-07-29","advancers":485,"decliners":999,"net":-514}
 {"date":"2026-07-30","advancers":633,"decliners":847,"net":-214}
 {"date":"2026-07-31","advancers":686,"decliners":801,"net":-115}
-{"date":"2026-08-03","advancers":1,"decliners":0,"net":1}
-{"date":"2026-08-04","advancers":1,"decliners":1,"net":0}
+{"date":"2026-08-03","advancers":2,"decliners":0,"net":2}
+{"date":"2026-08-04","advancers":2,"decliners":1,"net":1}
 {"date":"2026-08-05","advancers":588,"decliners":904,"net":-316}
-{"date":"2026-08-06","advancers":1,"decliners":1,"net":0}
-{"date":"2026-08-07","advancers":2,"decliners":0,"net":2}
+{"date":"2026-08-06","advancers":2,"decliners":1,"net":1}
+{"date":"2026-08-07","advancers":3,"decliners":0,"net":3}
 {"date":"2026-08-10","advancers":551,"decliners":941,"net":-390}
 {"date":"2026-08-11","advancers":851,"decliners":636,"net":215}
 {"date":"2026-08-12","advancers":841,"decliners":648,"net":193}
@@ -1664,7 +1664,8 @@
 {"date":"2026-08-17","advancers":426,"decliners":1062,"net":-636}
 {"date":"2026-08-18","advancers":532,"decliners":959,"net":-427}
 {"date":"2026-08-19","advancers":842,"decliners":646,"net":196}
-{"date":"2026-08-21","advancers":654,"decliners":837,"net":-183}
+{"date":"2026-08-20","advancers":1,"decliners":0,"net":1}
+{"date":"2026-08-21","advancers":0,"decliners":1,"net":-1}
 {"date":"2026-08-22","advancers":0,"decliners":1,"net":-1}
 {"date":"2026-08-23","advancers":1,"decliners":0,"net":1}
 {"date":"2026-08-24","advancers":1,"decliners":0,"net":1}
@@ -1724,6 +1725,7 @@
 {"date":"2026-11-09","advancers":1286,"decliners":199,"net":1087}
 {"date":"2026-11-10","advancers":639,"decliners":841,"net":-202}
 {"date":"2026-11-11","advancers":864,"decliners":613,"net":251}
-{"date":"2026-11-12","advancers":317,"decliners":1165,"net":-848}
-{"date":"2026-11-13","advancers":858,"decliners":620,"net":238}
-{"date":"2026-11-16","advancers":416,"decliners":1058,"net":-642}
+{"date":"2026-11-12","advancers":317,"decliners":1167,"net":-850}
+{"date":"2026-11-13","advancers":861,"decliners":620,"net":241}
+{"date":"2026-11-16","advancers":416,"decliners":1062,"net":-646}
+{"date":"2026-11-17","advancers":218,"decliners":1264,"net":-1046}
