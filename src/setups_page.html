@@ -1,0 +1,1715 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Setups Database</title>
+<script src="/docs/vendor/lightweight-charts.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap">
+<style>
+
+:root{
+  /* Layout idea: a notebook in three panes (folders, examples, the open example). Logging opens full screen with the chart beside the form. */
+  --bg:#f4f5f7; --panel:#ffffff; --ink:#1a1d24; --dim:#5f6b7d; --faint:#98a2b3; --line:#e3e6eb; --grid:#eff1f4;
+  --violet:#6b3fd8; --violet-bg:#efe9fd; --accent:#2563eb; --up:#15803d; --down:#c62828; --warn:#a15c07;
+  --up-bg:#e6f4eb; --down-bg:#fbe9e9; --warn-bg:#fcf1dc;
+  --sans:"IBM Plex Sans",system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:"IBM Plex Mono",ui-monospace,"Cascadia Mono",Consolas,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --bg:#0f1219; --panel:#161a23; --ink:#e7e9ee; --dim:#9ba4b4; --faint:#6b7486; --line:#272c38; --grid:#1c212b;
+  --violet:#a88bff; --violet-bg:#261f43; --accent:#6ea2ff; --up:#34c77b; --down:#f26b63; --warn:#e3b04b;
+  --up-bg:#11301f; --down-bg:#391a1a; --warn-bg:#33280f; color-scheme:dark;}}
+:root[data-theme="dark"]{
+  --bg:#0f1219; --panel:#161a23; --ink:#e7e9ee; --dim:#9ba4b4; --faint:#6b7486; --line:#272c38; --grid:#1c212b;
+  --violet:#a88bff; --violet-bg:#261f43; --accent:#6ea2ff; --up:#34c77b; --down:#f26b63; --warn:#e3b04b;
+  --up-bg:#11301f; --down-bg:#391a1a; --warn-bg:#33280f; color-scheme:dark;}
+*{box-sizing:border-box}
+html,body{height:100%;margin:0}
+body{background:var(--bg);color:var(--ink);font:13.5px/1.5 var(--sans);font-variant-numeric:tabular-nums;-webkit-font-smoothing:antialiased}
+button,input,select,textarea{font:inherit;color:inherit}
+button{cursor:pointer}
+:focus-visible{outline:2px solid var(--violet);outline-offset:2px}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+.mono{font-family:var(--mono)}
+.dim{color:var(--dim)} .up{color:var(--up)} .down{color:var(--down)}
+.spacer{flex:1}
+kbd{font:500 10.5px/1.5 var(--mono);color:var(--dim);border:1px solid var(--line);border-bottom-width:2px;border-radius:4px;padding:0 4px;background:var(--panel);white-space:nowrap}
+.btn{height:30px;border:1px solid var(--line);background:var(--panel);border-radius:7px;padding:0 10px;font-size:12.5px;font-weight:500;display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.btn:hover{border-color:var(--faint)}
+.btn.danger{color:var(--down)} .btn.danger:hover{border-color:var(--down)}
+.btn[hidden]{display:none}
+.primary{height:32px;border:0;border-radius:8px;background:var(--violet);color:#fff;padding:0 13px;font-weight:600;font-size:13px;display:inline-flex;align-items:center;gap:8px;white-space:nowrap}
+.primary:hover{filter:brightness(1.07)}
+.primary[hidden]{display:none}
+.primary kbd{background:transparent;border-color:rgba(255,255,255,.45);color:#fff}
+.primary.alt{background:var(--ink);color:var(--panel)}
+.primary.alt kbd{border-color:rgba(127,127,127,.5);color:inherit}
+.linkbtn{border:0;background:none;padding:0;color:var(--violet);font-weight:500;text-decoration:underline;text-underline-offset:2px}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--panel)}
+.seg button{border:0;background:transparent;padding:4px 11px;font-size:12.5px;font-weight:500;color:var(--dim)}
+.seg button.on{background:var(--ink);color:var(--panel)}
+.tag{display:inline-block;font-size:11.5px;font-weight:500;border:0;border-radius:5px;padding:1px 7px;background:var(--bg);color:var(--dim);white-space:nowrap}
+button.tag{cursor:pointer}
+.tag.bull{background:var(--up-bg);color:var(--up)} .tag.bear{background:var(--down-bg);color:var(--down)} .tag.chop{background:var(--warn-bg);color:var(--warn)}
+.tag.warn{background:var(--warn-bg);color:var(--warn)} .tag.ok{background:var(--up-bg);color:var(--up)} .tag.v{background:var(--violet-bg);color:var(--violet)}
+.lg{width:30px;height:30px;border-radius:8px;flex:none;object-fit:contain;background:#fff;border:1px solid var(--line);padding:2px}
+.lg.ph{display:inline-grid;place-items:center;font:600 11px var(--mono);color:var(--dim);background:var(--bg);padding:0}
+.lg.big{width:44px;height:44px;border-radius:11px;padding:4px}
+
+/* frame */
+.app{height:100%;display:flex;flex-direction:column}
+.top{display:flex;align-items:center;gap:12px;padding:10px 18px;background:var(--panel);border-bottom:1px solid var(--line);flex-wrap:wrap}
+.ttl{display:flex;align-items:baseline;gap:10px}
+.ttl h1{margin:0;font-size:18px;font-weight:600;letter-spacing:-.01em}
+.sync{font-size:12px;color:var(--dim);display:inline-flex;align-items:center;gap:6px}
+.sync i{width:7px;height:7px;border-radius:50%;background:var(--up)}
+.sync.busy i{background:var(--warn)}
+.views{display:flex;gap:2px;background:var(--bg);border:1px solid var(--line);border-radius:9px;padding:3px}
+.views button{border:0;background:transparent;border-radius:6px;padding:4px 12px;font-weight:500;color:var(--dim)}
+.views button.on{background:var(--panel);color:var(--ink);box-shadow:0 0 0 1px var(--line)}
+.search{position:relative;flex:1;min-width:180px;max-width:340px}
+.search input{width:100%;height:32px;border:1px solid var(--line);background:var(--bg);border-radius:8px;padding:0 30px 0 10px}
+.search input:focus{outline:none;border-color:var(--violet);background:var(--panel)}
+.search kbd{position:absolute;right:8px;top:7px}
+.envnow{font-size:12px;color:var(--dim);white-space:nowrap}
+.envnow b{font-weight:600}
+.shell{flex:1;min-height:0;display:grid;grid-template-columns:232px minmax(0,1fr) minmax(470px,42%)}
+.shell.learn{grid-template-columns:232px minmax(0,1fr)}
+.shell.learn .detail{display:none}
+.rail{background:var(--panel);border-right:1px solid var(--line);overflow:auto;padding:12px 10px 24px}
+.center{overflow:auto;padding:12px 16px 40px;min-width:0}
+.detail{background:var(--panel);border-left:1px solid var(--line);overflow:auto;padding:14px 18px 40px;min-width:0}
+
+/* rail */
+.rlbl{display:flex;justify-content:space-between;align-items:baseline;gap:6px;margin:14px 8px 6px;font-size:10.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--dim)}
+.rlbl span{font-weight:400;letter-spacing:0;text-transform:none;color:var(--faint);font-size:11px}
+.ritem{display:grid;grid-template-columns:minmax(0,1fr) auto;align-items:center;gap:3px 8px;width:100%;text-align:left;border:1px solid transparent;background:transparent;border-radius:8px;padding:6px 9px;color:var(--ink)}
+.ritem:hover{background:var(--bg)}
+.ritem.on{background:var(--violet-bg);color:var(--violet)}
+.ritem.on .nm{font-weight:600}
+.ritem .nm{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.ritem .cnt{font:500 11.5px var(--mono);color:var(--dim)}
+.ritem.zero .nm{color:var(--dim)}
+.ritem .prog{grid-column:1/-1;display:block;height:3px;border-radius:2px;background:var(--grid);overflow:hidden}
+.ritem .prog b{display:block;height:100%;background:var(--violet)}
+.ritem .sub{grid-column:1/-1;font-size:11px;color:var(--dim)}
+.ritem.todo{border-color:var(--line);margin-bottom:2px}
+.ritem.todo .cnt{color:#fff;background:var(--violet);border-radius:5px;padding:0 6px}
+.ritem.drop{border-color:var(--violet);background:var(--violet-bg)}
+.newf input{width:100%;height:30px;border:1px solid var(--violet);border-radius:7px;padding:0 8px;background:var(--panel)}
+.rnote{font-size:11.5px;color:var(--dim);margin:12px 9px 0;line-height:1.45}
+
+/* library */
+.tools{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:8px}
+.tools select{height:30px;border:1px solid var(--line);border-radius:7px;background:var(--panel);padding:0 6px;font-size:12.5px}
+.mfold{display:none}
+.chipbtn{height:30px;border:1px solid var(--line);background:var(--panel);border-radius:7px;padding:0 10px;font-size:12.5px;font-weight:500;color:var(--dim);display:inline-flex;align-items:center;gap:6px}
+.chipbtn.on{border-color:var(--violet);color:var(--violet);background:var(--violet-bg)}
+.chipbtn b{font:600 11px var(--mono)}
+.count{font-size:12px;color:var(--dim);margin:2px 2px 8px}
+.bulk{position:sticky;top:-12px;z-index:3;display:flex;align-items:center;gap:8px;flex-wrap:wrap;background:var(--ink);color:var(--panel);border-radius:9px;padding:7px 10px;margin-bottom:8px}
+.bulk .btn{background:transparent;color:var(--panel);border-color:rgba(127,127,127,.5)}
+.bulk kbd{background:transparent;color:inherit;border-color:rgba(127,127,127,.5)}
+.rows{display:flex;flex-direction:column;gap:6px}
+.erow{display:grid;grid-template-columns:18px minmax(140px,1.25fr) minmax(110px,.9fr) 132px minmax(130px,1fr) auto;align-items:center;gap:12px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:9px 12px;cursor:pointer}
+.erow:hover{border-color:var(--faint)}
+.erow.sel{border-color:var(--violet);box-shadow:0 0 0 1px var(--violet)}
+.erow.picked{background:var(--violet-bg)}
+.erow.dragging{opacity:.45}
+.erow input[type=checkbox]{width:15px;height:15px;margin:0;accent-color:var(--violet)}
+.who{display:flex;align-items:center;gap:10px;min-width:0}
+.who b{display:block;font-size:14px;font-weight:600;line-height:1.2}
+.who small,.who .src{display:block;font-size:12px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.who .src{font-size:11px;color:var(--violet)}
+.who>div{min-width:0}
+.fc{display:flex;flex-direction:column;align-items:flex-start;gap:2px;min-width:0}
+.fold{font-size:11.5px;font-weight:600;color:var(--violet);background:var(--violet-bg);border-radius:5px;padding:1px 7px;white-space:nowrap;max-width:100%;overflow:hidden;text-overflow:ellipsis}
+.fc small{font:500 11.5px var(--mono);color:var(--dim)}
+canvas.spark{width:132px;height:44px;display:block}
+.facts{display:flex;flex-direction:column;gap:1px;font-size:12px;color:var(--dim);min-width:0}
+.facts b{color:var(--ink);font-weight:600;font-family:var(--mono);font-size:12px}
+.facts b.up{color:var(--up)} .facts b.down{color:var(--down)}
+.flags{text-align:right}
+.empty{border:1px dashed var(--line);border-radius:10px;padding:26px 16px;text-align:center;color:var(--dim)}
+.qhead{display:flex;align-items:flex-start;gap:12px;flex-wrap:wrap;margin-bottom:10px}
+.qhead h2{margin:0;font-size:16px;font-weight:600}
+.qhead p{margin:2px 0 0;font-size:12.5px;color:var(--dim);max-width:70ch}
+.erow.qrow{grid-template-columns:minmax(150px,1.2fr) minmax(170px,1.3fr) 132px auto}
+.erow.qrow.done{opacity:.55}
+
+/* detail */
+.dhead{display:flex;align-items:center;gap:12px}
+.dhead h2{margin:0;font-size:21px;font-weight:600;line-height:1.1}
+.dsub{font-size:12.5px;color:var(--dim)}
+.dbar{display:flex;align-items:center;gap:6px;flex-wrap:wrap;margin:10px 0}
+.dclose{display:none}
+.fsel{height:30px;border:1px solid var(--violet);color:var(--violet);background:var(--violet-bg);font-weight:600;border-radius:7px;padding:0 6px;font-size:12.5px;max-width:190px}
+a.ext{font-size:12.5px;font-weight:500;color:var(--accent);text-decoration:none;white-space:nowrap}
+a.ext:hover{text-decoration:underline}
+.ctl{display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:4px 0 6px}
+.tf{display:inline-flex;border:1px solid var(--line);border-radius:7px;overflow:hidden}
+.tf button{border:0;background:var(--panel);padding:3px 9px;font-size:12px;color:var(--dim)}
+.tf button.on{background:var(--bg);color:var(--ink);font-weight:600}
+.chartwrap{position:relative;height:330px;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--panel)}
+.lwbox{position:absolute;inset:0}
+canvas.ovl{position:absolute;left:0;top:0;pointer-events:none;z-index:5}
+.legend{display:flex;gap:12px;flex-wrap:wrap;font-size:11.5px;color:var(--dim);margin:6px 2px 10px}
+.legend i{display:inline-block;width:14px;height:0;border-top:2px solid;vertical-align:middle;margin-right:5px}
+.legend i.dash{border-top-style:dashed}
+.legend i.box{width:12px;height:9px;border:1px dashed var(--violet);background:var(--violet-bg)}
+.sec{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin:16px 0 7px;font-size:10.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--dim)}
+.sec .hint{font-size:11.5px;font-weight:400;letter-spacing:0;text-transform:none;color:var(--faint)}
+.tiles{display:grid;grid-template-columns:repeat(auto-fill,minmax(112px,1fr));gap:6px}
+.tile{background:var(--bg);border-radius:9px;padding:7px 9px;min-width:0}
+.tile .k{font-size:11px;color:var(--dim);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.tile .v{font:600 15px var(--mono);line-height:1.35;overflow-wrap:anywhere}
+.tile .s{font-size:11px;color:var(--dim)}
+.note{white-space:pre-wrap;background:var(--bg);border-radius:9px;padding:9px 11px;font-size:13px}
+.checks{display:flex;flex-wrap:wrap;gap:5px}
+table.bt{width:100%;border-collapse:collapse;font-size:12.5px}
+table.bt th{font-size:10.5px;font-weight:600;text-transform:uppercase;letter-spacing:.05em;color:var(--dim);text-align:left;padding:6px;border-bottom:1px solid var(--line);white-space:nowrap}
+table.bt td{padding:7px 6px;border-bottom:1px solid var(--line)}
+table.bt tbody tr{cursor:pointer}
+table.bt tbody tr:hover td{background:var(--bg)}
+table.bt tr.on td{background:var(--violet-bg)}
+table.bt .r{text-align:right}
+.tw{overflow-x:auto}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px;vertical-align:middle}
+
+/* learn */
+.lhead{display:flex;align-items:flex-start;gap:14px;flex-wrap:wrap;margin-bottom:12px}
+.lhead h2{margin:0;font-size:17px;font-weight:600}
+.verdict{font-size:14px;max-width:76ch;margin:4px 0 0}
+.lgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(380px,1fr));gap:12px}
+.card{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:13px 15px;min-width:0}
+.card h3{margin:0;font-size:13.5px;font-weight:600}
+.card .q{margin:2px 0 10px;font-size:12px;color:var(--dim)}
+.card.wide{grid-column:1/-1}
+.pathbox{position:relative;height:290px}
+.pathbox canvas{position:absolute;inset:0;width:100%;height:100%;cursor:crosshair}
+.sgrid{display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:4px 24px}
+.strip{margin:0 0 12px}
+.strip .lab{display:flex;justify-content:space-between;gap:8px;font-size:12.5px}
+.strip .lab span{color:var(--dim);font-size:12px}
+.track{position:relative;height:26px;margin:4px 8px 0}
+.track::before{content:"";position:absolute;left:0;right:0;top:12px;height:2px;background:var(--grid);border-radius:1px}
+.track .med{position:absolute;top:4px;width:2px;height:18px;margin-left:-1px;background:var(--ink);opacity:.6}
+.track .pt{position:absolute;top:6px;width:14px;height:14px;margin-left:-7px;border-radius:50%;border:2px solid var(--panel);background:var(--violet);padding:0}
+.track .pt:hover,.track .pt:focus-visible{transform:scale(1.3)}
+.ends{display:flex;justify-content:space-between;font:500 11px var(--mono);color:var(--faint);margin:0 2px}
+.brow{display:grid;grid-template-columns:130px minmax(0,1fr) 28px;align-items:center;gap:10px;width:100%;border:0;background:transparent;padding:5px 2px;text-align:left;border-radius:6px}
+.brow:hover{background:var(--bg)}
+.bt2{height:12px;border-radius:4px;background:var(--grid);overflow:hidden}
+.bt2 b{display:block;height:100%;background:var(--violet)}
+.attn{display:flex;flex-direction:column;gap:6px}
+.arow{display:flex;align-items:center;gap:10px;border:1px solid var(--line);border-radius:9px;padding:7px 10px}
+.arow .t{font-weight:600;min-width:52px}
+
+/* logging workspace */
+.ws{position:fixed;inset:0;z-index:40;background:var(--bg);display:flex;flex-direction:column}
+.ws[hidden]{display:none}
+.ws-head{display:flex;align-items:center;gap:12px;padding:10px 18px;background:var(--panel);border-bottom:1px solid var(--line);flex-wrap:wrap}
+.ws-head h2{margin:0;font-size:16px;font-weight:600}
+.qnav{display:flex;align-items:center;gap:8px;font-size:12.5px;color:var(--dim)}
+.draft{font-size:12px;color:var(--dim)}
+.icon{width:32px;height:32px;border:1px solid var(--line);background:var(--panel);border-radius:8px;font-size:18px;line-height:1}
+.ws-body{flex:1;min-height:0;display:grid;grid-template-columns:minmax(0,1fr) 440px}
+.ws-chart{display:flex;flex-direction:column;min-width:0;padding:12px 14px 10px 18px}
+.ws-chart .chartwrap{flex:1;height:auto;min-height:300px}
+.ws-tk{display:flex;align-items:center;gap:12px;min-height:48px;margin-bottom:6px;flex-wrap:wrap}
+.ws-tk h3{margin:0;font-size:19px;font-weight:600}
+.hint{font-size:12px;color:var(--dim);margin:2px 2px 0}
+.ws-form{overflow:auto;background:var(--panel);border-left:1px solid var(--line);padding:12px 18px 24px}
+.field{margin:0 0 15px}
+.flabel{display:flex;align-items:baseline;gap:8px;flex-wrap:wrap;margin:0 0 6px;font-size:10.5px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--dim)}
+.flabel label{font:inherit;color:inherit;letter-spacing:inherit}
+.flabel .hint{margin:0;font-size:11.5px;font-weight:400;letter-spacing:0;text-transform:none;color:var(--faint)}
+.inp{height:32px;width:100%;border:1px solid var(--line);border-radius:7px;background:var(--panel);padding:0 9px}
+.inp:focus{outline:none;border-color:var(--violet)}
+textarea.inp{height:auto;min-height:88px;padding:8px 10px;resize:vertical;line-height:1.45}
+.inp.err{border-color:var(--down)}
+.errmsg{font-size:12px;color:var(--down);margin-top:4px}
+.picks{display:flex;flex-wrap:wrap;gap:5px}
+.pick{border:1px solid var(--line);background:var(--panel);border-radius:7px;padding:4px 9px;font-size:12.5px;font-weight:500;display:inline-flex;align-items:center;gap:6px}
+.pick kbd{font-size:10px;padding:0 3px}
+.pick.on{border-color:var(--violet);background:var(--violet-bg);color:var(--violet)}
+.row3{display:grid;grid-template-columns:1.1fr 1fr 1fr;gap:8px}
+.row3 label{display:block;font-size:11.5px;color:var(--dim);margin-bottom:3px}
+.datebox{display:flex;gap:4px}
+.datebox .btn{width:32px;padding:0;justify-content:center;flex:none}
+.suggest{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:6px;font-size:12.5px;background:var(--violet-bg);border-radius:8px;padding:6px 9px}
+.risk{font-size:12px;color:var(--dim);margin-top:5px}
+.cl{display:flex;flex-direction:column;gap:2px}
+.cl label{display:flex;align-items:center;gap:8px;font-size:13px;padding:3px 2px;cursor:pointer}
+.cl input{width:15px;height:15px;margin:0;accent-color:var(--violet);flex:none}
+.addc{display:flex;gap:6px;margin-top:6px}
+.paste{border:1.5px dashed var(--line);border-radius:10px;padding:12px;text-align:center;color:var(--dim);font-size:12.5px;cursor:pointer}
+.paste:focus,.paste:hover{border-color:var(--violet);color:var(--ink);outline:none}
+.shot{position:relative;margin-top:6px}
+.shot img{display:block;max-width:100%;border-radius:8px;border:1px solid var(--line)}
+.shot button{position:absolute;top:6px;right:6px}
+.ws-foot{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:10px 18px;background:var(--panel);border-top:1px solid var(--line)}
+.dup{display:flex;align-items:center;gap:10px;flex-wrap:wrap;font-size:12.5px;background:var(--warn-bg);color:var(--warn);border-radius:8px;padding:5px 10px}
+.dup[hidden]{display:none}
+.dup .btn{height:26px}
+.sugg{position:relative}
+.sugg ul{position:absolute;left:0;right:0;top:100%;z-index:5;margin:4px 0 0;padding:4px;list-style:none;background:var(--panel);border:1px solid var(--line);border-radius:9px;box-shadow:0 8px 24px rgba(0,0,0,.14);max-height:300px;overflow:auto}
+.sugg ul[hidden]{display:none}
+.sugg li button{display:flex;align-items:center;gap:9px;width:100%;border:0;background:transparent;border-radius:6px;padding:6px 7px;text-align:left}
+.sugg li button:hover,.sugg li button.on{background:var(--bg)}
+.sugg li small{color:var(--dim)}
+.wsempty{position:absolute;inset:16px;display:grid;place-items:center;text-align:center;color:var(--dim);border:1px dashed var(--line);border-radius:10px}
+
+/* toast + menu */
+.toast{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:60;display:none;align-items:center;gap:12px;background:var(--ink);color:var(--panel);border-radius:10px;padding:9px 14px;font-size:13px;box-shadow:0 10px 30px rgba(0,0,0,.22);max-width:calc(100% - 32px)}
+.toast.show{display:flex}
+.toast button{border:0;background:transparent;color:inherit;font-weight:600;text-decoration:underline;text-underline-offset:2px}
+.menu{position:fixed;z-index:55;background:var(--panel);border:1px solid var(--line);border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.18);padding:5px;min-width:210px;max-height:60vh;overflow:auto}
+.menu[hidden]{display:none}
+.menu p{margin:4px 8px 6px;font-size:11.5px;color:var(--dim)}
+.menu button{display:flex;justify-content:space-between;align-items:center;gap:10px;width:100%;border:0;background:transparent;border-radius:6px;padding:6px 8px;text-align:left;font-size:13px}
+.menu button:hover,.menu button:focus-visible{background:var(--bg)}
+
+@media (max-width:1280px){
+  .erow{grid-template-columns:18px minmax(140px,1.2fr) minmax(110px,1fr) minmax(120px,1fr) auto}
+  .erow canvas.spark{display:none}
+  .erow.qrow{grid-template-columns:minmax(140px,1.2fr) minmax(160px,1.3fr) auto}
+}
+@media (max-width:1080px){
+  .shell{grid-template-columns:200px minmax(0,1fr)}
+  .detail{position:fixed;top:0;right:0;bottom:0;width:min(560px,100%);z-index:30;box-shadow:-14px 0 34px rgba(0,0,0,.18);display:none}
+  .detail.open{display:block}
+  .dclose{display:inline-flex}
+  .ws-body{grid-template-columns:1fr;overflow:auto}
+  .ws-chart .chartwrap{min-height:340px;flex:none;height:340px}
+  .ws-form{border-left:0;border-top:1px solid var(--line);overflow:visible}
+}
+@media (max-width:720px){
+  .shell,.shell.learn{grid-template-columns:1fr}
+  .rail{display:none}
+  .mfold{display:inline-block}
+  .erow{grid-template-columns:18px minmax(0,1fr) auto}
+  .erow .fc,.erow .facts{display:none}
+  .erow.qrow{grid-template-columns:minmax(0,1fr) auto}
+  .top{padding:10px 16px} .center{padding:12px 16px 40px} .demo{padding:6px 16px}
+  .lgrid{grid-template-columns:1fr}
+  .row3{grid-template-columns:1fr 1fr}
+}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+
+/* real page additions */
+.lgw{position:relative;display:inline-block;flex:none}
+.lgw>img.lg{position:absolute;left:0;top:0}
+.err{background:var(--down-bg);color:var(--down);padding:10px 18px;font-size:13px;border-bottom:1px solid var(--line)}
+.err[hidden]{display:none}
+.err b{font-weight:600}
+.sync.bad i{background:var(--down)}
+.sync.bad{color:var(--down)}
+.tag.save{background:var(--warn-bg);color:var(--warn)}
+.tag.fail{background:var(--down-bg);color:var(--down)}
+.loading{display:grid;place-items:center;height:100%;color:var(--dim);font-size:12.5px}
+.addq{display:flex;gap:6px;align-items:center}
+.addq input{height:30px;width:170px;border:1px solid var(--line);border-radius:7px;padding:0 8px;background:var(--panel)}
+.keys{position:relative}
+.keysbox{position:absolute;right:0;top:36px;z-index:20;background:var(--panel);border:1px solid var(--line);border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,.16);padding:10px 12px;width:290px;font-size:12.5px}
+.keysbox[hidden]{display:none}
+.keysbox div{display:flex;justify-content:space-between;gap:10px;padding:3px 0}
+.ctxline{display:flex;flex-wrap:wrap;gap:5px;margin-top:4px}
+.verdict-pill{display:inline-block;font-weight:600;border-radius:7px;padding:3px 10px;margin-right:6px}
+
+.tools select{max-width:180px}
+#sortf{max-width:170px}
+
+</style>
+</head>
+<body>
+<div class="app">
+  <header class="top">
+    <div class="ttl"><h1>Setups</h1><span class="sync" id="sync"><i></i><span>Loading&hellip;</span></span></div>
+    <nav class="views" aria-label="View"><button type="button" data-view="library" class="on">Library</button><button type="button" data-view="learn">Learn</button></nav>
+    <div class="search"><label class="sr" for="q">Search examples</label><input id="q" type="search" placeholder="Search ticker, company or note" autocomplete="off"><kbd>/</kbd></div>
+    <span class="spacer"></span>
+    <span class="envnow" id="envnow"></span>
+    <div class="seg" id="ctry" role="group" aria-label="Market"><button type="button" data-c="US" class="on">US</button><button type="button" data-c="IN">India</button></div>
+    <div class="keys"><button type="button" class="btn" id="keysbtn" aria-expanded="false" aria-controls="keysbox">Keys</button>
+      <div class="keysbox" id="keysbox" hidden>
+        <div><span>Log a setup</span><kbd>N</kbd></div><div><span>Search</span><kbd>/</kbd></div>
+        <div><span>Next or previous example</span><span><kbd>J</kbd> <kbd>K</kbd></span></div>
+        <div><span>Edit the open example</span><kbd>E</kbd></div><div><span>Move to a folder</span><kbd>M</kbd></div>
+        <div><span>Delete (with Undo)</span><kbd>Delete</kbd></div>
+        <div><span>In the form: folder</span><kbd>1</kbd>–<kbd>9</kbd></div>
+        <div><span>In the form: entry day</span><span><kbd>←</kbd> <kbd>→</kbd></span></div>
+        <div><span>In the form: save</span><span><kbd>Ctrl</kbd> <kbd>Enter</kbd></span></div>
+        <div><span>Set the stop on the chart</span><span><kbd>Shift</kbd> click</span></div>
+      </div>
+    </div>
+    <button type="button" class="primary" id="logbtn">Log a setup <kbd>N</kbd></button>
+  </header>
+  <div class="err" id="err" hidden></div>
+  <div class="shell" id="shell">
+    <aside class="rail" id="rail" aria-label="Folders"></aside>
+    <main class="center" id="center"><div class="loading">Loading your setups&hellip;</div></main>
+    <section class="detail" id="detail" aria-label="Selected example"></section>
+  </div>
+</div>
+
+<div class="ws" id="ws" hidden role="dialog" aria-modal="true" aria-labelledby="ws-title">
+  <div class="ws-head">
+    <h2 id="ws-title">Log a setup</h2>
+    <div class="qnav" id="qnav"></div>
+    <span class="spacer"></span>
+    <span class="draft" id="draft"></span>
+    <button type="button" class="icon" id="ws-close" aria-label="Close, Esc">&times;</button>
+  </div>
+  <div class="ws-body">
+    <div class="ws-chart">
+      <div class="ws-tk" id="ws-tk"></div>
+      <div class="ctl">
+        <div class="seg" id="ws-mode" role="group" aria-label="What a click on the chart sets"><button type="button" data-m="entry" class="on">Click sets entry day</button><button type="button" data-m="stop">Click sets stop</button></div>
+        <span class="spacer"></span>
+        <div class="tf" id="ws-tf"><button type="button" data-r="base">Base</button><button type="button" data-r="6m">6M</button><button type="button" data-r="1y">1Y</button><button type="button" data-r="all">All</button></div>
+      </div>
+      <div class="chartwrap"><div class="lwbox" id="ws-chart"></div><canvas class="ovl" id="ws-ovl"></canvas></div>
+      <div class="legend"><span><i style="border-color:#2962FF"></i>EMA 10</span><span><i style="border-color:#F23645"></i>EMA 20</span><span><i style="border-color:#FF9800"></i>EMA 50</span><span><i class="dash" style="border-color:var(--accent)"></i>entry</span><span><i class="dash" style="border-color:var(--down)"></i>stop</span><span><i class="box"></i>base</span><span><i style="border-color:var(--faint);border-top-style:dotted"></i>52-week high</span></div>
+      <p class="hint">Click a bar to set the entry day. Shift-click sets the stop. <kbd>←</kbd> <kbd>→</kbd> move the entry one session.</p>
+    </div>
+    <div class="ws-form" id="ws-form"></div>
+  </div>
+  <div class="ws-foot">
+    <div class="dup" id="dup" hidden></div>
+    <span class="spacer"></span>
+    <button type="button" class="btn" id="ws-skip">Skip this one</button>
+    <button type="button" class="btn" id="ws-cancel">Cancel</button>
+    <button type="button" class="primary alt" id="ws-save2">Save and close</button>
+    <button type="button" class="primary" id="ws-save">Save <kbd>Ctrl Enter</kbd></button>
+  </div>
+</div>
+<div class="toast" id="toast" role="status" aria-live="polite"></div>
+<div class="menu" id="menu" hidden role="menu" aria-label="Move to folder"></div>
+<script>
+(function(){
+'use strict';
+/* ---------- basics ---------- */
+var LW = window.LightweightCharts;
+function $(id){ return document.getElementById(id); }
+function esc(s){ return String(s == null ? "" : s).replace(/[&<>"']/g, function(c){ return {"&":"&amp;", "<":"&lt;", ">":"&gt;", '"':"&quot;", "'":"&#39;"}[c]; }); }
+function cssv(n){ return getComputedStyle(document.documentElement).getPropertyValue(n).trim(); }
+function hexA(hex, a){
+  var h = String(hex || "#888888").replace("#", "").trim();
+  if (h.length === 3) h = h.split("").map(function(x){ return x + x; }).join("");
+  var n = parseInt(h.slice(0, 6), 16); if (isNaN(n)) return hex;
+  return "rgba(" + (n >> 16 & 255) + "," + (n >> 8 & 255) + "," + (n & 255) + "," + a + ")";
+}
+var MON = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+function fd(d){ if (!d) return "—"; var p = d.split("-"); return MON[+p[1] - 1] + " " + (+p[2]) + ", " + p[0]; }
+function fds(d){ if (!d) return "—"; var p = d.split("-"); return MON[+p[1] - 1] + " " + (+p[2]) + " ’" + p[0].slice(2); }
+function fp(v){ if (v == null || isNaN(v)) return "—"; v = +v; return v >= 1000 ? v.toFixed(0) : v >= 100 ? v.toFixed(1) : v.toFixed(2); }
+function pct(v, d){ if (v == null || isNaN(v)) return "—"; d = d == null ? 1 : d; var r = +Math.abs(v).toFixed(d); return (r === 0 ? "" : v > 0 ? "+" : "−") + r.toFixed(d) + "%"; }
+function num(v, d){ return v == null || isNaN(v) ? "—" : (+v).toFixed(d == null ? 1 : d); }
+function median(a){ if (!a.length) return null; var s = a.slice().sort(function(x, y){ return x - y; }), m = s.length >> 1; return s.length % 2 ? s[m] : (s[m - 1] + s[m]) / 2; }
+function codeOf(c){ return c === "India" || c === "IN" ? "IN" : "US"; }
+function ctryName(code){ return code === "IN" ? "India" : "US"; }
+function co(name){ return name ? String(name).replace(/,?\s+(Inc\.?|Corporation|Corp\.?|Group Holding Ltd|Holding Ltd|Holdings,?\s*Inc\.?|Limited|Ltd\.?)$/i, "") : ""; }
+function logo(t, logoid, cls){
+  var ph = '<span class="lg ph ' + (cls || "") + '" aria-hidden="true">' + esc(String(t || "").slice(0, 2)) + '</span>';
+  return '<span class="lgw">' + ph + (logoid ? '<img class="lg ' + (cls || "") + '" src="/api/logo/' + encodeURIComponent(logoid) + '" alt="" onerror="this.remove()">' : "") + '</span>';
+}
+function tvUrl(t, code, tv){ return "https://www.tradingview.com/chart/?symbol=" + encodeURIComponent(tv || (code === "IN" ? "NSE:" + t : t)); }
+function api(url, body){
+  return fetch(url, body ? {method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body)} : undefined)
+    .then(function(r){ return r.json().catch(function(){ return {error:"The hub answered with status " + r.status + "."}; }); });
+}
+function emaArr(a, n){ var k = 2 / (n + 1), o = new Array(a.length), p = null; for (var i = 0; i < a.length; i++){ var v = a[i]; if (v != null) p = p == null ? v : v * k + p * (1 - k); o[i] = p; } return o; }
+function idxFrom(P, d){ if (!d) return P.n - 1; for (var i = 0; i < P.n; i++){ if (P.d[i] >= d) return i; } return P.n - 1; }
+
+/* ---------- prices, loaded once per ticker and kept while the page is open ---------- */
+var PXC = {};
+function getPrices(code, t){
+  var key = code + ":" + t;
+  if (!PXC[key]){
+    PXC[key] = api("/api/setups/prices?country=" + code + "&ticker=" + encodeURIComponent(t)).then(function(p){
+      if (p.error) throw new Error(p.error);
+      var o = {t:t, d:p.dates, o:p.open, h:p.high, l:p.low, c:p.close, v:p.volume || [], n:p.dates.length};
+      o.e10 = emaArr(o.c, 10); o.e20 = emaArr(o.c, 20); o.e50 = emaArr(o.c, 50);
+      return o;
+    });
+    PXC[key].catch(function(){ delete PXC[key]; });
+  }
+  return PXC[key];
+}
+
+/* ---------- the library ---------- */
+var TYPES = [], ENTRIES = [], QUEUE = [], ENV = {}, LOADED = false, SYNC_NOTE = "";
+var EXIT_RULES = ["2 closes below 20 EMA", "3x ATR from 50 EMA"];
+var REASONS = ["Below the base low", "Below the 20 EMA", "Below the 50 EMA", "Fixed % risk", "Prior swing low", "Gap fill"];
+var RULE_KEY = {"2 closes below 20 EMA":"ema20x2"};
+/* Starting criteria per folder until you edit them; editing saves the list on that folder in Notion. */
+var DEFAULT_CRIT = {
+  "VCP": ["Each pullback smaller than the last", "Volume dries up in the last contraction", "Tight closes near the pivot", "Breaks the pivot on volume", "Above a rising 50 EMA"],
+  "Cup Handle": ["Cup 15 to 35% deep", "Handle in the upper half of the cup", "Light volume in the handle", "Breaks the handle high on volume"],
+  "High Flag": ["Big move just before the flag", "Flag pulls back 25% or less", "Volume dries up in the flag", "Tight closes in the flag"],
+  "Launchpad + VCP": ["10/20/50 EMAs bunched together", "Price tight on the averages", "Contractions get smaller", "Breaks out of the launchpad"],
+  "Launchpad + Base": ["10/20/50 EMAs bunched together", "Price tight on the averages", "Base of 5 weeks or more", "Breaks out of the launchpad"],
+  "Base Breakout": ["Base of 5 weeks or more", "Breaks out on 1.5x volume or more", "Above the 50 EMA"],
+  "New High Breakout": ["New 52-week high", "Volume 1.5x average or more", "Sector in the top half"],
+  "MA Bounce": ["Uptrend intact", "Pulls back to the 10/20/50 EMA", "Pullback on light volume", "Bounce day closes strong"],
+  "Basing": ["Tight range", "Volume dries up", "Holds above the 50 EMA"],
+  "New IPO": ["First base since the IPO", "Tight closes", "Breaks the IPO high on volume"],
+  "Pyramid Add": ["First position already working", "Adds at a new pivot", "Volume confirms the add"]
+};
+function typeByName(n){ for (var i = 0; i < TYPES.length; i++) if (TYPES[i].name === n) return TYPES[i]; return null; }
+function critFor(name){ var t = typeByName(name); return t && t.criteria && t.criteria.length ? t.criteria : (DEFAULT_CRIT[name] || ["Tight closes", "Volume dries up", "Breaks out on volume"]); }
+function critIsDefault(name){ var t = typeByName(name); return !(t && t.criteria && t.criteria.length); }
+/* Folders you use most come first, so keys 1 to 9 land on them. Worked out when a form or menu opens, so the order never shifts under you. */
+function folderOrder(){
+  var n = {};
+  ENTRIES.forEach(function(e){ n[e.setup] = (n[e.setup] || 0) + 1; });
+  return TYPES.map(function(t){ return t.name; }).sort(function(a, b){ return (n[b] || 0) - (n[a] || 0) || a.localeCompare(b); });
+}
+function prep(e){
+  e.id = e.pageId; e.code = codeOf(e.country);
+  var D = e.D || {};
+  e.m = D.m || {}; e.out = D.out || {}; e.ex = D.exits || [];
+  e.entryPx = e.entryPrice != null ? e.entryPrice : (D.entryPx != null ? D.entryPx : null);
+  e.checklist = e.checklist || [];
+  return e;
+}
+function byId(id){ for (var i = 0; i < ENTRIES.length; i++) if (ENTRIES[i].id === id) return ENTRIES[i]; return null; }
+function qById(id){ for (var i = 0; i < QUEUE.length; i++) if (QUEUE[i].id === id) return QUEUE[i]; return null; }
+function todoList(){ return QUEUE.filter(function(q){ return q.status === "todo"; }); }
+
+/* What makes an entry less useful to learn from. */
+function issues(e){
+  var out = [], n = (e.entryThesis || "").trim();
+  if (!n) out.push("No note");
+  else if (/\btest\b/i.test(n) || n.length < 20) out.push("Note looks unfinished: “" + n.slice(0, 40) + "”");
+  if (!e.exitRule) out.push("No exit rule");
+  if (e.stop == null) out.push("No stop");
+  return out;
+}
+
+/* ---------- state, toasts, the save indicator ---------- */
+var S = {view:"library", scope:"all", q:"", env:"", sector:"", attn:false, sort:"buy", sel:null, selQ:null, picked:{}, lastPick:null, country:"US", learnSel:false, drange:"entry", exitView:null};
+var TOAST_T = null, TOAST_ACT = null, PENDING = 0, FAILS = 0;
+function toast(msg, act, label){
+  var el = $("toast"); TOAST_ACT = act || null;
+  el.innerHTML = '<span>' + esc(msg) + '</span>' + (act ? '<button type="button" id="toastact">' + esc(label || "Undo") + '</button>' : "");
+  el.classList.add("show"); clearTimeout(TOAST_T);
+  TOAST_T = setTimeout(function(){ el.classList.remove("show"); TOAST_ACT = null; }, act ? 8000 : 4000);
+  if (act) $("toastact").onclick = function(){ var a = TOAST_ACT; TOAST_ACT = null; el.classList.remove("show"); if (a) a(); };
+}
+function syncState(){
+  var el = $("sync");
+  el.className = "sync" + (FAILS ? " bad" : PENDING ? " busy" : "");
+  el.lastChild.textContent = FAILS ? FAILS + (FAILS === 1 ? " change" : " changes") + " not saved" : PENDING ? "Saving to Notion…" : (SYNC_NOTE || "All changes saved");
+}
+/* Every write goes through here: it shows Saving, and on failure the change is undone on the page and you can retry. */
+function send(url, body, what){
+  PENDING++; syncState();
+  return api(url, body).then(function(r){
+    PENDING--; if (r && r.error) throw new Error(r.error);
+    syncState(); return r;
+  }, function(err){ PENDING--; throw err; }).catch(function(err){
+    FAILS++; syncState();
+    toast((what || "Could not save") + ": " + (err.message || err), function(){ FAILS = Math.max(0, FAILS - 1); syncState(); send(url, body, what); }, "Retry");
+    setTimeout(function(){ FAILS = Math.max(0, FAILS - 1); syncState(); }, 15000);
+    throw err;
+  });
+}
+function pickedIds(){ return Object.keys(S.picked).filter(function(k){ return S.picked[k] && byId(k); }); }
+function scoped(){ var c = ctryName(S.country); return ENTRIES.filter(function(e){ return e.country === c; }); }
+
+/* ---------- loading: the saved copy first, then Notion ---------- */
+function applyData(d){
+  TYPES = (d.types || []).slice().sort(function(a, b){ return a.name.localeCompare(b.name); });
+  var local = ENTRIES.filter(function(e){ return e._pending; });
+  var fresh = (d.entries || []).map(prep);
+  var have = {}; fresh.forEach(function(e){ have[e.id] = 1; });
+  ENTRIES = local.filter(function(e){ return !have[e.id]; }).concat(fresh);
+  ENV = d.envNow || {};
+}
+function showErr(msg){
+  var el = $("err"); el.hidden = false;
+  el.innerHTML = '<b>Could not read the Setups Database from Notion.</b> ' + esc(msg) + (LOADED ? " Showing the copy saved on this computer." : " If this is the first run, connect the Trading Terminal integration to the Setups Database page in Notion (••• → Connections).");
+}
+function load(){
+  api("/api/setups/data?cached=1").then(function(d){
+    if (d && !d.error && d.entries){ applyData(d); LOADED = true; SYNC_NOTE = "Saved copy · checking Notion…"; syncState(); renderAll(); hubOpen(); }
+    return api("/api/setups/data");
+  }).then(function(d){
+    if (!d || d.error){ showErr((d && d.error) || "No answer."); SYNC_NOTE = LOADED ? "Saved copy (Notion did not answer)" : ""; syncState(); if (!LOADED) renderAll(); return; }
+    $("err").hidden = true; applyData(d); LOADED = true; SYNC_NOTE = ""; syncState(); renderAll(); hubOpen();
+  }).catch(function(err){ showErr(String(err && err.message || err)); syncState(); });
+  loadQueue();
+}
+function loadQueue(){
+  api("/api/setups/queue?country=" + S.country).then(function(d){
+    var keep = {}; QUEUE.forEach(function(q){ if (q.status !== "todo") keep[q.id] = q.status; });
+    QUEUE = (d.items || []).map(function(q){ q.status = keep[q.id] || "todo"; return q; });
+    renderRail(); if (S.scope === "todo" && S.view === "library"){ renderCenter(); renderDetail(); }
+  });
+}
+
+/* ---------- moving and deleting, saved straight away, with Undo ---------- */
+function moveEntries(ids, folder){
+  var t = typeByName(folder); if (!t) return;
+  var prev = [];
+  ids.forEach(function(id){ var e = byId(id); if (e && e.setup !== folder && !e._pending){ prev.push([e, e.setup, e.setupId]); e.setup = folder; e.setupId = t.id; } });
+  if (!prev.length){ toast("Already in " + folder + "."); return; }
+  renderAll();
+  prev.forEach(function(p){
+    send("/api/setups/update", {pageId:p[0].pageId, fields:{setupId:t.id}}, "Could not move " + p[0].ticker)
+      .catch(function(){ p[0].setup = p[1]; p[0].setupId = p[2]; renderAll(); });
+  });
+  toast((prev.length === 1 ? prev[0][0].ticker : prev.length + " examples") + " moved to " + folder, function(){
+    prev.forEach(function(p){ p[0].setup = p[1]; p[0].setupId = p[2]; send("/api/setups/update", {pageId:p[0].pageId, fields:{setupId:p[2]}}, "Could not move " + p[0].ticker + " back"); });
+    renderAll();
+  });
+}
+function deleteEntries(ids){
+  var gone = [];
+  ids.forEach(function(id){ var i = ENTRIES.findIndex(function(e){ return e.id === id; }); if (i >= 0 && !ENTRIES[i]._pending) gone.push([i, ENTRIES[i]]); });
+  if (!gone.length) return;
+  gone.sort(function(a, b){ return b[0] - a[0]; }).forEach(function(g){ ENTRIES.splice(g[0], 1); delete S.picked[g[1].id]; });
+  if (S.sel && !byId(S.sel)) S.sel = null;
+  renderAll();
+  gone.forEach(function(g){
+    send("/api/setups/delete", {pageId:g[1].pageId}, "Could not delete " + g[1].ticker)
+      .catch(function(){ ENTRIES.splice(Math.min(g[0], ENTRIES.length), 0, g[1]); renderAll(); });
+  });
+  toast((gone.length === 1 ? gone[0][1].ticker : gone.length + " examples") + " deleted. In Notion it is in the trash.", function(){
+    gone.sort(function(a, b){ return a[0] - b[0]; }).forEach(function(g){
+      ENTRIES.splice(Math.min(g[0], ENTRIES.length), 0, g[1]);
+      send("/api/setups/delete", {pageId:g[1].pageId, restore:true}, "Could not restore " + g[1].ticker);
+    });
+    renderAll();
+  });
+}
+
+/* ---------- the standard chart: candles, EMA 10 blue / 20 red / 50 orange, volume with its 30-day average, 52-week high ---------- */
+var CH = {};
+function killChart(key){ var st = CH[key]; if (!st) return; try { if (st.ro) st.ro.disconnect(); st.chart.remove(); } catch (x) {} delete CH[key]; }
+function timeStr(t){
+  if (t == null) return null;
+  if (typeof t === "string") return t;
+  if (typeof t === "object" && t.year) return t.year + "-" + String(t.month).padStart(2, "0") + "-" + String(t.day).padStart(2, "0");
+  if (typeof t === "number") return new Date(t * 1000).toISOString().slice(0, 10);
+  return null;
+}
+function makeChart(key, box, ovl, P, o){
+  killChart(key);
+  if (!box) return null;
+  if (!LW || !P){ box.innerHTML = '<p class="dim" style="padding:16px">The chart library did not load. Check the connection and reload the page.</p>'; return null; }
+  box.innerHTML = "";
+  var up = cssv("--up"), dn = cssv("--down");
+  var chart = LW.createChart(box, {
+    width: box.clientWidth || 600, height: box.clientHeight || 320,
+    layout: {background:{type:"solid", color:cssv("--panel")}, textColor:cssv("--dim"), fontFamily:"IBM Plex Sans, system-ui, sans-serif", fontSize:11},
+    grid: {vertLines:{color:cssv("--grid")}, horzLines:{color:cssv("--grid")}},
+    rightPriceScale: {borderColor:cssv("--line"), scaleMargins:{top:0.08, bottom:0.26}},
+    timeScale: {borderColor:cssv("--line"), rightOffset:4},
+    crosshair: {mode:0},
+    localization: {priceFormatter:function(p){ return fp(p); }}
+  });
+  var cs = chart.addCandlestickSeries({upColor:up, downColor:dn, borderVisible:false, wickUpColor:up, wickDownColor:dn, priceLineVisible:false, lastValueVisible:false});
+  var bars = [];
+  for (var i = 0; i < P.n; i++){ if (P.o[i] != null && P.h[i] != null && P.l[i] != null && P.c[i] != null) bars.push({time:P.d[i], open:P.o[i], high:P.h[i], low:P.l[i], close:P.c[i]}); }
+  cs.setData(bars);
+  if (P.v.some(function(v){ return v; })){
+    var vs = chart.addHistogramSeries({priceScaleId:"vol", priceFormat:{type:"volume"}, priceLineVisible:false, lastValueVisible:false});
+    chart.priceScale("vol").applyOptions({scaleMargins:{top:0.8, bottom:0}});
+    var run = 0, q = [], avg = [];
+    P.v.forEach(function(v, i){ v = v || 0; q.push(v); run += v; if (q.length > 30) run -= q.shift(); avg.push(i >= 4 ? run / q.length : null); });
+    var typ = avg.filter(function(x){ return x != null; }).sort(function(a, b){ return a - b; });
+    var cap = 3 * (typ.length ? typ[Math.floor(typ.length / 2)] : 0) || Infinity;   // one news-day spike must not flatten the rest
+    vs.setData(P.d.map(function(d, i){ return {time:d, value:Math.min(P.v[i] || 0, cap), color:hexA(P.c[i] >= (i ? P.c[i - 1] : P.o[i]) ? up : dn, 0.45)}; }));
+    var al = chart.addLineSeries({priceScaleId:"vol", color:"#f59e0b", lineWidth:1, priceLineVisible:false, lastValueVisible:false, crosshairMarkerVisible:false});
+    al.setData(P.d.map(function(d, i){ return avg[i] == null ? null : {time:d, value:Math.min(avg[i], cap)}; }).filter(Boolean));
+  }
+  [[P.e10, "#2962FF"], [P.e20, "#F23645"], [P.e50, "#FF9800"]].forEach(function(s){
+    var l = chart.addLineSeries({color:s[1], lineWidth:1, priceLineVisible:false, lastValueVisible:false, crosshairMarkerVisible:false});
+    l.setData(P.d.map(function(d, i){ return s[0][i] == null ? null : {time:d, value:s[0][i]}; }).filter(Boolean));
+  });
+  var st = {key:key, chart:chart, cs:cs, P:P, o:o, box:box, ovl:ovl, lines:[], range:o.range || "entry"};
+  CH[key] = st;
+  marks(st);
+  chart.timeScale().subscribeVisibleLogicalRangeChange(function(){ requestAnimationFrame(function(){ drawOvl(st); }); });
+  st.ro = new ResizeObserver(function(){ var w = box.clientWidth, h = box.clientHeight; if (w > 0 && h > 0){ chart.applyOptions({width:w, height:h}); requestAnimationFrame(function(){ drawOvl(st); }); } });
+  st.ro.observe(box);
+  view(st, st.range);
+  requestAnimationFrame(function(){ drawOvl(st); });
+  return st;
+}
+function marks(st){
+  var o = st.o, P = st.P, cs = st.cs;
+  st.lines.forEach(function(l){ try { cs.removePriceLine(l); } catch (x) {} });
+  st.lines = [];
+  var mk = [];
+  if (o.k != null){
+    mk.push({time:P.d[o.k], position:"belowBar", color:cssv("--violet"), shape:"arrowUp", text:"entry"});
+    if (o.entry) st.lines.push(cs.createPriceLine({price:o.entry, color:cssv("--accent"), lineWidth:1, lineStyle:2, axisLabelVisible:true, title:"entry"}));
+    if (o.stop) st.lines.push(cs.createPriceLine({price:o.stop, color:cssv("--down"), lineWidth:1, lineStyle:2, axisLabelVisible:true, title:o.stopTitle || "stop"}));
+    if (o.m && o.m.h52) st.lines.push(cs.createPriceLine({price:o.m.h52, color:cssv("--faint"), lineWidth:1, lineStyle:1, axisLabelVisible:false, title:"52w high"}));
+  }
+  if (o.exit) mk.push({time:P.d[o.exit.i], position:"aboveBar", color:o.exit.color, shape:"arrowDown", text:o.exit.text});
+  mk.sort(function(a, b){ return a.time < b.time ? -1 : a.time > b.time ? 1 : 0; });
+  cs.setMarkers(mk);
+}
+/* Visible window. "entry": the base and what came after; "base": the base up to the entry; 6m and 1y lead into the entry when one is set. */
+function view(st, r){
+  st.range = r;
+  var P = st.P, n = P.n - 1, has = st.o.k != null, k = has ? st.o.k : n, a, b;
+  var bsi = st.o.m && st.o.m.baseStart ? P.d.indexOf(st.o.m.baseStart) : -1, bs = bsi >= 0 ? bsi : k - 60;
+  var anchor = has ? Math.min(n, k + 20) : n;
+  if (r === "entry"){ a = Math.min(bs, k - 40) - 25; b = k + (st.o.after == null ? 70 : st.o.after); }
+  else if (r === "base"){ a = Math.min(bs, k - 40) - 20; b = k + 12; }
+  else if (r === "after"){ a = k - 30; b = n; }
+  else if (r === "6m"){ a = anchor - 126; b = anchor; }
+  else if (r === "1y"){ a = anchor - 252; b = anchor; }
+  else { a = 0; b = n; }
+  a = Math.max(0, a); b = Math.min(n, Math.max(b, a + 5));
+  st.chart.timeScale().setVisibleRange({from:P.d[a], to:P.d[b]});
+}
+/* The base, drawn as a dashed box from its high to its low, over the chart. */
+function drawOvl(st){
+  var c = st.ovl; if (!c || !CH[st.key] || CH[st.key] !== st) return;
+  var box = st.box, W = box.clientWidth, H = box.clientHeight, dpr = window.devicePixelRatio || 1;
+  if (c.width !== Math.round(W * dpr) || c.height !== Math.round(H * dpr)){ c.width = Math.round(W * dpr); c.height = Math.round(H * dpr); c.style.width = W + "px"; c.style.height = H + "px"; }
+  var g = c.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, W, H);
+  var m = st.o.m, P = st.P;
+  if (!m || !m.baseStart || st.o.k == null) return;
+  var ts = st.chart.timeScale();
+  var x1 = ts.timeToCoordinate(m.baseStart), x2 = ts.timeToCoordinate(P.d[st.o.k]);
+  var y1 = st.cs.priceToCoordinate(m.baseHigh), y2 = st.cs.priceToCoordinate(m.baseLow);
+  if (x1 == null || x2 == null || y1 == null || y2 == null) return;
+  var pw = W - st.chart.priceScale("right").width(), ph = H - ts.height(), v = cssv("--violet");
+  g.save(); g.beginPath(); g.rect(0, 0, pw, ph); g.clip();
+  g.fillStyle = hexA(v, 0.08); g.fillRect(x1, y1, x2 - x1, y2 - y1);
+  g.setLineDash([4, 3]); g.strokeStyle = hexA(v, 0.75); g.lineWidth = 1;
+  g.strokeRect(Math.round(x1) + 0.5, Math.round(y1) + 0.5, Math.round(x2 - x1), Math.round(y2 - y1));
+  g.setLineDash([]); g.fillStyle = v; g.font = "600 11px IBM Plex Sans, system-ui, sans-serif";
+  g.fillText("Base " + m.baseDays + " sessions, " + pct(m.depth, 1), Math.max(4, x1 + 4), y1 - 6 < 12 ? y1 + 14 : y1 - 6);
+  g.restore();
+}
+function clearOvl(c){ if (!c) return; var g = c.getContext("2d"); g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, c.width, c.height); }
+
+/* ---------- row thumbnail: 70 sessions before the entry and up to 60 after (from the server), log scale, base shaded ---------- */
+function spark(cv, sp){
+  if (!cv || !sp || !sp.c || !sp.c.length) return;
+  var W = cv.clientWidth || 132, H = cv.clientHeight || 44, dpr = window.devicePixelRatio || 1;
+  cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+  var g = cv.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, W, H);
+  var c = sp.c, k = sp.k, b = c.length - 1, mn = Infinity, mx = -Infinity;
+  c.forEach(function(v){ if (v != null && v > 0){ mn = Math.min(mn, v); mx = Math.max(mx, v); } });
+  if (!isFinite(mn) || mx <= mn) return;
+  var X = function(i){ return 2 + i / Math.max(1, b) * (W - 4); };
+  var Y = function(v){ return H - 3 - (Math.log(v) - Math.log(mn)) / (Math.log(mx) - Math.log(mn)) * (H - 6); };
+  if (sp.bs != null && sp.bs >= 0){ g.fillStyle = hexA(cssv("--violet"), 0.13); g.fillRect(X(sp.bs), 1, Math.max(1, X(k) - X(sp.bs)), H - 2); }
+  function seg(from, to, color){
+    g.beginPath(); var on = false;
+    for (var i = from; i <= to; i++){ var v = c[i]; if (v == null || v <= 0) continue; var x = X(i), y = Y(v); if (!on){ g.moveTo(x, y); on = true; } else g.lineTo(x, y); }
+    g.strokeStyle = color; g.lineWidth = 1.4; g.stroke();
+  }
+  seg(0, k, cssv("--faint"));
+  if (b > k) seg(k, b, c[b] >= c[k] ? cssv("--up") : cssv("--down"));
+  if (c[k] != null){ g.fillStyle = cssv("--violet"); g.beginPath(); g.arc(X(k), Y(c[k]), 3, 0, Math.PI * 2); g.fill(); }
+}
+
+/* The chart as it looks now, base box included, saved as the entry's chart in Notion when no image was pasted. */
+function snapshot(st){
+  try {
+    var shot = st.chart.takeScreenshot(), c = document.createElement("canvas");
+    c.width = shot.width; c.height = shot.height;
+    var g = c.getContext("2d"); g.drawImage(shot, 0, 0);
+    if (st.ovl && st.ovl.width) g.drawImage(st.ovl, 0, 0, c.width, c.height);
+    return c.toDataURL("image/png");
+  } catch (x) { return null; }
+}
+
+/* ---------- Learn: every example's path from its entry day, % from the entry close, log scale ---------- */
+function pathOf(e, from, to){
+  var p = e.D && e.D.path; if (!p) return null;
+  var pts = [];
+  for (var t = from; t <= to; t++){ var r = p[t + 20]; if (r != null && r > 0) pts.push([t, r]); }
+  return pts;
+}
+function drawPaths(cv, list, hot){
+  var box = cv.parentNode, W = box.clientWidth, H = box.clientHeight, dpr = window.devicePixelRatio || 1;
+  if (!W || !H) return;
+  cv.width = Math.round(W * dpr); cv.height = Math.round(H * dpr);
+  var g = cv.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, W, H);
+  var X0 = -20, X1 = 120, L = 50, R = 14, T = 12, B = 24;
+  var paths = list.map(function(e){ return {e:e, pts:pathOf(e, X0, X1)}; }).filter(function(p){ return p.pts && p.pts.length > 1; });
+  var lo = 0.85, hi = 1.3;
+  paths.forEach(function(p){ p.pts.forEach(function(q){ lo = Math.min(lo, q[1]); hi = Math.max(hi, q[1]); }); });
+  lo = Math.max(lo * 0.97, 0.4); hi = hi * 1.03;
+  var ly0 = Math.log(lo), ly1 = Math.log(hi);
+  var X = function(t){ return L + (t - X0) / (X1 - X0) * (W - L - R); };
+  var Y = function(r){ return T + (ly1 - Math.log(Math.max(r, lo))) / (ly1 - ly0) * (H - T - B); };
+  g.font = "11px IBM Plex Mono, ui-monospace, monospace"; g.lineWidth = 1;
+  [-50, -30, -20, -10, 0, 25, 50, 100, 200, 400, 800, 1600].forEach(function(p){
+    var r = 1 + p / 100; if (r < lo || r > hi) return;
+    var y = Math.round(Y(r)) + 0.5;
+    g.strokeStyle = p === 0 ? cssv("--faint") : cssv("--grid"); g.beginPath(); g.moveTo(L, y); g.lineTo(W - R, y); g.stroke();
+    g.fillStyle = cssv("--faint"); g.fillText((p > 0 ? "+" : p < 0 ? "−" : "") + Math.abs(p) + "%", 4, y + 4);
+  });
+  [0, 20, 60, 120].forEach(function(t){
+    var x = Math.round(X(t)) + 0.5;
+    g.strokeStyle = t === 0 ? cssv("--faint") : cssv("--grid"); g.beginPath(); g.moveTo(x, T); g.lineTo(x, H - B); g.stroke();
+    g.fillStyle = cssv("--faint"); var lb = t === 0 ? "entry" : "+" + t + " sessions"; g.fillText(lb, Math.min(x - (t === 0 ? 16 : 26), W - R - g.measureText(lb).width), H - 7);
+  });
+  if (0.92 >= lo){ var ys = Y(0.92); g.setLineDash([4, 4]); g.strokeStyle = hexA(cssv("--down"), 0.75); g.beginPath(); g.moveTo(X(0), ys); g.lineTo(W - R, ys); g.stroke(); g.setLineDash([]); }
+  var v = cssv("--violet");
+  paths.forEach(function(p){
+    var isHot = hot && p.e.id === hot;
+    g.beginPath(); p.pts.forEach(function(q, j){ var x = X(q[0]), y = Y(q[1]); if (!j) g.moveTo(x, y); else g.lineTo(x, y); });
+    g.strokeStyle = isHot ? v : hexA(v, hot ? 0.16 : 0.45); g.lineWidth = isHot ? 2.4 : 1.2; g.stroke();
+  });
+  var med = [];
+  for (var t = X0; t <= X1; t++){
+    var vals = [];
+    paths.forEach(function(p){ for (var j = 0; j < p.pts.length; j++){ if (p.pts[j][0] === t){ vals.push(Math.log(p.pts[j][1])); break; } } });
+    if (vals.length >= 2) med.push([t, Math.exp(median(vals))]);
+  }
+  if (med.length > 1){ g.beginPath(); med.forEach(function(q, j){ var x = X(q[0]), y = Y(q[1]); if (!j) g.moveTo(x, y); else g.lineTo(x, y); }); g.strokeStyle = cssv("--ink"); g.lineWidth = 2.4; g.stroke(); }
+  if (hot){
+    var hp = paths.filter(function(p){ return p.e.id === hot; })[0];
+    if (hp){
+      var lp = hp.pts[hp.pts.length - 1], lbl = hp.e.ticker + "  " + pct((lp[1] - 1) * 100, 0) + " after " + lp[0] + " sessions";
+      g.font = "600 12px IBM Plex Sans, system-ui, sans-serif"; g.fillStyle = v;
+      g.fillText(lbl, Math.max(L + 4, Math.min(X(lp[0]) + 6, W - R - g.measureText(lbl).width)), Math.max(T + 12, Y(lp[1]) - 8));
+    }
+  }
+  cv._map = {paths:paths, X:X, Y:Y, L:L, R:R, X0:X0, X1:X1, W:W};
+}
+function nearestPath(cv, mx, my){
+  var M = cv._map; if (!M) return null;
+  var t = Math.round(M.X0 + (mx - M.L) / (M.W - M.L - M.R) * (M.X1 - M.X0)), best = null, bd = 24;
+  M.paths.forEach(function(p){ p.pts.forEach(function(q){ if (Math.abs(q[0] - t) <= 1){ var d = Math.abs(M.Y(q[1]) - my); if (d < bd){ bd = d; best = p.e.id; } } }); });
+  return best;
+}
+
+/* ---------- small pieces ---------- */
+function tile(k, v, dip){ var cls = v == null ? "dim" : dip ? (v < 0 ? "down" : "") : (v >= 0 ? "up" : "down"); return '<div class="tile"><div class="k">' + esc(k) + '</div><div class="v ' + cls + '">' + (v == null ? "—" : pct(v, 0)) + '</div></div>'; }
+function tileTxt(k, v, s){ return '<div class="tile"><div class="k">' + esc(k) + '</div><div class="v">' + esc(v) + '</div>' + (s ? '<div class="s">' + esc(s) + '</div>' : "") + '</div>'; }
+function mTiles(m){
+  m = m || {};
+  return tileTxt("Base", m.baseDays != null ? m.baseDays + " sessions" : "—", m.depth != null ? pct(m.depth, 1) + " deep" : "")
+    + tileTxt("Breakout volume", m.volX != null ? num(m.volX, 1) + "×" : "—", "vs 50-day average")
+    + tileTxt("Volume dry-up", m.dry != null ? num(m.dry, 2) + "×" : "—", "last 10 vs 50 days")
+    + tileTxt("Tightness", m.tight != null ? num(m.tight, 1) + "%" : "—", "range of last 10 days")
+    + tileTxt("From 52w high", m.off52 != null ? pct(-m.off52, 1) : "—", m.short52 ? "under a year of data" : "")
+    + tileTxt("Prior run", m.run != null ? pct(m.run, 0) : "—", "into the base");
+}
+function rankTxt(r, d){ if (r == null) return "—"; return r + (d != null && d !== 0 ? " (" + (d > 0 ? "up " : "down ") + Math.abs(d) + " in a week)" : ""); }
+function envCls(l){ return l === "bullish" ? "bull" : l === "bearish" ? "bear" : "chop"; }
+function ctxTags(x){
+  if (!x || (x.marketEnvScore == null && x.sectorRank == null)) return '<span class="tag">Read from the hub’s history when the entry is saved</span>';
+  return '<button type="button" class="tag ' + envCls(x.marketEnvLabel) + '" data-env="' + esc(x.marketEnvLabel || "") + '" title="Show every example that started in this market">Market ' + esc(x.marketEnvScore || "—") + " " + esc(x.marketEnvLabel || "") + '</button>'
+    + '<span class="tag">Sector rank ' + rankTxt(x.sectorRank, x.sectorRankDelta1w) + '</span>'
+    + '<span class="tag">Industry rank ' + rankTxt(x.industryRank, x.industryRankDelta1w) + '</span>';
+}
+function legendHTML(withEntry){
+  return '<div class="legend"><span><i style="border-color:#2962FF"></i>EMA 10</span><span><i style="border-color:#F23645"></i>EMA 20</span><span><i style="border-color:#FF9800"></i>EMA 50</span>'
+    + (withEntry ? '<span><i class="dash" style="border-color:var(--accent)"></i>entry</span><span><i class="dash" style="border-color:var(--down)"></i>stop</span><span><i class="box"></i>base</span>' : "")
+    + '<span><i style="border-color:var(--faint);border-top-style:dotted"></i>52-week high</span></div>';
+}
+function exitKeyFor(e){ return S.exitView && S.exitView.id === e.id ? S.exitView.k : (RULE_KEY[e.exitRule] || null); }
+function exitMark(x){ return x ? {date:x.date, color:x.color, text:x.kind === "stop" ? "stopped" : x.kind === "hold" ? "open" : "exit"} : null; }
+
+/* ---------- top, rail ---------- */
+function renderAll(){ renderTop(); renderRail(); if (S.view === "learn") renderLearn(); else { renderCenter(); renderDetail(); } }
+function renderTop(){
+  var env = ENV[S.country];
+  $("envnow").innerHTML = env && env.score ? (S.country === "US" ? "US" : "India") + ' market today <b class="' + (env.label === "bullish" ? "up" : env.label === "bearish" ? "down" : "") + '">' + esc(env.score) + " " + esc(env.label || "") + "</b>" : "";
+  Array.prototype.forEach.call(document.querySelectorAll(".views button"), function(b){ b.classList.toggle("on", b.dataset.view === S.view); });
+  Array.prototype.forEach.call(document.querySelectorAll("#ctry button"), function(b){ b.classList.toggle("on", b.dataset.c === S.country); });
+  $("shell").classList.toggle("learn", S.view === "learn");
+}
+function renderRail(){
+  var list = scoped(), todo = todoList().length;
+  var h = '<button type="button" class="ritem todo' + (S.scope === "todo" && S.view === "library" ? " on" : "") + '" data-scope="todo"><span class="nm">To log</span><span class="cnt">' + todo + '</span><span class="sub">Setup Finder keeps and names you add</span></button>';
+  h += '<div class="rlbl">Folders<span>drag examples here</span></div>';
+  h += '<button type="button" class="ritem' + (S.scope === "all" || (S.scope === "todo" && S.view === "learn") ? " on" : "") + '" data-scope="all"><span class="nm">All setups</span><span class="cnt">' + list.length + '</span></button>';
+  TYPES.forEach(function(t){
+    var n = list.filter(function(e){ return e.setup === t.name; }).length;
+    h += '<button type="button" class="ritem' + (S.scope === t.name ? " on" : "") + (n ? "" : " zero") + '" data-scope="' + esc(t.name) + '" data-drop="' + esc(t.name) + '" title="' + n + ' of 50 examples before this folder’s live read turns on"><span class="nm">' + esc(t.name) + '</span><span class="cnt">' + n + '</span><span class="prog"><b style="width:' + Math.min(100, n / 50 * 100) + '%"></b></span></button>';
+  });
+  h += '<div class="newf" id="newf"><button type="button" class="ritem" id="newf-btn"><span class="nm dim">+ New folder</span></button></div>';
+  h += '<p class="rnote">The bar under each folder fills toward 50 examples, when its live read turns on.</p>';
+  $("rail").innerHTML = h;
+}
+
+/* ---------- library ---------- */
+function filtered(){
+  var q = S.q.trim().toLowerCase();
+  var rows = scoped().filter(function(e){
+    if (S.scope !== "all" && S.scope !== "todo" && e.setup !== S.scope) return false;
+    if (S.env && e.marketEnvLabel !== S.env) return false;
+    if (S.sector && e.sector !== S.sector) return false;
+    if (S.attn && !issues(e).length) return false;
+    if (q){ var hay = (e.ticker + " " + (e.name || "") + " " + (e.entryThesis || "") + " " + e.setup + " " + (e.sector || "") + " " + (e.industry || "")).toLowerCase(); if (hay.indexOf(q) < 0) return false; }
+    return true;
+  });
+  var f = {
+    buy: function(a, b){ return (b.buyDate || "").localeCompare(a.buyDate || ""); },
+    logged: function(a, b){ return (b.logged || "").localeCompare(a.logged || ""); },
+    g60: function(a, b){ return (b.out.g60 == null ? -1e9 : b.out.g60) - (a.out.g60 == null ? -1e9 : a.out.g60); },
+    base: function(a, b){ return (a.m.baseDays == null ? 1e9 : a.m.baseDays) - (b.m.baseDays == null ? 1e9 : b.m.baseDays); },
+    ticker: function(a, b){ return a.ticker.localeCompare(b.ticker); }
+  }[S.sort];
+  return rows.sort(f);
+}
+function folderSelect(){
+  return '<label class="sr" for="mfold">Folder</label><select class="mfold" id="mfold"><option value="todo"' + (S.scope === "todo" ? " selected" : "") + '>To log (' + todoList().length + ')</option><option value="all"' + (S.scope === "all" ? " selected" : "") + '>All setups</option>'
+    + TYPES.map(function(t){ return '<option' + (S.scope === t.name ? " selected" : "") + '>' + esc(t.name) + '</option>'; }).join("") + '</select>';
+}
+function renderCenter(){
+  if (!LOADED){ $("center").innerHTML = '<div class="loading">Loading your setups…</div>'; return; }
+  if (S.scope === "todo") return renderQueue();
+  var rows = filtered(), picked = pickedIds();
+  if (S.sel && !rows.some(function(e){ return e.id === S.sel; })) S.sel = null;
+  if (!S.sel && rows.length) S.sel = rows[0].id;
+  var attnN = scoped().filter(function(e){ return issues(e).length; }).length;
+  var sectors = Array.from(new Set(scoped().map(function(e){ return e.sector; }).filter(Boolean))).sort();
+  var h = '<div class="tools">' + folderSelect()
+    + '<div class="seg" id="envf" role="group" aria-label="Market at entry">' + [["", "Any market"], ["bullish", "Bullish"], ["choppy", "Choppy"], ["bearish", "Bearish"]].map(function(o){ return '<button type="button" data-envf="' + o[0] + '" class="' + (S.env === o[0] ? "on" : "") + '">' + o[1] + '</button>'; }).join("") + '</div>'
+    + (sectors.length > 1 ? '<label class="sr" for="secf">Sector</label><select id="secf"><option value="">Any sector</option>' + sectors.map(function(x){ return '<option' + (S.sector === x ? " selected" : "") + '>' + esc(x) + '</option>'; }).join("") + '</select>' : "")
+    + '<button type="button" class="chipbtn' + (S.attn ? " on" : "") + '" id="attnf" aria-pressed="' + S.attn + '">Needs fixing <b>' + attnN + '</b></button>'
+    + '<span class="spacer"></span><label class="dim" for="sortf" style="font-size:12px">Sort</label><select id="sortf">'
+    + [["buy", "Entry date, newest"], ["logged", "Recently logged"], ["g60", "Best 60-session gain"], ["base", "Shortest base"], ["ticker", "Ticker"]].map(function(o){ return '<option value="' + o[0] + '"' + (S.sort === o[0] ? " selected" : "") + '>' + o[1] + '</option>'; }).join("")
+    + '</select></div>';
+  if (picked.length) h += '<div class="bulk"><b>' + picked.length + ' selected</b><button type="button" class="btn" data-act="bulk-move">Move to… <kbd>M</kbd></button><button type="button" class="btn" data-act="bulk-learn">Compare in Learn</button><button type="button" class="btn" data-act="bulk-del">Delete</button><span class="spacer"></span><button type="button" class="btn" data-act="bulk-clear">Clear</button></div>';
+  h += '<div class="count">' + rows.length + (rows.length === 1 ? " example" : " examples") + (S.scope !== "all" ? " in " + esc(S.scope) : "") + (S.q ? " matching “" + esc(S.q) + "”" : "") + (rows.length > 1 ? ". Tick boxes to work on several; Shift-click ticks a range." : ".") + '</div>';
+  if (!rows.length) h += '<div class="empty">' + (scoped().length ? "Nothing matches these filters." : "No " + (S.country === "IN" ? "India " : "") + "examples logged yet. Press N to log one, or open To log.") + '</div>';
+  else h += '<div class="rows" id="rows">' + rows.map(rowHTML).join("") + '</div>';
+  $("center").innerHTML = h;
+  rows.forEach(function(e){ spark($("cv-" + e.id), e.D && e.D.spark); });
+}
+function rowHTML(e){
+  var iss = issues(e), sel = S.sel === e.id, pk = !!S.picked[e.id];
+  var after = e.out.g60 != null ? '<span>Best in 60 sessions <b class="' + (e.out.g60 >= 0 ? "up" : "down") + '">' + pct(e.out.g60, 0) + '</b></span>'
+    : e.out.g20 != null ? '<span>Best in 20 sessions <b>' + pct(e.out.g20, 0) + '</b></span>' : '<span>' + (e.out.after != null ? e.out.after + " sessions so far" : "") + '</span>';
+  var flag = e._failed ? '<span class="tag fail">Not saved</span>' : e._pending ? '<span class="tag save">Saving…</span>'
+    : iss.length ? '<span class="tag warn" title="' + esc(iss.join(" · ")) + '">' + iss.length + ' to fix</span>' : '<span class="tag ok">Complete</span>';
+  return '<div class="erow' + (sel ? " sel" : "") + (pk ? " picked" : "") + '" data-id="' + esc(e.id) + '" draggable="true" tabindex="0" role="button" aria-pressed="' + sel + '">'
+    + '<input type="checkbox" data-pick="' + esc(e.id) + '"' + (pk ? " checked" : "") + ' aria-label="Select ' + esc(e.ticker) + '">'
+    + '<div class="who">' + logo(e.ticker, e.logoid) + '<div><b>' + esc(e.ticker) + '</b><small>' + esc(co(e.name) || e.industry || e.sector || "") + '</small></div></div>'
+    + '<div class="fc"><span class="fold">' + esc(e.setup || "No folder") + '</span><small>' + fds(e.buyDate) + '</small></div>'
+    + '<canvas class="spark" id="cv-' + esc(e.id) + '" aria-hidden="true"></canvas>'
+    + '<div class="facts"><span>Base <b>' + (e.m.baseDays != null ? e.m.baseDays + "d" : "—") + '</b> · <b>' + pct(e.m.depth, 0) + '</b></span>' + after + '</div>'
+    + '<div class="flags">' + flag + '</div></div>';
+}
+
+/* ---------- To log ---------- */
+function renderQueue(){
+  var items = QUEUE, todo = todoList();
+  if (S.selQ && !qById(S.selQ)) S.selQ = null;
+  if (!S.selQ && items.length) S.selQ = (todo[0] || items[0]).id;
+  var h = '<div class="tools">' + folderSelect() + '</div><div class="qhead"><div><h2>To log · ' + todo.length + '</h2><p>Names you mark Keep in the Setup Finder, names you add here, and your TradingView list “Setups to log” when Claude syncs it. Logging one marks it saved in the Setup Finder too.</p></div><span class="spacer"></span>'
+    + '<div class="addq"><label class="sr" for="addq">Add a ticker to log</label><input id="addq" placeholder="Add a ticker, Enter" autocomplete="off"></div>'
+    + (todo.length ? '<button type="button" class="primary" data-act="q-start">Log them in a row</button>' : '') + '</div>';
+  if (!items.length) h += '<div class="empty">Nothing waiting. Mark rows Keep in the Setup Finder, or add a ticker above.</div>';
+  h += '<div class="rows">' + items.map(function(q){
+    var D = q.D || {}, src = q.src === "finder" ? "Setup Finder" : q.src === "tv" ? "TradingView list · " + esc(q.list || "Setups to log") : "Added here";
+    var facts = q.entry
+      ? '<span>Entry <b>' + fds(D.date || q.entry) + '</b> at <b>' + fp(D.entryPx) + '</b></span><span>Base <b>' + (D.m && D.m.baseDays != null ? D.m.baseDays + "d" : "—") + '</b> · <b>' + pct(D.m && D.m.depth, 0) + '</b>' + (D.out && D.out.g120 != null ? ' · best in 120 <b class="up">' + pct(D.out.g120, 0) + '</b>' : "") + '</span>'
+      : '<span>' + (q.folder ? 'Folder <b>' + esc(q.folder) + '</b>' : "No entry day yet") + '</span><span>You pick the entry on the chart</span>';
+    var state = q.status === "done" ? '<span class="tag ok">Logged</span>' : q.status === "skip" ? '<span class="tag">Skipped</span>' : '<button type="button" class="btn" data-q="' + esc(q.id) + '">Log</button>';
+    return '<div class="erow qrow' + (q.status !== "todo" ? " done" : "") + (S.selQ === q.id ? " sel" : "") + '" data-qid="' + esc(q.id) + '" tabindex="0" role="button">'
+      + '<div class="who">' + logo(q.t, q.logoid) + '<div><b>' + esc(q.t) + '</b><small>' + esc(co(q.name) || q.industry || q.sector || "") + '</small><span class="src">' + src + '</span></div></div>'
+      + '<div class="facts">' + facts + '</div><canvas class="spark" id="cq-' + esc(q.id).replace(/[^A-Za-z0-9_-]/g, "_") + '" aria-hidden="true"></canvas><div class="flags">' + state + '</div></div>';
+  }).join("") + '</div>';
+  $("center").innerHTML = h;
+  items.forEach(function(q){ spark($("cq-" + String(q.id).replace(/[^A-Za-z0-9_-]/g, "_")), q.D && q.D.spark); });
+}
+
+/* ---------- detail ---------- */
+function chartInto(key, box, ovl, code, t, opts, still){
+  box.innerHTML = '<div class="loading">Loading the chart…</div>';
+  getPrices(code, t).then(function(P){
+    if (!still()) return;
+    var o = opts(P); if (!o) return;
+    makeChart(key, box, ovl, P, o);
+  }).catch(function(err){ if (still()) box.innerHTML = '<div class="loading">' + esc(err.message || "No price history for this ticker.") + '</div>'; });
+}
+function renderDetail(){
+  var el = $("detail");
+  if (S.scope === "todo") return renderQDetail();
+  var e = S.sel && byId(S.sel);
+  if (!e){ killChart("d"); el.innerHTML = LOADED ? '<div class="empty" style="margin-top:20px">Pick an example on the left, or press <kbd>N</kbd> to log one.</div>' : ""; return; }
+  var iss = issues(e), ek = exitKeyFor(e), xe = e.ex.filter(function(x){ return x.k === ek; })[0];
+  var h = '<div class="dbar" style="margin-top:0"><button type="button" class="btn dclose" data-act="dclose">Close</button></div>'
+    + '<div class="dhead">' + logo(e.ticker, e.logoid, "big") + '<div><h2>' + esc(e.ticker) + '</h2><div class="dsub" id="d-sub">' + esc(co(e.name)) + (e.name ? " · " : "") + esc(e.sector || "") + (e.industry ? " › " + esc(e.industry) : "") + '</div></div></div>'
+    + '<div class="dbar"><label class="sr" for="d-folder">Folder</label><select class="fsel" id="d-folder"' + (e._pending ? " disabled" : "") + '>' + TYPES.map(function(t){ return '<option' + (t.name === e.setup ? " selected" : "") + '>' + esc(t.name) + '</option>'; }).join("") + '</select>'
+    + '<span class="mono dim" style="font-size:12.5px">Entry ' + fd(e.buyDate) + '</span><span class="spacer"></span>'
+    + (e._failed ? '<button type="button" class="btn" data-act="retry">Retry saving</button>' : "")
+    + '<button type="button" class="btn" data-act="edit"' + (e._pending ? " disabled" : "") + '>Edit <kbd>E</kbd></button><button type="button" class="btn" data-act="move"' + (e._pending ? " disabled" : "") + '>Move <kbd>M</kbd></button><button type="button" class="btn danger" data-act="del"' + (e._pending ? " disabled" : "") + '>Delete</button></div>'
+    + '<div class="ctl"><div class="tf" id="d-tf">' + [["entry", "Around entry"], ["after", "Since entry"], ["all", "All"]].map(function(r){ return '<button type="button" data-r="' + r[0] + '"' + (S.drange === r[0] ? ' class="on"' : "") + '>' + r[1] + '</button>'; }).join("") + '</div><span class="spacer"></span>'
+    + '<a class="ext" href="' + tvUrl(e.ticker, e.code) + '" target="_blank" rel="noopener">Open in TradingView ↗</a>' + (e.notionUrl ? '<a class="ext" href="' + esc(e.notionUrl) + '" target="_blank" rel="noopener">Notion ↗</a>' : "") + '</div>'
+    + '<div class="chartwrap"><div class="lwbox" id="d-chart"></div><canvas class="ovl" id="d-ovl"></canvas></div>' + legendHTML(true)
+    + '<div class="sec">What happened next<span class="hint">from prices, after the entry close of ' + fp(e.entryPx) + '</span></div>'
+    + '<div class="tiles">' + tile("Best in 20 sessions", e.out.g20) + tile("Best in 60", e.out.g60) + tile("Best in 120", e.out.g120) + tile("Worst dip, first 20", e.out.dip, true) + tileTxt("To +20%", e.out.to20 != null ? e.out.to20 + " sessions" : "not yet") + '</div>'
+    + '<div class="sec">Measured at entry<span class="hint">the same rules as the logging form</span></div><div class="tiles">' + mTiles(e.m) + '</div>'
+    + '<div class="sec">Market and ranks at entry<span class="hint">from the hub’s history</span></div><div class="checks">' + ctxTags(e) + '</div>'
+    + '<div class="sec">Plan</div><div class="tiles">' + tileTxt("Entry", fp(e.entryPx)) + tileTxt("Stop", e.stop != null ? fp(e.stop) : "not set", e.stop != null ? pct((e.stop / e.entryPx - 1) * 100, 1) + (e.stopReason ? " · " + e.stopReason : "") : "none saved; 8% assumed") + tileTxt("Exit rule", e.exitRule || "not set") + '</div>'
+    + (e.checklist.length ? '<div class="sec">Checklist</div><div class="checks">' + e.checklist.map(function(c){ return '<span class="tag v">✓ ' + esc(c) + '</span>'; }).join("") + '</div>' : "")
+    + '<div class="sec">Note</div>' + (e.entryThesis ? '<div class="note">' + esc(e.entryThesis) + '</div>' : '<div class="note dim">No note yet. Press E to add one.</div>')
+    + (e.chartCount ? '<div class="sec">Chart in Notion</div><div id="d-shots" class="dim" style="font-size:12.5px">Loading…</div>' : "")
+    + (iss.length ? '<div class="sec">Needs fixing</div><div class="checks">' + iss.map(function(i){ return '<span class="tag warn">' + esc(i) + '</span>'; }).join("") + '</div>' : "")
+    + (e.ex.length ? '<div class="sec">Exit rules on this example<span class="hint">stop ' + (e.stop != null ? "as set" : "assumed 8% below the entry") + '; click a row to see that exit</span></div>'
+      + '<div class="tw"><table class="bt"><thead><tr><th>Rule</th><th>Exit</th><th class="r">Result</th><th class="r">Sessions</th><th>Ended by</th></tr></thead><tbody>'
+      + e.ex.map(function(x){ return '<tr data-ex="' + x.k + '"' + (ek === x.k ? ' class="on"' : "") + '><td><span class="dot" style="background:' + x.color + '"></span>' + esc(x.label) + (x.label === e.exitRule ? ' <span class="tag v">yours</span>' : "") + '</td><td class="mono">' + fds(x.date) + '</td><td class="r mono ' + (x.pct >= 0 ? "up" : "down") + '">' + pct(x.pct, 1) + '</td><td class="r mono">' + x.days + '</td><td>' + (x.kind === "stop" ? "stop" : x.kind === "hold" ? "still open" : "rule") + '</td></tr>'; }).join("")
+      + '</tbody></table></div>' : "");
+  el.innerHTML = h;
+  var id = e.id;
+  chartInto("d", $("d-chart"), $("d-ovl"), e.code, e.ticker, function(P){
+    var k = P.d.indexOf(e.D ? e.D.date : e.buyDate); if (k < 0) k = idxFrom(P, e.buyDate);
+    var xm = exitMark(xe), xi = xm ? P.d.indexOf(xm.date) : -1;
+    return {k:k, entry:e.entryPx, stop:e.stop != null ? e.stop : (e.D && e.D.stopUsed), stopTitle:e.stop != null ? "stop" : "8% stop", m:e.m, after:80, range:S.drange,
+      exit:xi >= 0 ? {i:xi, color:xm.color, text:xm.text} : null};
+  }, function(){ return S.sel === id && S.view === "library" && S.scope !== "todo"; });
+  if (!e.name && !e._nameAsked && e.ticker){
+    e._nameAsked = true;
+    api("/api/setups/info?country=" + e.code + "&ticker=" + encodeURIComponent(e.ticker)).then(function(i){
+      if (i && i.name){ e.name = i.name; var s = $("d-sub"); if (s && S.sel === id) s.textContent = co(i.name) + " · " + (e.sector || "") + (e.industry ? " › " + e.industry : ""); }
+    });
+  }
+  if (e.chartCount && e.pageId && !e._pending){
+    api("/api/setups/chart?pageId=" + encodeURIComponent(e.pageId)).then(function(files){
+      var box = $("d-shots"); if (!box || S.sel !== id) return;
+      box.innerHTML = (files && files.length) ? files.map(function(f){ return '<a href="' + esc(f.url) + '" target="_blank" rel="noopener"><img src="' + esc(f.url) + '" alt="Chart for ' + esc(e.ticker) + '" style="max-width:100%;border-radius:8px;border:1px solid var(--line)"></a>'; }).join("") : "No image found.";
+    });
+  }
+}
+function renderQDetail(){
+  var el = $("detail"), q = S.selQ && qById(S.selQ);
+  if (!q){ killChart("d"); el.innerHTML = '<div class="empty" style="margin-top:20px">Nothing waiting to log.</div>'; return; }
+  var D = q.D || {}, code = S.country;
+  var h = '<div class="dbar" style="margin-top:0"><button type="button" class="btn dclose" data-act="dclose">Close</button></div>'
+    + '<div class="dhead">' + logo(q.t, q.logoid, "big") + '<div><h2>' + esc(q.t) + '</h2><div class="dsub">' + esc(co(q.name)) + (q.name ? " · " : "") + esc(q.sector || "") + (q.industry ? " › " + esc(q.industry) : "") + '</div></div></div>'
+    + '<div class="dbar"><span class="tag v">' + (q.src === "finder" ? "Setup Finder" : q.src === "tv" ? "TradingView list" : "Added here") + '</span><span class="spacer"></span><a class="ext" href="' + tvUrl(q.t, code) + '" target="_blank" rel="noopener">Open in TradingView ↗</a></div>'
+    + '<div class="chartwrap"><div class="lwbox" id="d-chart"></div><canvas class="ovl" id="d-ovl"></canvas></div>' + legendHTML(!!q.entry)
+    + (q.entry
+      ? '<div class="sec">At the suggested entry</div><div class="tiles">' + tileTxt("Entry", fds(D.date || q.entry), "close " + fp(D.entryPx)) + tileTxt("Best in 120", pct(D.out && D.out.g120, 0), "sessions after") + tileTxt("Base", (D.m && D.m.baseDays != null ? D.m.baseDays + " sessions" : "—"), D.m && D.m.depth != null ? pct(D.m.depth, 1) + " deep" : "") + tileTxt("Breakout volume", D.m && D.m.volX != null ? num(D.m.volX, 1) + "×" : "—", "vs 50-day average") + '</div>'
+      : '<div class="sec">No entry day yet</div><p class="dim" style="margin:0">' + (q.folder ? "Suggested folder: <b>" + esc(q.folder) + "</b>. " : "") + 'Click the entry bar on the chart when you log it.</p>')
+    + (q.note ? '<div class="sec">Your note in the Setup Finder</div><div class="note">' + esc(q.note) + '</div>' : "")
+    + '<div class="dbar" style="margin-top:14px">' + (q.status === "todo" ? '<button type="button" class="primary" data-q="' + esc(q.id) + '">Log it</button><button type="button" class="btn" data-act="q-skip">Skip</button>' : '<span class="tag">' + (q.status === "done" ? "Logged" : "Skipped") + '</span>') + '</div>';
+  el.innerHTML = h;
+  var id = q.id;
+  chartInto("d", $("d-chart"), $("d-ovl"), code, q.t, function(P){
+    var k = q.entry ? P.d.indexOf(D.date || q.entry) : -1;
+    return {k:k >= 0 ? k : null, entry:k >= 0 ? P.c[k] : null, stop:null, m:k >= 0 ? D.m : null, after:140, range:k >= 0 ? "entry" : "1y"};
+  }, function(){ return S.selQ === id && S.scope === "todo" && S.view === "library"; });
+}
+
+/* ---------- Learn ---------- */
+function learnList(){
+  var all = scoped().filter(function(e){ return !e._pending && e.D; });
+  if (S.learnSel){ var ids = pickedIds(); return all.filter(function(e){ return ids.indexOf(e.id) >= 0; }); }
+  if (S.scope !== "all" && S.scope !== "todo") return all.filter(function(e){ return e.setup === S.scope; });
+  return all;
+}
+function stripHTML(label, list, fn, fmt){
+  var pts = list.map(function(e){ return {e:e, v:fn(e)}; }).filter(function(p){ return p.v != null && isFinite(p.v); });
+  if (!pts.length) return '<div class="strip"><div class="lab">' + esc(label) + '<span>no data</span></div></div>';
+  var vs = pts.map(function(p){ return p.v; }).sort(function(a, b){ return a - b; }), lo = vs[0], hi = vs[vs.length - 1];
+  if (hi === lo){ lo -= 1; hi += 1; }
+  var P = function(v){ return (v - lo) / (hi - lo) * 100; }, med = median(vs);
+  return '<div class="strip"><div class="lab">' + esc(label) + '<span>middle ' + fmt(med) + '</span></div><div class="track"><span class="med" style="left:' + P(med) + '%"></span>'
+    + pts.map(function(p){ return '<button type="button" class="pt" style="left:' + P(p.v) + '%" data-open="' + esc(p.e.id) + '" title="' + esc(p.e.ticker + ": " + fmt(p.v)) + '" aria-label="' + esc(p.e.ticker + " " + fmt(p.v)) + '"></button>'; }).join("")
+    + '</div><div class="ends"><span>' + fmt(vs[0]) + '</span><span>' + fmt(vs[vs.length - 1]) + '</span></div></div>';
+}
+function envBars(list, env){
+  var tot = list.length || 1;
+  var h = ["bullish", "choppy", "bearish"].map(function(l){
+    var n = list.filter(function(e){ return e.marketEnvLabel === l; }).length;
+    return '<button type="button" class="brow" data-env="' + l + '"><span>' + l.charAt(0).toUpperCase() + l.slice(1) + (env.label === l ? ' <span class="tag v">like today</span>' : "") + '</span><span class="bt2"><b style="width:' + (n / tot * 100) + '%"></b></span><span class="mono">' + n + '</span></button>';
+  }).join("");
+  var none = list.filter(function(e){ return !e.marketEnvLabel; }).length;
+  return h + (none ? '<p class="q" style="margin:6px 0 0">' + none + (none === 1 ? " has" : " have") + ' no market reading.</p>' : "");
+}
+function attnCard(list){
+  var bad = list.filter(function(e){ return issues(e).length; });
+  return '<div class="card"><h3>Needs fixing · ' + bad.length + '</h3><p class="q">Gaps make the numbers on this page less trustworthy.</p><div class="attn">'
+    + (bad.length ? bad.map(function(e){ return '<div class="arow"><span class="t">' + esc(e.ticker) + '</span><span class="dim" style="flex:1;font-size:12.5px">' + esc(issues(e).join(" · ")) + '</span><button type="button" class="btn" data-fix="' + esc(e.id) + '">Fix</button></div>'; }).join("") : '<p class="dim" style="margin:0">Nothing to fix.</p>')
+    + '</div></div>';
+}
+function envFav(score){ var m = String(score || "").match(/(\d+)/); return m ? +m[1] : null; }
+function liveRead(list, env){
+  if (list.length < 50 || env.favourable == null) return "";
+  var at = list.filter(function(e){ var f = envFav(e.marketEnvScore); return f != null && f >= env.favourable; }).length, p = Math.round(at / list.length * 100);
+  var cls = p >= 50 ? "bull" : p >= 40 ? "chop" : "bear", lbl = p >= 50 ? "Probable to work now" : p >= 40 ? "Marginal" : "Improbable right now";
+  return '<p class="verdict"><span class="verdict-pill tag ' + cls + '">' + lbl + '</span><b>' + p + '%</b> of these ' + list.length + ' started with the market environment at today’s ' + esc(env.score) + ' or better.</p>';
+}
+function renderLearn(){
+  killChart("d");
+  var list = learnList(), n = list.length, env = ENV[S.country] || {};
+  var title = S.learnSel ? "Comparing " + n + " selected" : (S.scope === "all" || S.scope === "todo" ? "All setups" : S.scope);
+  var done = list.filter(function(e){ return e.out.after >= 20; });
+  var same = list.filter(function(e){ return env.label && e.marketEnvLabel === env.label; }).length;
+  var verdict = !n ? "No examples here yet. Log a few and this page fills in."
+    : "<b>" + n + (n === 1 ? " example" : " examples") + ".</b> " + (n < 10 ? "Read what follows as notes, not patterns: they start to mean something around 10 examples, and a folder’s live read turns on at 50." : n < 50 ? "Enough to see tendencies; the live read turns on at 50." : "")
+      + (env.label ? " Today the " + (S.country === "US" ? "US" : "India") + " market is <b>" + esc(env.score) + " " + esc(env.label) + "</b>; " + same + " of these started in a " + esc(env.label) + " market." : "");
+  var h = '<div class="lhead"><div><h2>' + esc(title) + '</h2><p class="verdict">' + verdict + '</p>' + liveRead(list, env) + '</div><span class="spacer"></span>' + folderSelect().replace('class="mfold"', 'class="mfold" style="margin-top:4px"') + (S.learnSel ? '<button type="button" class="btn" data-act="learn-clear">Back to the folder</button>' : "") + '</div>';
+  if (!n){ $("center").innerHTML = h; return; }
+  var hits = done.filter(function(e){ return e.out.stop8 > 0; }), safe = done.filter(function(e){ return e.out.stop8 === 0; });
+  var rules = (done[0] && done[0].ex.length ? done[0].ex : []).map(function(x){ return {k:x.k, label:x.label, color:x.color}; });
+  var exitRows = rules.map(function(r){
+    var res = done.map(function(e){ return e.ex.filter(function(y){ return y.k === r.k; })[0]; }).filter(Boolean);
+    return {r:r, med:median(res.map(function(x){ return x.pct; })), n:res.length, wins:res.filter(function(x){ return x.pct > 0; }).length, stops:res.filter(function(x){ return x.kind === "stop"; }).length, days:median(res.map(function(x){ return x.days; }))};
+  });
+  var best = exitRows.filter(function(x){ return x.med != null && x.r.k !== "hold"; }).sort(function(a, b){ return b.med - a.med; })[0];
+  h += '<div class="lgrid">'
+    + '<div class="card wide"><h3>The path after entry</h3><p class="q">Every example from its entry day, as % from the entry close, on a log scale. Thin lines are examples, the thick line is the middle of them, dashed red is an 8% stop. Hover to pick one out, click to open it.</p><div class="pathbox"><canvas id="paths" role="img" aria-label="Price paths after entry"></canvas></div></div>'
+    + '<div class="card"><h3>Where would a stop have hurt?</h3><p class="q">Lowest price in the first 20 sessions after entry, against the entry close.</p>'
+    + stripHTML("Worst dip in the first 20 sessions", list.filter(function(e){ return e.out.dipFull; }), function(e){ return e.out.dip; }, function(v){ return pct(v, 1); })
+    + '<p style="margin:4px 0 0">An 8% stop would have been hit before the first close 20% above entry in <b>' + hits.length + ' of ' + (hits.length + safe.length) + '</b>' + (hits.length ? " (" + hits.map(function(e){ return esc(e.ticker) + " after " + e.out.stop8 + " sessions"; }).join(", ") + ")" : "") + '.</p></div>'
+    + '<div class="card"><h3>Which exit kept the most?</h3><p class="q">Middle result of each rule across these examples, from the entry close, with each entry’s stop (8% where none is set).</p><div class="tw"><table class="bt"><thead><tr><th>Rule</th><th class="r">Middle result</th><th class="r">Gains</th><th class="r">Stopped</th><th class="r">Sessions</th></tr></thead><tbody>'
+    + exitRows.map(function(x){ return '<tr' + (best && best.r.k === x.r.k ? ' class="on"' : "") + '><td><span class="dot" style="background:' + x.r.color + '"></span>' + esc(x.r.label) + '</td><td class="r mono ' + (x.med >= 0 ? "up" : "down") + '">' + pct(x.med, 0) + '</td><td class="r mono">' + x.wins + "/" + x.n + '</td><td class="r mono">' + x.stops + '</td><td class="r mono">' + (x.days == null ? "—" : Math.round(x.days)) + '</td></tr>'; }).join("")
+    + '</tbody></table></div><p class="q" style="margin:8px 0 0">Hold runs to the latest close, so it flatters older examples.</p></div>'
+    + '<div class="card wide"><h3>What they looked like at entry</h3><p class="q">Each dot is one example and the dark tick is the middle. Click a dot to open that example.</p><div class="sgrid">'
+    + stripHTML("Base length, sessions", list, function(e){ return e.m.baseDays; }, function(v){ return Math.round(v) + ""; })
+    + stripHTML("Base depth", list, function(e){ return e.m.depth; }, function(v){ return pct(v, 0); })
+    + stripHTML("Below the 52-week high", list, function(e){ return e.m.off52 == null ? null : -e.m.off52; }, function(v){ return pct(v, 0); })
+    + stripHTML("Breakout volume vs 50-day average", list, function(e){ return e.m.volX; }, function(v){ return num(v, 1) + "×"; })
+    + stripHTML("Volume dry-up, last 10 vs 50 days", list, function(e){ return e.m.dry; }, function(v){ return num(v, 2) + "×"; })
+    + stripHTML("Tightness, range of the last 10 days", list, function(e){ return e.m.tight; }, function(v){ return num(v, 1) + "%"; })
+    + '</div></div>'
+    + '<div class="card"><h3>Market at entry</h3><p class="q">Click a row to see those examples in the library.</p>' + envBars(list, env) + '</div>'
+    + attnCard(list) + '</div>';
+  $("center").innerHTML = h;
+  var cv = $("paths"); if (cv) drawPaths(cv, list, null);
+}
+
+/* ---------- move menu ---------- */
+function openMoveMenu(ids, anchor){
+  var m = $("menu"), r = anchor.getBoundingClientRect(), e0 = byId(ids[0]), order = folderOrder();
+  m.innerHTML = '<p>Move ' + (ids.length === 1 && e0 ? esc(e0.ticker) : ids.length + " examples") + ' to</p>' + order.map(function(t, i){ return '<button type="button" role="menuitem" data-mv="' + esc(t) + '"><span>' + esc(t) + '</span>' + (i < 9 ? '<kbd>' + (i + 1) + '</kbd>' : "") + '</button>'; }).join("");
+  m.hidden = false; m._ids = ids; m._order = order;
+  var top = Math.min(window.innerHeight - m.offsetHeight - 8, r.bottom + 4), left = Math.min(window.innerWidth - m.offsetWidth - 8, r.left);
+  m.style.top = Math.max(8, top) + "px"; m.style.left = Math.max(8, left) + "px";
+  var first = m.querySelector("button"); if (first) first.focus();
+}
+function closeMenu(){ $("menu").hidden = true; }
+
+/* ---------- the logging workspace: chart on the left, form on the right ---------- */
+var W = null, SHIFT = false, DRAG = null, DT = null, DSEQ = 0, CT = null, CSEQ = 0, LT = null;
+var DRAFTS = (function(){ try { return JSON.parse(localStorage.getItem("setups-drafts-v1") || "{}") || {}; } catch (x) { return {}; } })();
+function saveDrafts(){ try { localStorage.setItem("setups-drafts-v1", JSON.stringify(DRAFTS)); } catch (x) {} }
+function draftKey(){ return W.mode === "edit" ? "e:" + W.id : W.qid ? "q:" + W.qid : "new:" + W.code; }
+function draftOf(){ return {t:W.t, logoid:W.logoid, name:W.name, sector:W.sector, industry:W.industry, date:W.date, entry:W.entry, stop:W.stop, stopLocked:W.stopLocked, reason:W.reason, folder:W.folder, checks:W.checks.slice(), note:W.note, exitRule:W.exitRule, range:W.range}; }
+function touch(){ if (!W) return; W.dirty = true; DRAFTS[draftKey()] = draftOf(); saveDrafts(); var d = $("draft"); if (d) d.textContent = "Draft kept"; }
+
+function openWS(opts){
+  closeMenu();
+  var w = {mode:opts.mode, id:opts.id || null, qid:opts.qid || null, code:S.country, t:null, logoid:null, name:null, sector:null, industry:null, P:null, k:null, date:null,
+    entry:null, stop:null, stopLocked:false, reason:"Fixed % risk", folder:null, checks:[], note:"", exitRule:null, img:null, D:null, ctx:null, errors:{},
+    range:"base", clickMode:"entry", dirty:false, restored:false, dupOk:false, order:folderOrder()};
+  if (opts.mode === "edit"){
+    var e = byId(opts.id); if (!e || e._pending) return;
+    Object.assign(w, {code:e.code, t:e.ticker, logoid:e.logoid, name:e.name, sector:e.sector, industry:e.industry, date:e.buyDate, entry:e.entryPx, stop:e.stop,
+      stopLocked:e.stop != null, reason:e.stopReason || "Fixed % risk", folder:e.setup, checks:e.checklist.slice(), note:e.entryThesis || "", exitRule:e.exitRule, D:e.D, ctx:e});
+    if (w.stop == null && w.entry) w.stop = +(w.entry * 0.92).toFixed(2);
+  } else if (opts.mode === "queue"){
+    var q = qById(opts.qid); if (!q) return;
+    Object.assign(w, {t:q.t, logoid:q.logoid, name:q.name, sector:q.sector, industry:q.industry, folder:q.folder || null, date:q.entry ? ((q.D && q.D.date) || q.entry) : null});
+    if (w.date && q.D && !q.D.error){ w.entry = q.D.entryPx; w.stop = +(w.entry * 0.92).toFixed(2); w.D = q.D; }
+    var lines = [];
+    if (q.note) lines.push(q.note);
+    if (q.src === "finder" && q.D && q.D.m && q.D.out) lines.push("Setup Finder: breakout " + fd(q.D.date) + (q.D.m.baseDays != null ? " after a " + q.D.m.baseDays + "-session base, " + Math.abs(q.D.m.depth).toFixed(0) + "% deep" : "") + (q.D.out.g120 != null ? ". Best close in the next 120 sessions: " + pct(q.D.out.g120, 0) + "." : "."));
+    w.note = lines.join("\n");
+    if (!w.date) w.range = "1y";
+  }
+  W = w;
+  var dk = draftKey();
+  if (DRAFTS[dk]){ Object.assign(W, DRAFTS[dk]); W.restored = true; W.dirty = true; W.D = null; }
+  $("ws").hidden = false; document.body.style.overflow = "hidden";
+  renderWS();
+  if (W.t) loadWsPrices(); else { killChart("w"); clearOvl($("ws-ovl")); $("ws-chart").innerHTML = '<div class="wsempty"><div>Pick a ticker and its chart appears here.<br>Then click the bar where you would have bought.</div></div>'; setTimeout(function(){ var i = $("ws-t"); if (i) i.focus(); }, 40); }
+}
+function closeWS(){ killChart("w"); $("ws").hidden = true; document.body.style.overflow = ""; W = null; }
+function loadWsPrices(){
+  var t = W.t, code = W.code;
+  killChart("w"); clearOvl($("ws-ovl")); $("ws-chart").innerHTML = '<div class="loading">Loading the chart…</div>';
+  getPrices(code, t).then(function(P){
+    if (!W || W.t !== t) return;
+    W.P = P;
+    if (W.date){ var k = P.d.indexOf(W.date); W.k = k >= 0 ? k : idxFrom(P, W.date); W.date = P.d[W.k]; if (W.entry == null) W.entry = P.c[W.k]; if (W.stop == null && W.entry) W.stop = +(W.entry * 0.92).toFixed(2); }
+    wsChart(); renderForm(); requestDerived(); requestCtx();
+  }).catch(function(err){ if (W && W.t === t) $("ws-chart").innerHTML = '<div class="wsempty"><div>' + esc(err.message || "No price history for " + t + ".") + '</div></div>'; });
+  if (!W.name){
+    api("/api/setups/info?country=" + code + "&ticker=" + encodeURIComponent(t)).then(function(i){ if (W && W.t === t && i && i.name){ W.name = i.name; renderTk(); } });
+  }
+}
+function renderWS(){
+  var q = W.qid ? qById(W.qid) : null, todo = todoList(), more = !!q && todo.some(function(x){ return x.id !== W.qid; });
+  $("ws-title").textContent = W.mode === "edit" ? "Edit " + W.t : "Log a setup";
+  var pos = q ? todo.indexOf(q) + 1 : 0;
+  $("qnav").innerHTML = (q ? '<span class="tag v">' + (q.src === "finder" ? "From the Setup Finder" : q.src === "tv" ? "From your TradingView list" : "From To log") + '</span>' + (pos ? '<span>' + pos + " of " + todo.length + " waiting</span>" : "") : "")
+    + (W.restored ? '<button type="button" class="linkbtn" data-ws="discard">Discard draft</button>' : "");
+  $("draft").textContent = W.restored ? "Draft restored" : (W.dirty ? "Draft kept" : "");
+  $("ws-skip").hidden = !q;
+  $("ws-save2").hidden = !more;
+  $("ws-save").innerHTML = (more ? "Save and next" : "Save") + ' <kbd>Ctrl Enter</kbd>';
+  Array.prototype.forEach.call(document.querySelectorAll("#ws-mode button"), function(b){ b.classList.toggle("on", b.dataset.m === W.clickMode); });
+  setWsTf(); renderTk(); renderForm();
+}
+function renderTk(){
+  var el = $("ws-tk");
+  if (!W.t){
+    el.innerHTML = '<div class="sugg" style="flex:1;min-width:240px;max-width:440px"><label class="sr" for="ws-t">Ticker</label><input class="inp' + (W.errors.t ? " err" : "") + '" id="ws-t" placeholder="Ticker, or paste NASDAQ:DELL from TradingView" autocomplete="off"><ul id="ws-tl" hidden></ul></div>'
+      + '<span class="dim" style="font-size:12px">' + (W.code === "IN" ? "India" : "US") + ' names in the terminal</span>';
+    return;
+  }
+  el.innerHTML = logo(W.t, W.logoid, "big") + '<div><h3>' + esc(W.t) + '</h3><div class="dsub">' + esc(co(W.name)) + (W.name ? " · " : "") + esc(W.sector || "") + (W.industry ? " › " + esc(W.industry) : "") + '</div></div><span class="spacer"></span>'
+    + (W.mode === "new" ? '<button type="button" class="btn" data-ws="change-t">Change ticker</button>' : "")
+    + '<a class="ext" href="' + tvUrl(W.t, W.code) + '" target="_blank" rel="noopener">Open in TradingView ↗</a>';
+}
+function dateSecHTML(){
+  var P = W.P, D = W.D && W.D.date === W.date ? W.D : null;
+  var h = '<div class="datebox"><button type="button" class="btn" data-ws="prev" aria-label="One session earlier">‹</button><input class="inp mono' + (W.errors.date ? " err" : "") + '" type="date" id="ws-date" value="' + (W.date || "") + '"' + (P ? ' min="' + P.d[0] + '" max="' + P.d[P.n - 1] + '"' : " disabled") + '><button type="button" class="btn" data-ws="next" aria-label="One session later">›</button></div>'
+    + (W.errors.date ? '<div class="errmsg">Set the entry day: click the breakout bar on the chart.</div>' : "");
+  if (D && D.breakout){
+    if (D.breakout === W.date) h += '<div class="suggest">✓ A breakout day by the Setup Finder’s rule: close above the prior 40-session high and the 50-day average.</div>';
+    else if (P){ var bi = P.d.indexOf(D.breakout); h += '<div class="suggest"><span style="flex:1">The Setup Finder’s rule puts the breakout on <b>' + fd(D.breakout) + '</b>, ' + (bi > W.k ? (bi - W.k) + " sessions later" : (W.k - bi) + " sessions earlier") + '.</span><button type="button" class="btn" data-ws="snap" data-date="' + D.breakout + '">Use it</button></div>'; }
+  }
+  return h;
+}
+function measuredHTML(){
+  if (W.date == null) return '<span class="dim">Set the entry day to measure the base and the volume.</span>';
+  var D = W.D && W.D.date === W.date ? W.D : null;
+  return D ? mTiles(D.m) : '<span class="dim">Measuring…</span>';
+}
+function renderForm(){
+  var risk = W.entry && W.stop ? (W.entry - W.stop) / W.entry * 100 : null;
+  var h = '<div class="field"><div class="flabel">Folder<span class="hint">press 1 to 9; your most-used folders come first</span></div><div class="picks">'
+    + W.order.map(function(t, i){ return '<button type="button" class="pick' + (W.folder === t ? " on" : "") + '" data-f="' + esc(t) + '">' + (i < 9 ? "<kbd>" + (i + 1) + "</kbd>" : "") + esc(t) + '</button>'; }).join("") + '</div>'
+    + (W.errors.folder ? '<div class="errmsg">Pick a folder for this example.</div>' : "") + '</div>';
+  h += '<div class="field"><div class="flabel"><label for="ws-date">Entry day</label><span class="hint">or click a bar on the chart</span></div><div id="ws-datesec">' + dateSecHTML() + '</div></div>';
+  h += '<div class="field"><div class="row3"><div><label for="ws-entry">Entry price</label><input class="inp mono" id="ws-entry" inputmode="decimal" value="' + (W.entry != null ? (+W.entry).toFixed(2) : "") + '"></div>'
+    + '<div><label for="ws-stop">Stop</label><input class="inp mono" id="ws-stop" inputmode="decimal" value="' + (W.stop != null ? (+W.stop).toFixed(2) : "") + '"></div>'
+    + '<div><label for="ws-pct">Stop % below</label><input class="inp mono" id="ws-pct" inputmode="decimal" value="' + (risk != null ? risk.toFixed(1) : "") + '"></div></div>'
+    + '<div class="risk" id="ws-risk"></div>'
+    + '<div class="picks" style="margin-top:7px" role="group" aria-label="Why that stop">' + REASONS.map(function(r){ return '<button type="button" class="pick' + (W.reason === r ? " on" : "") + '" data-reason="' + esc(r) + '">' + esc(r) + '</button>'; }).join("") + '</div></div>';
+  h += '<div class="field"><div class="flabel">Measured for you<span class="hint">from prices on the entry day</span></div><div class="tiles" id="ws-measured">' + measuredHTML() + '</div>'
+    + '<div class="ctxline" id="ws-ctx">' + (W.date ? ctxTags(W.ctx) : "") + '</div>'
+    + '<details style="margin-top:6px"><summary class="dim" style="font-size:12px;cursor:pointer">How these are measured</summary><ul class="dim" style="font-size:12px;margin:6px 0 0;padding-left:18px">'
+    + '<li>Base: from the highest high of the 120 sessions before the entry to the entry day. Depth is the lowest low since that high. The Setup Finder uses the same rule.</li>'
+    + '<li>Breakout volume: entry-day volume divided by the average of the 50 sessions before it.</li>'
+    + '<li>Volume dry-up: average volume of the 10 sessions before the entry divided by the 50-session average. Under 1 means volume dried up.</li>'
+    + '<li>Tightness: highest high minus lowest low of the 10 sessions before the entry, as % of the entry close.</li>'
+    + '<li>From the 52-week high: the entry close against the highest high of the last 252 sessions, as the hub already computes it.</li>'
+    + '<li>Prior run: from the lowest close of the 6 months before the base to the base high.</li>'
+    + '<li>Market, sector and industry ranks: the hub’s own history on that day.</li></ul></details></div>';
+  var crit = W.folder ? critFor(W.folder) : [];
+  h += '<div class="field"><div class="flabel">Checklist<span class="hint">' + (W.folder ? (critIsDefault(W.folder) ? "starting criteria for " + esc(W.folder) + "; add your own" : "your criteria for " + esc(W.folder)) : "pick a folder first") + '</span></div>'
+    + (W.folder ? '<div class="cl">' + crit.map(function(c){ return '<label><input type="checkbox" data-crit="' + esc(c) + '"' + (W.checks.indexOf(c) >= 0 ? " checked" : "") + '>' + esc(c) + '</label>'; }).join("") + '</div>'
+      + '<div class="addc"><label class="sr" for="ws-crit">New criterion</label><input class="inp" id="ws-crit" placeholder="Add a criterion to ' + esc(W.folder) + '"><button type="button" class="btn" data-ws="addcrit">Add</button></div>' : "") + '</div>';
+  h += '<div class="field"><div class="flabel"><label for="ws-note">Note</label><span class="hint">why it is a clean example</span></div><textarea class="inp" id="ws-note" placeholder="What made this one clean? What would you look for next time?">' + esc(W.note) + '</textarea></div>';
+  h += '<div class="field"><div class="flabel">Exit rule<span class="hint">compare all six after saving</span></div><div class="picks">'
+    + EXIT_RULES.concat(["Decide later"]).map(function(r){ var on = r === "Decide later" ? !W.exitRule : W.exitRule === r; return '<button type="button" class="pick' + (on ? " on" : "") + '" data-exit="' + esc(r) + '">' + esc(r) + '</button>'; }).join("") + '</div></div>';
+  h += '<div class="field"><div class="flabel">Your chart<span class="hint">optional: ' + (W.mode === "edit" ? "a pasted image replaces the chart in Notion" : "without one, the chart on the left is saved to Notion with entry, stop and base drawn") + '</span></div>'
+    + (W.img ? '<div class="shot"><img src="' + W.img + '" alt="Your pasted chart"><button type="button" class="btn" data-ws="noimg">Remove</button></div>'
+      : '<div class="paste" id="ws-paste" data-ws="paste" tabindex="0" role="button">Paste a chart image (Ctrl V) anywhere in this form, or click to choose a file</div><input type="file" id="ws-file" accept="image/*" hidden>') + '</div>';
+  $("ws-form").innerHTML = h;
+  updRisk(false); checkDup();
+}
+function renderDateSec(){ var el = $("ws-datesec"); if (el) el.innerHTML = dateSecHTML(); }
+function renderMeasured(){ var el = $("ws-measured"); if (el) el.innerHTML = measuredHTML(); renderDateSec(); }
+function updRisk(setInputs){
+  var risk = W.entry && W.stop ? (W.entry - W.stop) / W.entry * 100 : null;
+  if (setInputs){
+    var s = $("ws-stop"), p = $("ws-pct"), en = $("ws-entry");
+    if (s) s.value = W.stop != null ? (+W.stop).toFixed(2) : ""; if (p) p.value = risk != null ? risk.toFixed(1) : ""; if (en) en.value = W.entry != null ? (+W.entry).toFixed(2) : "";
+  }
+  var r = $("ws-risk"); if (!r) return;
+  r.textContent = risk == null ? "The entry is the close of the entry day. Change it if you bought at another price."
+    : risk <= 0 ? "The stop is at or above the entry. Set it below." : "Risk " + fp(W.entry - W.stop) + " a share, " + risk.toFixed(1) + "% of the entry.";
+}
+function checkDup(){
+  var el = $("dup"), hit = null;
+  if (W && W.P && W.k != null && !W.dupOk){
+    var nm = ctryName(W.code);
+    ENTRIES.forEach(function(e){
+      if (hit || e.ticker !== W.t || e.country !== nm || (W.mode === "edit" && e.id === W.id) || !e.buyDate) return;
+      var ki = W.P.d.indexOf(e.buyDate); if (ki < 0) ki = idxFrom(W.P, e.buyDate);
+      if (Math.abs(ki - W.k) <= 60) hit = {e:e, gap:Math.abs(ki - W.k), before:ki < W.k};
+    });
+  }
+  if (!hit){ el.hidden = true; el.innerHTML = ""; return; }
+  el.hidden = false;
+  el.innerHTML = '<span>Already logged: <b>' + esc(hit.e.ticker) + '</b> on ' + fd(hit.e.buyDate) + ' in ' + esc(hit.e.setup) + ', ' + (hit.gap === 0 ? "on the same day" : hit.gap + " sessions " + (hit.before ? "earlier" : "later")) + '. Probably the same move.</span>'
+    + '<button type="button" class="btn" data-ws="dup-open" data-id="' + esc(hit.e.id) + '">Open it</button><button type="button" class="btn" data-ws="dup-ok">Log anyway</button>';
+}
+function wsOpts(){ return {k:W.k, entry:W.entry, stop:W.stop, m:(W.D && W.D.date === W.date) ? W.D.m : null, after:12, range:W.range}; }
+function setWsTf(){ Array.prototype.forEach.call(document.querySelectorAll("#ws-tf button"), function(b){ b.classList.toggle("on", !!W && b.dataset.r === W.range); }); }
+function wsChart(){
+  if (!W || !W.P) return;
+  var P = W.P, st = makeChart("w", $("ws-chart"), $("ws-ovl"), P, wsOpts());
+  if (!st) return;
+  st.chart.subscribeClick(function(p){
+    if (!W || CH.w !== st || !p || p.time == null) return;
+    var k = P.d.indexOf(timeStr(p.time));
+    if (k < 0) return;
+    if (W.clickMode === "stop" || SHIFT){ if (p.point){ var price = st.cs.coordinateToPrice(p.point.y); if (price != null && price > 0) setStop(+(+price).toFixed(2)); } }
+    else setEntryIdx(k);
+  });
+  setWsTf();
+}
+function updWsMarks(){ var st = CH.w; if (!st || !W) return; var o = wsOpts(); o.range = st.range; st.o = o; marks(st); requestAnimationFrame(function(){ drawOvl(st); }); }
+function requestDerived(){
+  if (!W || !W.t || !W.date) return;
+  clearTimeout(DT); var seq = ++DSEQ, want = W.date;
+  DT = setTimeout(function(){
+    if (!W) return;
+    api("/api/setups/derived", {items:[{key:"w", country:W.code, ticker:W.t, buyDate:W.date, entryPx:W.entry, stop:W.stop}]}).then(function(r){
+      if (!W || seq !== DSEQ || W.date !== want) return;
+      var d = r && r.w; if (!d || d.error) return;
+      W.D = d; renderMeasured(); updWsMarks();
+    });
+  }, 60);
+}
+function requestCtx(){
+  if (!W || !W.t || !W.date) return;
+  clearTimeout(CT); var seq = ++CSEQ;
+  CT = setTimeout(function(){
+    if (!W) return;
+    api("/api/setups/context?country=" + W.code + "&ticker=" + encodeURIComponent(W.t) + "&date=" + W.date).then(function(c){
+      if (!W || seq !== CSEQ || !c || c.error) return;
+      W.ctx = c; var el = $("ws-ctx"); if (el) el.innerHTML = ctxTags(c);
+    });
+  }, 200);
+}
+function setEntryIdx(k){
+  if (!W || !W.P) return;
+  var P = W.P; k = Math.max(0, Math.min(P.n - 1, k));
+  var keep = W.entry && W.stop && W.stop < W.entry ? (W.entry - W.stop) / W.entry : 0.08;
+  W.k = k; W.date = P.d[k]; W.entry = P.c[k];
+  if (!W.stopLocked || W.stop == null || W.stop >= W.entry){ W.stop = +(W.entry * (1 - keep)).toFixed(2); W.stopLocked = false; }
+  W.errors.date = false; W.dupOk = false; touch();
+  updRisk(true); renderMeasured(); checkDup(); updWsMarks(); requestDerived(); requestCtx();
+  var di = $("ws-date"); if (di) di.value = W.date;
+  var st = CH.w;
+  if (st){ var r = st.chart.timeScale().getVisibleRange(), f = r && timeStr(r.from), t = r && timeStr(r.to); if (!r || W.date < f || W.date > t) view(st, W.range); }
+}
+function setStop(price){ if (!W) return; W.stop = price; W.stopLocked = true; touch(); updRisk(true); updWsMarks(); requestDerived(); }
+function showTickerList(v){
+  var ul = $("ws-tl"); if (!ul) return;
+  var q = String(v || "").trim().toUpperCase().split(":").pop();
+  clearTimeout(LT);
+  if (!q){ ul.hidden = true; return; }
+  LT = setTimeout(function(){
+    api("/api/setups/lookup?country=" + W.code + "&q=" + encodeURIComponent(q)).then(function(hits){
+      if (!W || !$("ws-tl")) return;
+      ul._hits = hits || [];
+      ul.innerHTML = (hits && hits.length) ? hits.slice(0, 12).map(function(h, i){ return '<li><button type="button" data-tk="' + i + '">' + logo(h.ticker, h.logoid) + '<span><b>' + esc(h.ticker) + '</b> <small>' + esc((h.sector || "") + (h.industry ? " › " + h.industry : "")) + '</small></span></button></li>'; }).join("")
+        : '<li class="dim" style="padding:6px 8px">No match in the terminal’s ' + (W.code === "IN" ? "India" : "US") + ' names.</li>';
+      ul.hidden = false;
+    });
+  }, 120);
+}
+function pickTicker(h){
+  if (!h || !h.ticker) return;
+  W.t = h.ticker; W.logoid = h.logoid || null; W.sector = h.sector || null; W.industry = h.industry || null; W.name = null;
+  W.P = null; W.k = null; W.date = null; W.entry = null; W.stop = null; W.stopLocked = false; W.D = null; W.ctx = null; W.range = "1y"; W.dupOk = false; W.errors = {};
+  touch(); renderWS(); loadWsPrices();
+}
+function readImg(file){
+  if (!file || !/^image\//.test(file.type)) return;
+  var rd = new FileReader();
+  rd.onload = function(){ if (!W) return; W.img = rd.result; touch(); renderForm(); toast("Chart attached. It uploads to Notion when you save."); };
+  rd.readAsDataURL(file);
+}
+function ctypeOf(dataUrl){ var m = /^data:([^;,]+)/.exec(dataUrl || ""); return m ? m[1] : "image/png"; }
+
+/* ---------- saving ---------- */
+function createEntry(tmp, body, imgData, filename, q){
+  tmp._failed = false; tmp._pending = true; renderAll();
+  send("/api/setups/create", body, "Could not log " + tmp.ticker).then(function(r){
+    if (tmp._cancel){ if (r.pageId) send("/api/setups/delete", {pageId:r.pageId}, "Could not remove " + tmp.ticker); return; }
+    var pid = r.pageId, fresh = r.entry ? prep(r.entry) : null, i = ENTRIES.indexOf(tmp);
+    if (fresh){ if (i >= 0) ENTRIES[i] = fresh; else ENTRIES.unshift(fresh); if (S.sel === tmp.id) S.sel = fresh.id; tmp._real = fresh; }
+    else { tmp._pending = false; tmp.pageId = tmp.id = pid; tmp.notionUrl = r.notionUrl; }
+    if (q) api("/api/setups/queue", {action:"done", id:q.id, pageId:pid, notionUrl:r.notionUrl, setup:tmp.setup});
+    if (imgData && pid){
+      send("/api/setups/chart", {pageId:pid, filename:filename, contentType:ctypeOf(imgData), dataB64:imgData}, "Could not attach the chart to " + tmp.ticker)
+        .then(function(){ var e = byId(pid); if (e){ e.chartCount = 1; if (S.sel === pid) renderDetail(); } });
+    }
+    renderAll();
+  }).catch(function(){ tmp._failed = true; tmp._body = body; tmp._img = imgData; tmp._fname = filename; tmp._q = q; renderAll(); });
+}
+function undoCreate(tmp, q){
+  var cur = tmp._real || tmp, i = ENTRIES.indexOf(cur);
+  if (i >= 0) ENTRIES.splice(i, 1);
+  if (q){ q.status = "todo"; if (!cur._pending) api("/api/setups/queue", {action:"undone", id:q.id}); }
+  if (cur._pending) tmp._cancel = true; else send("/api/setups/delete", {pageId:cur.pageId}, "Could not remove " + cur.ticker);
+  renderAll();
+}
+function save(next){
+  if (!W) return;
+  var err = {};
+  if (!W.t) err.t = true; else if (W.k == null || !W.date) err.date = true;
+  if (!W.folder) err.folder = true;
+  W.errors = err;
+  if (err.t || err.date || err.folder){
+    renderTk(); renderForm();
+    if (err.t){ var i = $("ws-t"); if (i) i.focus(); }
+    toast(err.t ? "Pick a ticker first." : err.date ? "Set the entry day: click the entry bar on the chart." : "Pick a folder: press 1 to 9.");
+    return;
+  }
+  if (W.stop != null && W.entry != null && +W.stop >= +W.entry){ toast("The stop is at or above the entry. Set it below the entry first."); return; }
+  var type = typeByName(W.folder); if (!type){ toast("That folder is not in the Setups Database."); return; }
+  var q = W.qid ? qById(W.qid) : null, dk = draftKey(), img = W.img;
+  var fields = {setupId:type.id, entryPrice:+(+W.entry).toFixed(2), stop:W.stop != null ? +(+W.stop).toFixed(2) : null, stopReason:W.reason,
+    checklist:W.checks.slice(), exitRule:W.exitRule, entryThesis:(W.note || "").trim() || null};
+  var D = W.D && W.D.date === W.date ? W.D : null, ctx = W.ctx || {};
+  if (W.mode === "edit") return saveEdit(type, fields, D, img, dk);
+  var shot = !img && CH.w ? snapshot(CH.w) : null;
+  var tmp = prep({pageId:"tmp-" + Date.now(), _pending:true, ticker:W.t, setup:W.folder, setupId:type.id, country:ctryName(W.code), buyDate:W.date,
+    entryPrice:fields.entryPrice, stop:fields.stop, stopReason:W.reason, checklist:fields.checklist, exitRule:W.exitRule, entryThesis:fields.entryThesis,
+    logoid:W.logoid, name:W.name, sector:W.sector, industry:W.industry, logged:new Date().toISOString(), D:D,
+    marketEnvScore:ctx.marketEnvScore, marketEnvLabel:ctx.marketEnvLabel, sectorRank:ctx.sectorRank, industryRank:ctx.industryRank,
+    sectorRankDelta1w:ctx.sectorRankDelta1w, industryRankDelta1w:ctx.industryRankDelta1w, chartCount:0});
+  ENTRIES.unshift(tmp);
+  delete DRAFTS[dk]; saveDrafts();
+  if (q) q.status = "done";
+  createEntry(tmp, Object.assign({country:W.code, ticker:W.t, buyDate:W.date}, fields), img || shot, img ? "chart." + (ctypeOf(img).split("/")[1] || "png") : "system-chart.png", q);
+  toast("Logged " + tmp.ticker + " in " + tmp.setup, function(){ undoCreate(tmp, q); });
+  var nq = next && q ? todoList()[0] : null;
+  if (nq){ openWS({mode:"queue", qid:nq.id}); renderAll(); return; }
+  closeWS();
+  if (S.scope !== "todo") S.sel = tmp.id;
+  S.view = "library"; renderAll();
+}
+function saveEdit(type, fields, D, img, dk){
+  var e = byId(W.id); if (!e) return;
+  var before = {setup:e.setup, setupId:e.setupId, buyDate:e.buyDate, entryPrice:e.entryPrice, stop:e.stop, stopReason:e.stopReason, checklist:e.checklist.slice(), exitRule:e.exitRule, entryThesis:e.entryThesis, D:e.D};
+  var changed = {};
+  if (e.setupId !== type.id) changed.setupId = type.id;
+  if (e.buyDate !== W.date) changed.buyDate = W.date;
+  if (e.entryPrice !== fields.entryPrice) changed.entryPrice = fields.entryPrice;
+  if (e.stop !== fields.stop) changed.stop = fields.stop;
+  if ((e.stopReason || null) !== (fields.stopReason || null)) changed.stopReason = fields.stopReason;
+  if (JSON.stringify(e.checklist) !== JSON.stringify(fields.checklist)) changed.checklist = fields.checklist;
+  if ((e.exitRule || null) !== (fields.exitRule || null)) changed.exitRule = fields.exitRule;
+  if ((e.entryThesis || null) !== (fields.entryThesis || null)) changed.entryThesis = fields.entryThesis;
+  delete DRAFTS[dk]; saveDrafts();
+  closeWS();
+  if (!Object.keys(changed).length && !img){ toast("No changes to save."); renderAll(); return; }
+  Object.assign(e, {setup:W && W.folder || type.name, setupId:type.id, buyDate:changed.buyDate || e.buyDate, entryPrice:fields.entryPrice, stop:fields.stop, stopReason:fields.stopReason,
+    checklist:fields.checklist, exitRule:fields.exitRule, entryThesis:fields.entryThesis});
+  e.setup = type.name; if (D) e.D = D; prep(e);
+  S.sel = e.id; S.exitView = null; renderAll();
+  var keyFields = {country:e.country, ticker:e.ticker, buyDate:before.buyDate, entryPrice:fields.entryPrice, stop:fields.stop};
+  var p = Object.keys(changed).length ? send("/api/setups/update", {pageId:e.pageId, fields:changed, entry:keyFields}, "Could not save " + e.ticker) : Promise.resolve({});
+  p.then(function(r){
+    if (r && r.entry){ var i = ENTRIES.indexOf(e), fresh = prep(r.entry); if (i >= 0) ENTRIES[i] = fresh; if (S.sel === e.id) S.sel = fresh.id; renderAll(); }
+    if (img) send("/api/setups/chart", {pageId:e.pageId, filename:"chart." + (ctypeOf(img).split("/")[1] || "png"), contentType:ctypeOf(img), dataB64:img}, "Could not attach the chart to " + e.ticker)
+      .then(function(){ var x = byId(e.pageId); if (x){ x.chartCount = 1; if (S.sel === x.id) renderDetail(); } });
+  }).catch(function(){ Object.assign(e, before); prep(e); renderAll(); });
+  toast(e.ticker + " updated", function(){
+    var back = {};
+    Object.keys(changed).forEach(function(k){ back[k] = k === "setupId" ? before.setupId : before[k]; });
+    var cur = byId(e.pageId) || e;
+    Object.assign(cur, before); prep(cur); renderAll();
+    if (Object.keys(back).length) send("/api/setups/update", {pageId:cur.pageId, fields:back, entry:{country:cur.country, ticker:cur.ticker, buyDate:changed.buyDate || before.buyDate, entryPrice:before.entryPrice, stop:before.stop}}, "Could not undo the edit to " + cur.ticker);
+  });
+}
+function skipQ(){
+  if (!W || !W.qid) return;
+  var q = qById(W.qid); if (!q) return;
+  q.status = "skip"; delete DRAFTS[draftKey()]; saveDrafts();
+  api("/api/setups/queue", {action:"skip", id:q.id});
+  var nq = todoList()[0];
+  toast("Skipped " + q.t, function(){ q.status = "todo"; api("/api/setups/queue", {action:"unskip", id:q.id}); renderAll(); });
+  if (nq){ openWS({mode:"queue", qid:nq.id}); renderAll(); } else { closeWS(); renderAll(); }
+}
+
+/* ---------- navigation ---------- */
+function setScope(sc){ S.scope = sc; S.learnSel = false; if (sc === "todo") S.view = "library"; $("detail").classList.remove("open"); renderAll(); }
+function openDetailNarrow(){ if (window.matchMedia("(max-width:1080px)").matches) $("detail").classList.add("open"); }
+function selectEntry(id){
+  S.sel = id; S.exitView = null; renderCenter(); renderDetail(); openDetailNarrow();
+  var el = document.querySelector('.erow[data-id="' + id + '"]'); if (el){ el.focus({preventScroll:true}); el.scrollIntoView({block:"nearest"}); }
+}
+function openEntry(id){
+  var e = byId(id); if (!e) return;
+  S.view = "library"; S.learnSel = false; if (S.scope !== "all" && S.scope !== e.setup) S.scope = "all";
+  S.env = ""; S.sector = ""; S.attn = false; S.q = ""; $("q").value = ""; S.sel = id; S.exitView = null;
+  renderAll(); openDetailNarrow();
+  var el = document.querySelector('.erow[data-id="' + id + '"]'); if (el) el.scrollIntoView({block:"nearest"});
+}
+/* The Monthly review and other panels can ask for a folder by name. */
+function hubOpen(){
+  var o = window.__mbtOpen; if (!o || !o.setup || !TYPES.length) return;
+  window.__mbtOpen = null;
+  if (typeByName(o.setup)){ S.view = "library"; S.scope = o.setup; S.learnSel = false; renderAll(); }
+}
+window.addEventListener("message", function(e){ if (e.origin !== location.origin || !e.data || !e.data.mbtOpen) return; window.__mbtOpen = e.data.mbtOpen; hubOpen(); });
+
+/* ---------- top bar ---------- */
+document.querySelector(".views").addEventListener("click", function(ev){ var b = ev.target.closest("button[data-view]"); if (!b) return; S.view = b.dataset.view; if (S.view === "library") S.learnSel = false; renderAll(); });
+$("q").addEventListener("input", function(){ S.q = this.value; S.view = "library"; if (S.scope === "todo") S.scope = "all"; renderAll(); });
+$("ctry").addEventListener("click", function(ev){ var b = ev.target.closest("button[data-c]"); if (!b || b.dataset.c === S.country) return; S.country = b.dataset.c; S.sel = null; S.selQ = null; S.picked = {}; S.learnSel = false; S.sector = ""; QUEUE = []; renderAll(); loadQueue(); });
+$("logbtn").addEventListener("click", function(){ openWS({mode:"new"}); });
+$("keysbtn").addEventListener("click", function(){ var b = $("keysbox"), open = b.hidden; b.hidden = !open; this.setAttribute("aria-expanded", String(open)); });
+document.addEventListener("mousedown", function(ev){ if (!$("keysbox").hidden && !ev.target.closest(".keys")){ $("keysbox").hidden = true; $("keysbtn").setAttribute("aria-expanded", "false"); } });
+
+/* ---------- rail: folders, new folder, drop to move ---------- */
+$("rail").addEventListener("click", function(ev){
+  var b = ev.target.closest("[data-scope]");
+  if (b){ setScope(b.dataset.scope); return; }
+  if (ev.target.closest("#newf-btn")){
+    $("newf").innerHTML = '<label class="sr" for="newf-in">New folder name</label><input id="newf-in" placeholder="Folder name, then Enter">';
+    var inp = $("newf-in"); inp.focus();
+    inp.addEventListener("keydown", function(e2){
+      if (e2.key === "Enter"){
+        var v = inp.value.trim(); if (!v){ renderRail(); return; }
+        inp.disabled = true;
+        send("/api/setups/type", {name:v}, "Could not add the folder " + v).then(function(r){
+          TYPES.push({id:r.id, name:r.name, criteria:[]}); TYPES.sort(function(a, c){ return a.name.localeCompare(c.name); });
+          toast("Folder " + r.name + " added to your Setups Database."); renderRail();
+        }).catch(function(){ renderRail(); });
+      }
+      if (e2.key === "Escape"){ e2.stopPropagation(); renderRail(); }
+    });
+    inp.addEventListener("blur", function(){ setTimeout(function(){ var x = $("newf-in"); if (x && !x.disabled) renderRail(); }, 150); });
+  }
+});
+$("center").addEventListener("dragstart", function(ev){
+  var row = ev.target.closest && ev.target.closest(".erow[data-id]"); if (!row) return;
+  var id = row.dataset.id; DRAG = S.picked[id] ? pickedIds() : [id];
+  ev.dataTransfer.effectAllowed = "move"; try { ev.dataTransfer.setData("text/plain", DRAG.join(",")); } catch (x) {}
+  row.classList.add("dragging");
+});
+$("center").addEventListener("dragend", function(ev){
+  var row = ev.target.closest && ev.target.closest(".erow"); if (row) row.classList.remove("dragging");
+  DRAG = null; Array.prototype.forEach.call(document.querySelectorAll(".ritem.drop"), function(x){ x.classList.remove("drop"); });
+});
+$("rail").addEventListener("dragover", function(ev){
+  var t = ev.target.closest("[data-drop]"); if (!t || !DRAG) return;
+  ev.preventDefault(); ev.dataTransfer.dropEffect = "move";
+  Array.prototype.forEach.call(document.querySelectorAll(".ritem.drop"), function(x){ if (x !== t) x.classList.remove("drop"); });
+  t.classList.add("drop");
+});
+$("rail").addEventListener("dragleave", function(ev){ var t = ev.target.closest("[data-drop]"); if (t && !t.contains(ev.relatedTarget)) t.classList.remove("drop"); });
+$("rail").addEventListener("drop", function(ev){ var t = ev.target.closest("[data-drop]"); if (!t || !DRAG) return; ev.preventDefault(); var ids = DRAG; DRAG = null; t.classList.remove("drop"); moveEntries(ids, t.dataset.drop); });
+
+/* ---------- centre: rows, filters, bulk actions, queue, Learn ---------- */
+$("center").addEventListener("click", function(ev){
+  var t = ev.target;
+  var pick = t.closest("input[data-pick]");
+  if (pick){
+    var id = pick.dataset.pick;
+    if (ev.shiftKey && S.lastPick){
+      var ids = filtered().map(function(e){ return e.id; }), a = ids.indexOf(S.lastPick), b = ids.indexOf(id);
+      if (a >= 0 && b >= 0){ for (var i = Math.min(a, b); i <= Math.max(a, b); i++) S.picked[ids[i]] = pick.checked; }
+    } else S.picked[id] = pick.checked;
+    S.lastPick = id; renderCenter(); return;
+  }
+  if (t.id === "paths"){ if (t._hot) openEntry(t._hot); return; }
+  var env = t.closest("[data-envf]"); if (env){ S.env = env.dataset.envf; renderCenter(); renderDetail(); return; }
+  if (t.closest("#attnf")){ S.attn = !S.attn; renderCenter(); renderDetail(); return; }
+  var act = t.closest("[data-act]");
+  if (act){
+    var a2 = act.dataset.act;
+    if (a2 === "bulk-move"){ openMoveMenu(pickedIds(), act); return; }
+    if (a2 === "bulk-del"){ deleteEntries(pickedIds()); return; }
+    if (a2 === "bulk-clear"){ S.picked = {}; renderCenter(); return; }
+    if (a2 === "bulk-learn"){ S.view = "learn"; S.learnSel = true; renderAll(); return; }
+    if (a2 === "q-start"){ var f = todoList()[0]; if (f) openWS({mode:"queue", qid:f.id}); return; }
+    if (a2 === "learn-clear"){ S.learnSel = false; renderAll(); return; }
+  }
+  var lq = t.closest("[data-q]"); if (lq){ openWS({mode:"queue", qid:lq.dataset.q}); return; }
+  var op = t.closest("[data-open]"); if (op){ openEntry(op.dataset.open); return; }
+  var fx = t.closest("[data-fix]"); if (fx){ openWS({mode:"edit", id:fx.dataset.fix}); return; }
+  var be = t.closest(".brow[data-env]"); if (be){ S.env = be.dataset.env; S.view = "library"; S.learnSel = false; if (S.scope === "todo") S.scope = "all"; renderAll(); return; }
+  var row = t.closest(".erow[data-id]"); if (row){ selectEntry(row.dataset.id); return; }
+  var qr = t.closest(".erow[data-qid]"); if (qr){ S.selQ = qr.dataset.qid; renderCenter(); renderDetail(); openDetailNarrow(); }
+});
+$("center").addEventListener("change", function(ev){
+  if (ev.target.id === "sortf"){ S.sort = ev.target.value; renderCenter(); return; }
+  if (ev.target.id === "secf"){ S.sector = ev.target.value; renderCenter(); renderDetail(); return; }
+  if (ev.target.id === "mfold"){ setScope(ev.target.value); }
+});
+$("center").addEventListener("keydown", function(ev){
+  if (ev.target.id === "addq" && ev.key === "Enter"){
+    ev.preventDefault();
+    var v = ev.target.value.trim(); if (!v) return;
+    ev.target.disabled = true;
+    send("/api/setups/queue", {action:"add", t:v, country:S.country}, "Could not add " + v).then(function(){ toast(v.toUpperCase().split(":").pop() + " added to To log."); loadQueue(); }).catch(function(){ loadQueue(); });
+    return;
+  }
+  if (ev.key === "Enter" && ev.target.classList && ev.target.classList.contains("erow")){ ev.preventDefault(); ev.target.click(); }
+});
+$("center").addEventListener("mousemove", function(ev){
+  if (ev.target.id !== "paths") return;
+  var r = ev.target.getBoundingClientRect(), id = nearestPath(ev.target, ev.clientX - r.left, ev.clientY - r.top);
+  if (id !== ev.target._hot){ ev.target._hot = id; drawPaths(ev.target, learnList(), id); }
+});
+$("center").addEventListener("mouseleave", function(ev){ if (ev.target.id === "paths" && ev.target._hot){ ev.target._hot = null; drawPaths(ev.target, learnList(), null); } }, true);
+
+/* ---------- detail ---------- */
+$("detail").addEventListener("click", function(ev){
+  var t = ev.target, act = t.closest("[data-act]");
+  if (act){
+    var a = act.dataset.act;
+    if (a === "edit"){ openWS({mode:"edit", id:S.sel}); return; }
+    if (a === "move"){ openMoveMenu([S.sel], act); return; }
+    if (a === "del"){ deleteEntries([S.sel]); return; }
+    if (a === "dclose"){ $("detail").classList.remove("open"); return; }
+    if (a === "retry"){ var r0 = byId(S.sel); if (r0 && r0._failed) createEntry(r0, r0._body, r0._img, r0._fname, r0._q); return; }
+    if (a === "q-skip"){
+      var q = qById(S.selQ);
+      if (q){ q.status = "skip"; api("/api/setups/queue", {action:"skip", id:q.id}); toast("Skipped " + q.t, function(){ q.status = "todo"; api("/api/setups/queue", {action:"unskip", id:q.id}); renderAll(); }); var nx = todoList()[0]; if (nx) S.selQ = nx.id; renderAll(); }
+      return;
+    }
+  }
+  var r = t.closest("#d-tf button");
+  if (r){ S.drange = r.dataset.r; if (CH.d) view(CH.d, S.drange); Array.prototype.forEach.call(document.querySelectorAll("#d-tf button"), function(b){ b.classList.toggle("on", b === r); }); return; }
+  var tr = t.closest("tr[data-ex]");
+  if (tr){
+    var e = byId(S.sel); if (!e) return;
+    S.exitView = {id:S.sel, k:tr.dataset.ex};
+    var x = e.ex.filter(function(y){ return y.k === tr.dataset.ex; })[0];
+    if (CH.d && x){ var xi = CH.d.P.d.indexOf(x.date); if (xi >= 0){ CH.d.o.exit = {i:xi, color:x.color, text:x.kind === "stop" ? "stopped" : x.kind === "hold" ? "open" : "exit"}; marks(CH.d); } }
+    Array.prototype.forEach.call(document.querySelectorAll("#detail tr[data-ex]"), function(z){ z.classList.toggle("on", z === tr); });
+    return;
+  }
+  var en = t.closest("[data-env]"); if (en && en.dataset.env){ S.env = en.dataset.env; renderCenter(); toast("Showing examples that started in a " + en.dataset.env + " market."); return; }
+  var lq = t.closest("[data-q]"); if (lq){ openWS({mode:"queue", qid:lq.dataset.q}); }
+});
+$("detail").addEventListener("change", function(ev){ if (ev.target.id === "d-folder") moveEntries([S.sel], ev.target.value); });
+$("menu").addEventListener("click", function(ev){ var b = ev.target.closest("[data-mv]"); if (!b) return; var ids = $("menu")._ids || []; closeMenu(); moveEntries(ids, b.dataset.mv); });
+document.addEventListener("mousedown", function(ev){ if (!$("menu").hidden && !ev.target.closest("#menu")) closeMenu(); });
+
+/* ---------- workspace ---------- */
+$("ws").addEventListener("click", function(ev){
+  if (!W) return;
+  var t = ev.target;
+  if (t.closest("#ws-close") || t.closest("#ws-cancel")){ closeWS(); renderAll(); return; }
+  if (t.closest("#ws-save")){ save(true); return; }
+  if (t.closest("#ws-save2")){ save(false); return; }
+  if (t.closest("#ws-skip")){ skipQ(); return; }
+  var m = t.closest("#ws-mode button"); if (m){ W.clickMode = m.dataset.m; Array.prototype.forEach.call(document.querySelectorAll("#ws-mode button"), function(b){ b.classList.toggle("on", b === m); }); return; }
+  var r = t.closest("#ws-tf button"); if (r){ W.range = r.dataset.r; if (CH.w) view(CH.w, W.range); setWsTf(); return; }
+  var tk = t.closest("[data-tk]"); if (tk){ var ul = $("ws-tl"); pickTicker(ul && ul._hits ? ul._hits[+tk.dataset.tk] : null); return; }
+  var f = t.closest("[data-f]"); if (f){ W.folder = f.dataset.f; W.errors.folder = false; touch(); renderForm(); return; }
+  var rs = t.closest("[data-reason]"); if (rs){ W.reason = rs.dataset.reason; touch(); Array.prototype.forEach.call(document.querySelectorAll("[data-reason]"), function(b){ b.classList.toggle("on", b === rs); }); return; }
+  var ex = t.closest("[data-exit]"); if (ex){ W.exitRule = ex.dataset.exit === "Decide later" ? null : ex.dataset.exit; touch(); Array.prototype.forEach.call(document.querySelectorAll("[data-exit]"), function(b){ b.classList.toggle("on", b === ex); }); return; }
+  var w = t.closest("[data-ws]"); if (!w) return;
+  var a = w.dataset.ws;
+  if (a === "prev" || a === "next"){ if (W.P) setEntryIdx(W.k == null ? W.P.n - 1 : W.k + (a === "prev" ? -1 : 1)); return; }
+  if (a === "snap"){ if (W.P){ var si = W.P.d.indexOf(w.dataset.date); if (si >= 0) setEntryIdx(si); } return; }
+  if (a === "change-t"){ W.t = null; W.P = null; W.k = null; W.date = null; W.entry = null; W.stop = null; W.D = null; touch(); renderWS(); killChart("w"); clearOvl($("ws-ovl")); $("ws-chart").innerHTML = '<div class="wsempty"><div>Pick a ticker and its chart appears here.</div></div>'; setTimeout(function(){ var i = $("ws-t"); if (i) i.focus(); }, 30); return; }
+  if (a === "addcrit"){
+    var inp = $("ws-crit"), v = inp && inp.value.trim(), type = W.folder && typeByName(W.folder);
+    if (v && type){
+      var list = critFor(W.folder).slice(); if (list.indexOf(v) < 0) list.push(v);
+      if (W.checks.indexOf(v) < 0) W.checks.push(v);
+      type.criteria = list; touch(); renderForm();
+      send("/api/setups/criteria", {typeId:type.id, criteria:list}, "Could not save the checklist for " + type.name).then(function(r){ type.criteria = r.criteria || list; });
+    }
+    return;
+  }
+  if (a === "noimg"){ W.img = null; touch(); renderForm(); return; }
+  if (a === "paste"){ var fi = $("ws-file"); if (fi) fi.click(); return; }
+  if (a === "dup-ok"){ W.dupOk = true; checkDup(); return; }
+  if (a === "dup-open"){ var id = w.dataset.id; closeWS(); openEntry(id); return; }
+  if (a === "discard"){ var o = {mode:W.mode, id:W.id, qid:W.qid}; delete DRAFTS[draftKey()]; saveDrafts(); closeWS(); openWS(o); }
+});
+$("ws").addEventListener("input", function(ev){
+  if (!W) return;
+  var id = ev.target.id, v = ev.target.value;
+  if (id === "ws-t"){ showTickerList(v); return; }
+  if (id === "ws-note"){ W.note = v; touch(); return; }
+  if (id === "ws-entry"){ var x = parseFloat(v); if (x > 0){ var keep = W.entry && W.stop && W.stop < W.entry ? (W.entry - W.stop) / W.entry : 0.08; W.entry = x; if (!W.stopLocked){ W.stop = +(x * (1 - keep)).toFixed(2); var s = $("ws-stop"); if (s) s.value = W.stop.toFixed(2); } var p = $("ws-pct"); if (p && W.stop) p.value = ((W.entry - W.stop) / W.entry * 100).toFixed(1); touch(); updRisk(false); updWsMarks(); requestDerived(); } return; }
+  if (id === "ws-stop"){ var y = parseFloat(v); if (y > 0){ W.stop = y; W.stopLocked = true; var p2 = $("ws-pct"); if (p2 && W.entry) p2.value = ((W.entry - y) / W.entry * 100).toFixed(1); touch(); updRisk(false); updWsMarks(); requestDerived(); } return; }
+  if (id === "ws-pct"){ var z = parseFloat(v); if (z > 0 && z < 90 && W.entry){ W.stop = +(W.entry * (1 - z / 100)).toFixed(2); W.stopLocked = false; var s2 = $("ws-stop"); if (s2) s2.value = W.stop.toFixed(2); touch(); updRisk(false); updWsMarks(); requestDerived(); } }
+});
+$("ws").addEventListener("change", function(ev){
+  if (!W) return;
+  var t = ev.target;
+  if (t.id === "ws-date" && t.value && W.P){ setEntryIdx(idxFrom(W.P, t.value)); return; }
+  if (t.dataset && t.dataset.crit != null){ var c = t.dataset.crit, i = W.checks.indexOf(c); if (t.checked && i < 0) W.checks.push(c); if (!t.checked && i >= 0) W.checks.splice(i, 1); touch(); return; }
+  if (t.id === "ws-file" && t.files && t.files[0]) readImg(t.files[0]);
+});
+$("ws").addEventListener("keydown", function(ev){
+  var id = ev.target.id;
+  if (id === "ws-t"){
+    if (ev.key === "Enter"){
+      ev.preventDefault();
+      var want = ev.target.value.trim().toUpperCase().split(":").pop();
+      if (!want) return;
+      api("/api/setups/lookup?country=" + W.code + "&q=" + encodeURIComponent(want)).then(function(hits){
+        var exact = (hits || []).filter(function(h){ return h.ticker === want; })[0] || (hits || [])[0];
+        if (exact) pickTicker(exact); else toast(want + " is not among the terminal’s " + (W.code === "IN" ? "India" : "US") + " names.");
+      });
+    }
+    if (ev.key === "ArrowDown"){ var f = document.querySelector("#ws-tl button"); if (f){ ev.preventDefault(); f.focus(); } }
+  }
+  if (id === "ws-crit" && ev.key === "Enter"){ ev.preventDefault(); var b = document.querySelector('[data-ws="addcrit"]'); if (b) b.click(); }
+  if (id === "ws-paste" && (ev.key === "Enter" || ev.key === " ")){ ev.preventDefault(); var fi = $("ws-file"); if (fi) fi.click(); }
+});
+$("ws-chart").addEventListener("pointerdown", function(ev){ SHIFT = ev.shiftKey; }, true);
+document.addEventListener("paste", function(ev){
+  if (!W) return;
+  var items = (ev.clipboardData || {}).items || [];
+  for (var i = 0; i < items.length; i++){ if (items[i].type && items[i].type.indexOf("image") === 0){ ev.preventDefault(); readImg(items[i].getAsFile()); return; } }
+  var tgt = ev.target;
+  if (tgt && tgt.id === "ws-t"){
+    setTimeout(function(){
+      var want = String(tgt.value).trim().toUpperCase().split(":").pop(); if (!want) return;
+      api("/api/setups/lookup?country=" + W.code + "&q=" + encodeURIComponent(want)).then(function(hits){
+        var exact = (hits || []).filter(function(h){ return h.ticker === want; })[0];
+        if (exact) pickTicker(exact); else showTickerList(want);
+      });
+    }, 0);
+  }
+});
+
+/* ---------- keyboard ---------- */
+document.addEventListener("keydown", function(ev){
+  if (ev.key === "Shift") SHIFT = true;
+  var tg = ev.target || {}, typing = /^(INPUT|TEXTAREA|SELECT)$/.test(tg.tagName || "") && tg.type !== "checkbox";
+  if (!$("menu").hidden){
+    if (ev.key === "Escape"){ ev.preventDefault(); closeMenu(); return; }
+    if (/^[1-9]$/.test(ev.key)){ var mt = ($("menu")._order || [])[+ev.key - 1]; if (mt){ ev.preventDefault(); var ids0 = $("menu")._ids || []; closeMenu(); moveEntries(ids0, mt); } return; }
+  }
+  if (W){
+    if (ev.key === "Escape"){ ev.preventDefault(); closeWS(); renderAll(); return; }
+    if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)){ ev.preventDefault(); save(true); return; }
+    if (typing) return;
+    if (/^[1-9]$/.test(ev.key)){ var f = W.order[+ev.key - 1]; if (f){ ev.preventDefault(); W.folder = f; W.errors.folder = false; touch(); renderForm(); } return; }
+    if ((ev.key === "ArrowLeft" || ev.key === "ArrowRight") && W.P){ ev.preventDefault(); setEntryIdx(W.k == null ? W.P.n - 1 : W.k + (ev.key === "ArrowLeft" ? -1 : 1)); }
+    return;
+  }
+  if (typing){ if (ev.key === "Escape") tg.blur(); return; }
+  if (ev.ctrlKey || ev.metaKey || ev.altKey) return;
+  if (ev.key === "/"){ ev.preventDefault(); $("q").focus(); return; }
+  if (ev.key === "n" || ev.key === "N"){ ev.preventDefault(); openWS({mode:"new"}); return; }
+  if (ev.key === "Escape"){ $("detail").classList.remove("open"); $("keysbox").hidden = true; return; }
+  if (S.view !== "library" || S.scope === "todo") return;
+  var rows = filtered(), i = rows.findIndex(function(e){ return e.id === S.sel; });
+  if (ev.key === "j" || ev.key === "J" || ev.key === "ArrowDown"){ if (rows.length){ ev.preventDefault(); selectEntry(rows[Math.min(rows.length - 1, i + 1)].id); } }
+  else if (ev.key === "k" || ev.key === "K" || ev.key === "ArrowUp"){ if (rows.length){ ev.preventDefault(); selectEntry(rows[Math.max(0, i - 1)].id); } }
+  else if ((ev.key === "e" || ev.key === "E") && S.sel){ ev.preventDefault(); openWS({mode:"edit", id:S.sel}); }
+  else if (ev.key === "m" || ev.key === "M"){ var ids = pickedIds(); if (!ids.length && S.sel) ids = [S.sel]; if (ids.length){ ev.preventDefault(); openMoveMenu(ids, document.querySelector('.erow[data-id="' + ids[0] + '"]') || $("center")); } }
+  else if (ev.key === "Delete"){ var d = pickedIds(); if (!d.length && S.sel) d = [S.sel]; if (d.length){ ev.preventDefault(); deleteEntries(d); } }
+});
+document.addEventListener("keyup", function(ev){ if (ev.key === "Shift") SHIFT = false; });
+window.addEventListener("resize", function(){ if (S.view === "learn"){ var cv = $("paths"); if (cv) drawPaths(cv, learnList(), cv._hot || null); } });
+if (window.matchMedia){ var mq = window.matchMedia("(prefers-color-scheme: dark)"); var onTheme = function(){ renderAll(); if (W && W.P) wsChart(); }; if (mq.addEventListener) mq.addEventListener("change", onTheme); else if (mq.addListener) mq.addListener(onTheme); }
+
+syncState();
+load();
+
+})();
+</script>
+</body>
+</html>

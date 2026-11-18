@@ -210,6 +210,12 @@ def _select_of(prop):
     return value.get("name") if value else None
 
 
+def _multi_of(prop):
+    if not prop:
+        return []
+    return [o.get("name") for o in prop.get("multi_select", []) if o.get("name")]
+
+
 def _date_of(prop):
     if not prop:
         return None
@@ -279,6 +285,21 @@ def select(value):
 
 def relation(page_ids):
     return {"relation": [{"id": pid} for pid in (page_ids or []) if pid]}
+
+
+def option_name(value):
+    """Notion select and multi-select option names cannot contain commas and stop at 100 characters."""
+    return str(value).replace(",", " /").strip()[:100]
+
+
+def multi_select(values):
+    seen, out = set(), []
+    for v in values or []:
+        name = option_name(v) if v else ""
+        if name and name.lower() not in seen:
+            seen.add(name.lower())
+            out.append({"name": name})
+    return {"multi_select": out}
 
 
 # --- stops: Notion -> here -------------------------------------------------
@@ -667,6 +688,13 @@ SETUP_CONTEXT_FIELDS = {
     "industryRankDelta1w": ("Industry Rank 1w Delta", number),
     "daysSinceIpo": ("Days Since IPO", number),
     "pctFrom52wHigh": ("Pct From 52w High", number),
+    # measured from the stock's own prices by setup_measure, the same numbers the Setups page shows
+    "baseDays": ("Base Length Days", number),
+    "baseDepth": ("Base Depth %", number),
+    "breakoutVol": ("Breakout Volume x", number),
+    "dryUp": ("Volume Dry-up x", number),
+    "tightness": ("Tightness %", number),
+    "priorRun": ("Prior Run %", number),
 }
 
 # Neil's, hand-entered, never touched by a re-sync.
@@ -674,7 +702,59 @@ SETUP_ENTRY_EDITABLE = {
     "entryThesis": ("Entry Thesis", text),
     "exitRule": ("Exit Rule", select),
     "baseLengthDays": ("Base Length Days", number),
+    "entryPrice": ("Entry Price", number),
+    "stop": ("Stop", number),
+    "stopReason": ("Stop Reason", select),
+    "checklist": ("Checklist", multi_select),
 }
+# Columns the rebuilt Setups page needs; added to the databases once, the first time they are missing.
+SETUP_ENTRY_NEW_COLUMNS = {
+    "Entry Price": {"number": {"format": "number"}},
+    "Stop": {"number": {"format": "number"}},
+    "Stop Reason": {"select": {}},
+    "Checklist": {"multi_select": {}},
+    "Base Depth %": {"number": {"format": "number"}},
+    "Breakout Volume x": {"number": {"format": "number"}},
+    "Volume Dry-up x": {"number": {"format": "number"}},
+    "Tightness %": {"number": {"format": "number"}},
+    "Prior Run %": {"number": {"format": "number"}},
+}
+SETUP_TYPE_NEW_COLUMNS = {"Checklist": {"rich_text": {}}}     # one criterion per line, editable here or in Notion
+_SCHEMA_READY = set()
+
+
+def ensure_setup_schema(log=print):
+    """Add the new columns to Setup Entries and the Setups Database if they are not there yet (one read per run)."""
+    for db_id, wanted in ((SETUP_ENTRIES_DB, SETUP_ENTRY_NEW_COLUMNS), (SETUP_TYPES_DB, SETUP_TYPE_NEW_COLUMNS)):
+        if db_id in _SCHEMA_READY:
+            continue
+        have = _call("GET", f"/databases/{db_id}").get("properties", {})
+        missing = {k: v for k, v in wanted.items() if k not in have}
+        if missing:
+            _call("PATCH", f"/databases/{db_id}", {"properties": missing})
+            log(f"  added {', '.join(missing)} to {'Setup Entries' if db_id == SETUP_ENTRIES_DB else 'Setups Database'}")
+        _SCHEMA_READY.add(db_id)
+
+
+def set_type_criteria(type_id, criteria, log=print):
+    """Save one folder's checklist criteria on its row in the Setups Database, one per line."""
+    ensure_setup_schema(log=log)
+    clean = [option_name(c) for c in (criteria or []) if str(c).strip()]
+    _call("PATCH", f"/pages/{type_id}", {"properties": {"Checklist": text("\n".join(clean) if clean else None)}})
+    log(f"  checklist saved on setup {type_id}: {len(clean)} criteria")
+    return clean
+
+
+def archive_setup_entry(page_id, restore=False, log=print):
+    """Delete sends the entry to Notion's trash; restore brings it back (the page's Undo)."""
+    _call("PATCH", f"/pages/{page_id}", {"archived": not restore})
+    log(f"  {'restored' if restore else 'archived'} setup entry {page_id}")
+
+
+def fetch_setup_entry(page_id):
+    """One entry, read fresh after a save, so the page can update that row without re-reading everything."""
+    page = _call("GET", f"/pages/{page_id}")
+    return _setup_entry_from_page(page, {t["id"]: t["name"] for t in _LAST_TYPES})
 
 
 _LAST_TYPES = []
@@ -758,6 +838,10 @@ def _setup_entry_from_page(page, types_by_id):
         "entryThesis": _text_of(p.get("Entry Thesis")),
         "logged": _created_of(p.get("Logged")),
         "chartCount": len((p.get("Chart") or {}).get("files", [])),
+        "entryPrice": _number_of(p.get("Entry Price")),
+        "stop": _number_of(p.get("Stop")),
+        "stopReason": _select_of(p.get("Stop Reason")),
+        "checklist": _multi_of(p.get("Checklist")),
     }
 
 
@@ -775,7 +859,9 @@ def fetch_setup_entries(log=print):
             if prop.get("type") == "title":
                 name = _text_of(prop)
                 if name:
-                    types.append({"id": page["id"], "name": name, "cover": _cover_url(page)})
+                    crit = _text_of((page.get("properties") or {}).get("Checklist"))
+                    types.append({"id": page["id"], "name": name, "cover": _cover_url(page),
+                                  "criteria": [c.strip() for c in (crit or "").split("\n") if c.strip()]})
                 break
     types.sort(key=lambda t: t["name"].lower())
     _LAST_TYPES[:] = types      # the create-setup duplicate check falls back on this
@@ -810,6 +896,7 @@ def create_setup_entry(fields, context, log=print):
     if not ticker or not buy_date or not setup_id:
         raise NotionError("ticker, buyDate and setupId are all required")
 
+    ensure_setup_schema(log=log)
     props = _setup_properties(fields, context)
     props["Name"] = title(f"{ticker} · {buy_date}")
     props["Ticker"] = text(ticker)
@@ -831,6 +918,10 @@ def update_setup_entry(page_id, fields, context=None, log=print):
     for key, value in fields.items():
         if key == "setupId":
             props["Setup"] = relation([value] if value else [])
+        elif key == "buyDate":
+            props["Buy Date"] = date(value)
+        elif key == "title":
+            props["Name"] = title(value)
         elif key in SETUP_ENTRY_EDITABLE:
             name, builder = SETUP_ENTRY_EDITABLE[key]
             props[name] = builder(value)
@@ -842,6 +933,8 @@ def update_setup_entry(page_id, fields, context=None, log=print):
                 props[name] = builder(context.get(key))
     if not props:
         return
+    if any(k in props for k in ("Entry Price", "Stop", "Stop Reason", "Checklist", "Base Depth %")):
+        ensure_setup_schema(log=log)
     _call("PATCH", f"/pages/{page_id}", {"properties": props})
     log(f"  updated {', '.join(props)} on {page_id}")
 

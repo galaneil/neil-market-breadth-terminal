@@ -144,6 +144,14 @@ STOPS_FILE = os.path.join(OUTPUT_DIR, "stops.json")
 # Stop price + reason a setup's backtest was run with. Kept locally (not in Notion)
 # until Stop Price / Stop Reason fields exist on the Setups database.
 SETUP_STOPS_FILE = os.path.join(OUTPUT_DIR, "setup_stops.json")
+SETUPS_PAGE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "setups_page.html")
+# The Setups page opens from this saved copy at once and then checks Notion in the background.
+SETUPS_CACHE_FILE = os.path.join(OUTPUT_DIR, "setups_cache.json")
+# Names waiting to be logged that do not come from the Setup Finder: added on the page, or synced from the
+# TradingView list "Setups to log" when Neil asks Claude to. Skipped ids live here too.
+SETUPS_QUEUE_FILE = os.path.join(OUTPUT_DIR, "setups_queue.json")
+SYMBOL_NAMES_FILE = os.path.join(OUTPUT_DIR, "symbol_names.json")
+_SETUPS_LOCK = threading.Lock()
 
 
 def _setup_stops():
@@ -152,6 +160,141 @@ def _setup_stops():
             return json.load(f)
     except (OSError, ValueError):
         return {}
+
+
+def _json_read(path, default):
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return default
+
+
+def _json_write(path, data):
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(data, f, separators=(",", ":"))
+    os.replace(tmp, path)
+
+
+_NAME_FILL = {"busy": False}
+
+
+def _names_fill_async(pairs):
+    """Company names for tickers the page has not seen yet, fetched one at a time in the background and kept on disk."""
+    if _NAME_FILL["busy"] or not pairs:
+        return
+    _NAME_FILL["busy"] = True
+
+    def run():
+        try:
+            import symbol_info
+            for code, ticker in pairs[:60]:
+                try:
+                    name = symbol_info.info(code, ticker).get("name")
+                except Exception:
+                    name = None
+                if name:
+                    with _SETUPS_LOCK:
+                        names = _json_read(SYMBOL_NAMES_FILE, {})
+                        names[code + ":" + ticker.upper()] = name
+                        _json_write(SYMBOL_NAMES_FILE, names)
+                time.sleep(0.3)
+        finally:
+            _NAME_FILL["busy"] = False
+    threading.Thread(target=run, daemon=True).start()
+
+
+def _decorate_setup_entry(entry, names=None, stops=None):
+    """Logo, company name, any stop saved locally by the old page, and the numbers measured from prices."""
+    import setup_context
+    import setup_measure
+    code = "IN" if entry.get("country") == "India" else "US"
+    ticker = (entry.get("ticker") or "").upper()
+    entry["logoid"] = setup_context.classify(code, ticker)[2] if ticker else None
+    names = names if names is not None else _json_read(SYMBOL_NAMES_FILE, {})
+    entry["name"] = names.get(code + ":" + ticker)
+    local = (stops if stops is not None else _setup_stops()).get(entry.get("pageId")) or {}
+    if entry.get("stop") is None and local.get("stop"):
+        entry["stop"], entry["stopLocal"] = local["stop"], True
+        entry["stopReason"] = entry.get("stopReason") or local.get("reason") or None
+        if entry.get("entryPrice") is None and local.get("entryPrice"):
+            entry["entryPrice"] = local["entryPrice"]
+    entry["D"] = (setup_measure.derive(code, ticker, entry.get("buyDate"), entry.get("entryPrice"), entry.get("stop"))
+                  if ticker and entry.get("buyDate") else None)
+    return entry
+
+
+def _setups_live():
+    """Read every entry from Notion, add what the page needs, and keep a copy on disk for the next open."""
+    import notion_sync
+    import setup_context
+    payload = notion_sync.fetch_setup_entries(log=log)
+    if payload.get("error"):
+        return payload
+    names, stops, missing = _json_read(SYMBOL_NAMES_FILE, {}), _setup_stops(), []
+    for entry in payload.get("entries", []):
+        _decorate_setup_entry(entry, names, stops)
+        if not entry.get("name") and entry.get("ticker"):
+            missing.append(("IN" if entry.get("country") == "India" else "US", entry["ticker"].upper()))
+    payload["envNow"] = {c: setup_context.market_env(c) for c in config.COUNTRIES}
+    payload["cachedAt"] = datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    with _SETUPS_LOCK:
+        _json_write(SETUPS_CACHE_FILE, payload)
+    _names_fill_async(missing)
+    return payload
+
+
+def _setups_cache_edit(entry=None, remove=None, types=None):
+    """Change one row of the saved copy after a save, so the next open shows it without a full Notion read."""
+    with _SETUPS_LOCK:
+        cache = _json_read(SETUPS_CACHE_FILE, None)
+        if not cache:
+            return
+        rows = cache.get("entries", [])
+        if remove:
+            rows = [r for r in rows if r.get("pageId") != remove]
+        if entry:
+            rows = [r for r in rows if r.get("pageId") != entry.get("pageId")]
+            rows.insert(0, entry)
+        cache["entries"] = rows
+        if types is not None:
+            cache["types"] = types
+        _json_write(SETUPS_CACHE_FILE, cache)
+
+
+def _setups_queue(code):
+    """Names waiting to be logged: Setup Finder rows marked keep and not saved yet, plus the listed names."""
+    import setup_context
+    import setup_measure
+    q = _json_read(SETUPS_QUEUE_FILE, {"listed": [], "skipped": []})
+    skipped = set(q.get("skipped") or [])
+    items = []
+    if code == "US":
+        try:
+            import setup_finder
+            edits = setup_finder._read().get("edits", {})
+        except Exception:
+            edits = {}
+        for key, e in edits.items():
+            if e.get("status") != "keep" or e.get("savedPageId") or ("finder:" + key) in skipped:
+                continue
+            t, start = (key.split("|") + [""])[:2]
+            entry = e.get("entry") or setup_measure.first_breakout_after("US", t, start)
+            items.append({"id": "finder:" + key, "src": "finder", "t": t, "entry": entry, "entryPx": e.get("entryPx"),
+                          "folder": e.get("setup") or None, "note": e.get("note") or None, "added": e.get("editedAt")})
+    for it in q.get("listed") or []:
+        if (it.get("country") or "US") != code or ("list:" + it.get("t", "")) in skipped:
+            continue
+        items.append({"id": "list:" + it["t"], "src": it.get("src") or "manual", "t": it["t"], "entry": it.get("entry"),
+                      "folder": it.get("folder"), "list": it.get("list"), "added": it.get("added")})
+    names = _json_read(SYMBOL_NAMES_FILE, {})
+    for it in items:
+        sec, ind, logo, _ = setup_context.classify(code, it["t"])
+        it.update(sector=sec, industry=ind, logoid=logo, name=names.get(code + ":" + it["t"].upper()))
+        it["D"] = setup_measure.derive(code, it["t"], it.get("entry"), it.get("entryPx"))
+    return items
 
 # ── Keeping the local checkout current, automatically ───────────────────────
 #
@@ -1256,7 +1399,8 @@ class Handler(BaseHTTPRequestHandler):
             self._send(200, JOURNAL_PAGE, "text/html; charset=utf-8")
             return
         if route.path == "/setups":
-            self._send(200, SETUPS_PAGE, "text/html; charset=utf-8")
+            with open(SETUPS_PAGE_FILE, encoding="utf-8") as f:
+                self._send(200, f.read(), "text/html; charset=utf-8")
             return
 
         # Everything under /docs/... is the market breadth terminal, served
@@ -1404,15 +1548,21 @@ class Handler(BaseHTTPRequestHandler):
             return
         if route.path == "/api/setups/data":
             try:
-                import notion_sync
-                import setup_context
-                payload = notion_sync.fetch_setup_entries(log=log)
-                for entry in payload.get("entries", []):
-                    code = "IN" if entry.get("country") == "India" else "US"
-                    entry["logoid"] = setup_context.classify(code, entry.get("ticker"))[2]
-                payload["envNow"] = {c: setup_context.market_env(c)
-                                     for c in config.COUNTRIES}
-                self._send(200, json.dumps(payload), "application/json")
+                if (parse_qs(route.query).get("cached") or [""])[0] == "1":
+                    cached = _json_read(SETUPS_CACHE_FILE, None)
+                    if cached and cached.get("entries") is not None:
+                        cached["fromCache"] = True
+                        self._send(200, json.dumps(cached), "application/json")
+                        return
+                self._send(200, json.dumps(_setups_live()), "application/json")
+            except Exception as error:
+                self._send(500, json.dumps({"error": str(error)}), "application/json")
+            return
+        if route.path == "/api/setups/queue":
+            try:
+                code = (parse_qs(route.query).get("country") or ["US"])[0].upper()
+                code = "IN" if code in ("IN", "INDIA") else "US"
+                self._send(200, json.dumps({"items": _setups_queue(code)}), "application/json")
             except Exception as error:
                 self._send(500, json.dumps({"error": str(error)}), "application/json")
             return
@@ -1421,7 +1571,14 @@ class Handler(BaseHTTPRequestHandler):
             q = parse_qs(route.query)
             code = (q.get("country") or ["US"])[0].upper()
             code = "IN" if code in ("IN", "INDIA") else "US"
-            self._send(200, json.dumps(symbol_info.info(code, (q.get("ticker") or [""])[0])), "application/json")
+            info = symbol_info.info(code, (q.get("ticker") or [""])[0])
+            if info.get("name") and info.get("ticker"):
+                with _SETUPS_LOCK:
+                    names = _json_read(SYMBOL_NAMES_FILE, {})
+                    if names.get(code + ":" + info["ticker"]) != info["name"]:
+                        names[code + ":" + info["ticker"]] = info["name"]
+                        _json_write(SYMBOL_NAMES_FILE, names)
+            self._send(200, json.dumps(info), "application/json")
             return
         if route.path == "/api/setups/prices":
             import journal_mfe
@@ -1730,25 +1887,145 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 body = json.loads(self.rfile.read(length) or b"{}")
                 country = (body.get("country") or "").upper()
+                country = "IN" if country in ("IN", "INDIA") else country
                 ticker = (body.get("ticker") or "").upper()
                 buy_date = body.get("buyDate")
                 if (country not in config.COUNTRIES or not ticker
                         or not buy_date or not body.get("setupId")):
                     raise ValueError("country, ticker, buyDate and setupId are all required")
                 import setup_context
+                import setup_measure
                 import notion_sync
+                der = setup_measure.derive(country, ticker, buy_date, body.get("entryPrice"), body.get("stop"))
+                if not der.get("error"):
+                    buy_date = der["date"]          # a weekend or holiday date moves to the next session
                 ctx = setup_context.context_at(country, ticker, buy_date)
-                result = notion_sync.create_setup_entry({
+                if not der.get("error"):
+                    ctx.update({k: v for k, v in setup_measure.notion_fields(der).items() if v is not None})
+                fields = {
                     "setupId": body.get("setupId"),
                     "ticker": ticker,
                     "country": "US" if country == "US" else "India",
                     "buyDate": buy_date,
                     "entryThesis": body.get("entryThesis"),
                     "exitRule": body.get("exitRule"),
-                    "baseLengthDays": body.get("baseLengthDays"),
-                }, ctx, log=log)
+                    "entryPrice": body.get("entryPrice") or (der.get("entryPx") if not der.get("error") else None),
+                    "stop": body.get("stop"),
+                    "stopReason": body.get("stopReason"),
+                    "checklist": body.get("checklist") or None,
+                }
+                if body.get("baseLengthDays") is not None:
+                    fields["baseLengthDays"] = body.get("baseLengthDays")
+                result = notion_sync.create_setup_entry(fields, ctx, log=log)
                 result["context"] = ctx
+                try:
+                    entry = _decorate_setup_entry(notion_sync.fetch_setup_entry(result["pageId"]))
+                    _setups_cache_edit(entry=entry)
+                    result["entry"] = entry
+                except Exception as error:
+                    log(f"  setups: could not read back {result.get('pageId')}: {error}")
                 self._send(200, json.dumps(result), "application/json")
+            except Exception as error:
+                self._send(400, json.dumps({"error": str(error)}), "application/json")
+            return
+        if route.path == "/api/setups/derived":
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                body = json.loads(self.rfile.read(length) or b"{}")
+                import setup_measure
+                out = {}
+                for it in (body.get("items") or [])[:2000]:
+                    code = "IN" if (it.get("country") or "").upper() in ("IN", "INDIA") else "US"
+                    out[str(it.get("key"))] = setup_measure.derive(code, it.get("ticker"), it.get("buyDate") or None,
+                                                                   it.get("entryPx") or None, it.get("stop") or None)
+                self._send(200, json.dumps(out), "application/json")
+            except Exception as error:
+                self._send(400, json.dumps({"error": str(error)}), "application/json")
+            return
+        if route.path == "/api/setups/delete":
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                body = json.loads(self.rfile.read(length) or b"{}")
+                page_id = body.get("pageId")
+                if not page_id:
+                    raise ValueError("pageId is required")
+                import notion_sync
+                restore = bool(body.get("restore"))
+                notion_sync.archive_setup_entry(page_id, restore=restore, log=log)
+                entry = None
+                if restore:
+                    entry = _decorate_setup_entry(notion_sync.fetch_setup_entry(page_id))
+                    _setups_cache_edit(entry=entry)
+                else:
+                    _setups_cache_edit(remove=page_id)
+                self._send(200, json.dumps({"ok": True, "entry": entry}), "application/json")
+            except Exception as error:
+                self._send(400, json.dumps({"error": str(error)}), "application/json")
+            return
+        if route.path == "/api/setups/criteria":
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                body = json.loads(self.rfile.read(length) or b"{}")
+                type_id = body.get("typeId")
+                if not type_id:
+                    raise ValueError("typeId is required")
+                import notion_sync
+                clean = notion_sync.set_type_criteria(type_id, body.get("criteria") or [], log=log)
+                cache = _json_read(SETUPS_CACHE_FILE, None)
+                if cache:
+                    for t in cache.get("types", []):
+                        if t.get("id") == type_id:
+                            t["criteria"] = clean
+                    _setups_cache_edit(types=cache.get("types", []))
+                self._send(200, json.dumps({"criteria": clean}), "application/json")
+            except Exception as error:
+                self._send(400, json.dumps({"error": str(error)}), "application/json")
+            return
+        if route.path == "/api/setups/queue":
+            length = int(self.headers.get("Content-Length") or 0)
+            try:
+                body = json.loads(self.rfile.read(length) or b"{}")
+                action, iid = body.get("action"), body.get("id") or ""
+                with _SETUPS_LOCK:
+                    q = _json_read(SETUPS_QUEUE_FILE, {"listed": [], "skipped": []})
+                    q.setdefault("listed", []); q.setdefault("skipped", [])
+                    if action == "add":
+                        t = "".join(ch for ch in (body.get("t") or "").upper().split(":")[-1] if ch.isalnum() or ch in ".-_")[:16]
+                        code = "IN" if (body.get("country") or "").upper() in ("IN", "INDIA") else "US"
+                        if not t:
+                            raise ValueError("a ticker is required")
+                        if not any(x.get("t") == t and (x.get("country") or "US") == code for x in q["listed"]):
+                            q["listed"].append({"t": t, "country": code, "src": "manual", "folder": body.get("folder"),
+                                                "added": datetime.now().strftime("%Y-%m-%d")})
+                        q["skipped"] = [x for x in q["skipped"] if x != "list:" + t]
+                    elif action == "skip":
+                        if iid and iid not in q["skipped"]:
+                            q["skipped"].append(iid)
+                    elif action == "unskip":
+                        q["skipped"] = [x for x in q["skipped"] if x != iid]
+                    elif action in ("done", "undone"):
+                        if iid.startswith("finder:"):
+                            import setup_finder
+                            if action == "done":
+                                setup_finder.save_edit(iid[len("finder:"):], {"savedPageId": body.get("pageId"), "savedUrl": body.get("notionUrl"),
+                                                                              "savedSetup": body.get("setup"), "status": "keep"})
+                            else:
+                                setup_finder.save_edit(iid[len("finder:"):], {"savedPageId": None, "savedUrl": None, "savedSetup": None, "status": "keep"})
+                        elif iid.startswith("list:"):
+                            if action == "done":
+                                q.setdefault("done", []).append({**next((x for x in q["listed"] if "list:" + x.get("t", "") == iid), {}),
+                                                                "pageId": body.get("pageId")})
+                                q["listed"] = [x for x in q["listed"] if "list:" + x.get("t", "") != iid]
+                            else:
+                                back = next((x for x in reversed(q.get("done", [])) if "list:" + x.get("t", "") == iid), None)
+                                if back:
+                                    back = {k: v for k, v in back.items() if k != "pageId"}
+                                    q["listed"].append(back)
+                                    q["done"] = [x for x in q["done"] if x is not None and "list:" + x.get("t", "") != iid]
+                    else:
+                        raise ValueError("unknown action")
+                    _json_write(SETUPS_QUEUE_FILE, q)
+                self._send(200, json.dumps({"ok": True}), "application/json")
             except Exception as error:
                 self._send(400, json.dumps({"error": str(error)}), "application/json")
             return
@@ -1834,19 +2111,37 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 body = json.loads(self.rfile.read(length) or b"{}")
                 page_id = body.get("pageId")
-                fields = body.get("fields") or {}
-                if not page_id or not fields:
+                allowed = {"setupId", "entryThesis", "exitRule", "baseLengthDays", "entryPrice", "stop", "stopReason", "checklist", "buyDate"}
+                fields = {k: v for k, v in (body.get("fields") or {}).items() if k in allowed}
+                if not page_id or not (fields or body.get("resync")):
                     raise ValueError("pageId and fields are both required")
                 context = None
-                if body.get("resync"):
-                    entry = body.get("entry") or {}
-                    if entry.get("country") and entry.get("ticker") and entry.get("buyDate"):
+                entry = body.get("entry") or {}
+                if body.get("resync") or {"buyDate", "entryPrice", "stop"} & set(fields):
+                    if entry.get("country") and entry.get("ticker") and (fields.get("buyDate") or entry.get("buyDate")):
                         import setup_context
+                        import setup_measure
                         code = "US" if entry["country"] == "US" else "IN"
-                        context = setup_context.context_at(code, entry["ticker"], entry["buyDate"])
+                        bd = fields.get("buyDate") or entry["buyDate"]
+                        der = setup_measure.derive(code, entry["ticker"], bd, fields.get("entryPrice", entry.get("entryPrice")),
+                                                   fields.get("stop", entry.get("stop")))
+                        if not der.get("error"):
+                            bd = der["date"]
+                        if "buyDate" in fields:
+                            fields["buyDate"] = bd
+                            fields["title"] = f"{entry['ticker'].upper()} · {bd}"
+                        context = setup_context.context_at(code, entry["ticker"], bd)
+                        if not der.get("error"):
+                            context.update({k: v for k, v in setup_measure.notion_fields(der).items() if v is not None})
                 import notion_sync
                 notion_sync.update_setup_entry(page_id, fields, context=context, log=log)
-                self._send(200, json.dumps({"ok": True, "context": context}), "application/json")
+                fresh = None
+                try:
+                    fresh = _decorate_setup_entry(notion_sync.fetch_setup_entry(page_id))
+                    _setups_cache_edit(entry=fresh)
+                except Exception as error:
+                    log(f"  setups: could not read back {page_id}: {error}")
+                self._send(200, json.dumps({"ok": True, "context": context, "entry": fresh}), "application/json")
             except Exception as error:
                 self._send(400, json.dumps({"error": str(error)}), "application/json")
             return
@@ -3268,1124 +3563,6 @@ setJTab(jtab);
 if (jtab === "review" && window.drawReview) window.drawReview();
 
 loadJournal();
-</script>
-</body></html>"""
-
-
-SETUPS_PAGE = r"""<!doctype html>
-<html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Setups Database</title>
-<script src="/docs/vendor/lightweight-charts.js"></script>
-<script src="/docs/tv_embed.js"></script>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
-<style>
-  :root { --bg:#f5f6f8; --panel:#fff; --text:#1a1d24; --dim:#6b7280;
-    --line:#e2e5ea; --up:#16a34a; --down:#dc2626; --warn:#ca8a04; --violet:#7c3aed;
-    --accent:#2563eb; }
-  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
-    --bg:#10131a; --panel:#171b24; --text:#e7e9ee; --dim:#9096a3; --line:#262b36;
-    --up:#2ecc71; --down:#f0554b; --warn:#facc15; --violet:#a78bfa; --accent:#5b9dff; } }
-  * { box-sizing:border-box; }
-  body { margin:0; padding:26px; background:var(--bg); color:var(--text);
-    font-family:"IBM Plex Sans",-apple-system,system-ui,sans-serif; font-size:13.5px;
-    font-variant-numeric:tabular-nums; }
-  .wrap { max-width:1120px; margin:0 auto; }
-  h1 { font-size:19px; margin:0 0 3px; }
-  .sub { color:var(--dim); margin:0 0 14px; max-width:760px; line-height:1.5; }
-  .flow { font-size:11px; color:var(--dim); display:flex; gap:6px; align-items:center; margin-bottom:16px; }
-  .flow .d { width:6px; height:6px; border-radius:50%; background:var(--violet); flex:none; }
-  .err { background:rgba(240,85,75,.12); color:var(--down); border-radius:8px;
-    padding:10px 13px; margin-bottom:14px; line-height:1.5; }
-  .err b { display:block; margin-bottom:3px; }
-  code { font-family:"IBM Plex Mono",monospace; font-size:11.5px; background:var(--bg);
-    padding:1px 4px; border-radius:4px; }
-
-  .toprow { display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap; margin-bottom:16px; }
-  .seg { display:flex; border:1px solid var(--line); border-radius:8px; overflow:hidden; }
-  .seg button { font:inherit; font-size:12px; font-weight:600; padding:6px 14px; border:none;
-    background:var(--panel); color:var(--dim); cursor:pointer; }
-  .seg button.active { background:var(--violet); color:#fff; }
-
-  .tabs { display:flex; gap:4px; border-bottom:1px solid var(--line); margin-bottom:18px; flex-wrap:wrap; }
-  .tab { font:inherit; font-size:13px; font-weight:600; color:var(--dim); background:none; border:none;
-    padding:9px 4px 11px; cursor:pointer; border-bottom:2px solid transparent; margin-bottom:-1px; }
-  .tab.active { color:var(--accent); border-bottom-color:var(--accent); }
-  .page { display:none; } .page.active { display:block; }
-
-  .card { background:var(--panel); border:1px solid var(--line); border-radius:11px; padding:17px; margin-bottom:15px; }
-  .card-title { font-weight:700; font-size:14px; margin:0 0 3px; }
-  .card-desc { font-size:12px; color:var(--dim); line-height:1.5; margin-bottom:13px; max-width:720px; }
-
-  .gallery { display:grid; grid-template-columns:repeat(auto-fill,minmax(122px,1fr)); gap:9px; margin-bottom:15px; }
-  .fcard { font:inherit; text-align:left; border:1.5px solid var(--line); background:var(--panel); color:var(--text);
-    border-radius:10px; padding:0; overflow:hidden; cursor:pointer; }
-  .fcard .art { height:78px; overflow:hidden; display:flex; align-items:center; justify-content:center; font-size:20px;
-    background:linear-gradient(135deg,rgba(124,58,237,.16),rgba(37,99,235,.10)); }
-  .fcard .body { padding:7px 9px; }
-  .fcard .nm { display:block; font-weight:700; font-size:12px; line-height:1.25; }
-  .fcard .ct { display:block; font-size:10.5px; color:var(--dim); margin-top:2px; }
-  .fcard.active { border-color:var(--violet); box-shadow:inset 0 0 0 1px var(--violet); }
-
-  .step { display:flex; gap:13px; margin-bottom:16px; }
-  .snum { width:24px; height:24px; border-radius:50%; background:var(--line); color:var(--dim);
-    font-weight:700; font-size:11px; display:flex; align-items:center; justify-content:center; flex:none; }
-  .step.done .snum { background:var(--up); color:#fff; }
-  .slabel { font-weight:700; font-size:12.5px; margin-bottom:6px; }
-  .lookup { position:relative; max-width:340px; }
-  input, select, textarea { font:inherit; color:var(--text); background:var(--bg);
-    border:1px solid var(--line); border-radius:7px; padding:8px 11px; }
-  input:focus, select:focus, textarea:focus { outline:none; border-color:var(--accent); }
-  .lookup input { width:100%; }
-  .drop { position:absolute; top:100%; left:0; right:0; background:var(--panel); border:1px solid var(--line);
-    border-radius:8px; margin-top:4px; z-index:9; max-height:260px; overflow-y:auto; display:none; }
-  .drop.show { display:block; }
-  .hit { padding:7px 11px; cursor:pointer; display:flex; gap:9px; align-items:center; border-bottom:1px solid var(--line); }
-  .hit:last-child { border-bottom:none; }
-  .hit:hover { background:var(--bg); }
-  .hit .lg { width:20px; height:20px; border-radius:5px; flex:none; display:flex; align-items:center;
-    justify-content:center; font-size:8px; font-weight:800; color:#fff; overflow:hidden; }
-  .hit .lg img { width:100%; height:100%; object-fit:cover; }
-  .hit .sy { font-weight:700; font-size:12px; }
-  .hit .mt { font-size:10.5px; color:var(--dim); }
-  .picked { display:flex; gap:10px; align-items:center; padding:9px 11px; background:var(--bg);
-    border:1px solid var(--line); border-radius:9px; max-width:340px; margin-top:5px; }
-  .picked .lg { width:26px; height:26px; border-radius:6px; flex:none; display:flex; align-items:center;
-    justify-content:center; font-weight:800; font-size:10px; color:#fff; overflow:hidden; }
-  .picked .lg img { width:100%; height:100%; object-fit:cover; }
-  .picked .nm { font-weight:700; } .picked .mt { font-size:11px; color:var(--dim); }
-  .tk-cell { display:inline-flex; align-items:center; gap:6px; }
-  .tk-logo { border-radius:5px; flex:none; display:inline-flex; align-items:center; justify-content:center;
-    font-size:8px; font-weight:800; color:#fff; overflow:hidden; }
-  .tk-logo img { width:100%; height:100%; object-fit:cover; }
-  .chart-box { margin:2px 0 10px; border:1px solid var(--line); border-radius:9px; overflow:hidden;
-    background:var(--bg); min-height:44px; }
-  .chart-img { display:block; width:100%; height:auto; }
-  .chart-del { position:absolute; top:6px; right:6px; width:22px; height:22px; border-radius:6px; border:none;
-    background:rgba(0,0,0,.55); color:#fff; font-size:14px; line-height:1; cursor:pointer; }
-  .chart-del:hover { background:var(--down); }
-  .chart-empty, .chart-loading { font-size:11.5px; color:var(--dim); padding:14px; text-align:center; }
-  .paste-zone { border:1px dashed var(--line); border-radius:9px; padding:11px; text-align:center;
-    font-size:11.5px; color:var(--dim); cursor:pointer; margin-bottom:13px; }
-  .paste-zone:hover, .paste-zone:focus { border-color:var(--violet); color:var(--text); outline:none; }
-
-  .presets { display:grid; grid-template-columns:repeat(auto-fill,minmax(140px,1fr)); gap:9px; max-width:660px; margin-top:4px; }
-  .ptile { background:var(--bg); border:1px solid var(--line); border-radius:8px; padding:8px 10px; }
-  .pk { font-size:9.5px; text-transform:uppercase; letter-spacing:.03em; color:var(--dim); margin-bottom:3px; }
-  .pv { font-size:13px; font-weight:700; }
-  .pv.na { color:var(--dim); font-weight:500; }
-  .thesis { width:100%; max-width:660px; min-height:76px; resize:vertical; }
-  .exit-rules { display:flex; gap:8px; flex-wrap:wrap; max-width:660px; }
-  .erule { flex:1; min-width:190px; border:1px solid var(--line); background:var(--bg); border-radius:9px;
-    padding:9px 11px; cursor:pointer; }
-  .erule.active { border-color:var(--violet); background:rgba(124,58,237,.08); }
-  .erule .en { font-weight:700; font-size:12px; }
-  .erule-add { flex:1; min-width:150px; border:1px dashed var(--line); background:none; border-radius:9px;
-    padding:9px 11px; color:var(--dim); font-size:11.5px; cursor:pointer; display:flex; align-items:center; justify-content:center; }
-  .newrule { display:none; gap:7px; flex-wrap:wrap; max-width:660px; margin-top:8px; }
-  .newrule.show { display:flex; }
-  .btn { font:inherit; font-size:12.5px; font-weight:700; border:none; border-radius:8px; padding:8px 16px;
-    cursor:pointer; background:var(--up); color:#fff; }
-  .btn.sec { background:var(--panel); border:1px solid var(--line); color:var(--text); }
-  .btn:disabled { opacity:.45; cursor:not-allowed; }
-  .save-msg { font-size:12px; margin-top:8px; }
-  .save-msg.ok { color:var(--up); } .save-msg.bad { color:var(--down); }
-
-  .filters { display:flex; gap:10px; flex-wrap:wrap; align-items:flex-end; margin-bottom:12px; }
-  .ff { display:flex; flex-direction:column; gap:4px; }
-  .ff label { font-size:9.5px; text-transform:uppercase; letter-spacing:.03em; color:var(--dim); }
-  .ff select, .ff input { font-size:12px; padding:6px 9px; background:var(--panel); }
-  table { width:100%; border-collapse:collapse; font-size:12px; }
-  th { text-align:left; font-size:9.5px; text-transform:uppercase; letter-spacing:.03em; color:var(--dim);
-    font-weight:600; padding:7px 9px; border-bottom:1px solid var(--line); }
-  td { padding:8px 9px; border-bottom:1px solid var(--line); }
-  tbody tr { cursor:pointer; } tbody tr:hover { background:var(--bg); }
-  .chip { font-size:10.5px; font-weight:700; padding:2px 6px; border-radius:5px; }
-  .chip.bullish { background:rgba(46,204,113,.15); color:var(--up); }
-  .chip.bearish { background:rgba(240,85,75,.15); color:var(--down); }
-  .chip.choppy { background:rgba(250,204,21,.16); color:var(--warn); }
-  .up { color:var(--up); } .down { color:var(--down); }
-  .count-line { font-size:11.5px; color:var(--dim); margin-bottom:6px; }
-
-  .cond-grid { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
-  @media (max-width:820px) { .cond-grid { grid-template-columns:1fr; } }
-  .cond { background:var(--panel); border:1px solid var(--line); border-radius:11px; padding:15px 17px; }
-  .cond.wide { grid-column:1/-1; }
-  .cq { font-weight:700; font-size:12.5px; margin-bottom:2px; }
-  .cs { font-size:11px; color:var(--dim); margin-bottom:11px; line-height:1.45; }
-  .cf { font-size:11.5px; font-weight:600; color:var(--violet); background:rgba(124,58,237,.1);
-    border-radius:7px; padding:6px 9px; margin-bottom:11px; line-height:1.4; }
-  .brow { display:flex; align-items:center; gap:9px; margin-bottom:7px; }
-  .blabel { width:120px; flex:none; font-size:11px; color:var(--dim); }
-  .btrack { flex:1; height:15px; border-radius:5px; background:var(--bg); border:1px solid var(--line); overflow:hidden; }
-  .bfill { height:100%; background:var(--violet); border-radius:5px 0 0 5px; }
-  .bstat { width:104px; flex:none; text-align:right; font-size:11px; color:var(--dim); }
-  .bstat b { color:var(--text); }
-  .today-tag { font-size:9px; font-weight:800; color:var(--violet); border:1px solid var(--violet);
-    border-radius:4px; padding:0 4px; margin-left:5px; }
-
-  .lr { border-color:var(--violet); }
-  .lr-head { display:flex; justify-content:space-between; gap:14px; flex-wrap:wrap; margin-bottom:12px; }
-  .lr-thr label { font-size:9.5px; text-transform:uppercase; letter-spacing:.03em; color:var(--dim); display:block; margin-bottom:4px; text-align:right; }
-  .lr-thr input { width:52px; text-align:right; font-weight:700; }
-  .lr-prog { display:flex; align-items:center; gap:9px; margin-bottom:7px; }
-  .lr-prog span { width:104px; flex:none; font-size:11.5px; font-weight:700; color:var(--dim); }
-  .lr-ptrack { flex:1; height:9px; border-radius:5px; background:var(--bg); border:1px solid var(--line); overflow:hidden; }
-  .lr-pfill { height:100%; background:var(--violet); }
-  .lr-note { font-size:11px; color:var(--dim); line-height:1.5; }
-  .lr-pill { display:inline-block; font-size:14px; font-weight:800; padding:6px 15px; border-radius:8px; margin-bottom:9px; }
-  .lr-pill.probable { background:rgba(46,204,113,.16); color:var(--up); }
-  .lr-pill.marginal { background:rgba(250,204,21,.18); color:var(--warn); }
-  .lr-pill.improbable { background:rgba(240,85,75,.16); color:var(--down); }
-  .lr-detail { font-size:12px; color:var(--dim); line-height:1.55; }
-  .lr-detail b { color:var(--text); }
-
-  .overlay { position:fixed; inset:0; background:rgba(0,0,0,.5); display:flex; align-items:center;
-    justify-content:center; padding:24px; z-index:50; }
-  .overlay[hidden] { display:none; }
-  .sheet { background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:20px;
-    max-width:780px; width:100%; max-height:90vh; overflow-y:auto; }
-  .sh-head { display:flex; align-items:center; gap:12px; margin-bottom:4px; }
-  .sh-logo { width:44px; height:44px; border-radius:11px; flex:none; display:flex; align-items:center; justify-content:center; color:#fff; font-weight:800; font-size:14px; position:relative; overflow:hidden; box-shadow:0 0 0 1px var(--line); }
-  .sh-logo img { position:absolute; inset:0; width:100%; height:100%; object-fit:contain; background:#fff; padding:5px; }
-  .sh-tk { font-size:19px; font-weight:800; line-height:1.1; } .sh-nm { font-size:12.5px; color:var(--dim); }
-  .sh-tags { display:flex; flex-wrap:wrap; gap:5px; margin:2px 0 8px; } .sh-tags span { font-size:10.5px; font-weight:700; padding:2px 8px; border-radius:99px; background:var(--bg); border:1px solid var(--line); color:var(--dim); }
-  .mc-bar { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:6px 0; }
-  .mc-seg { display:inline-flex; border:1px solid var(--line); border-radius:8px; overflow:hidden; background:var(--bg); }
-  .mc-seg button { font:600 11.5px "IBM Plex Sans",sans-serif; padding:5px 10px; border:0; background:transparent; color:var(--dim); cursor:pointer; }
-  .mc-seg button.on { background:var(--accent); color:#fff; }
-  #mc { height:330px; border:1px solid var(--line); border-radius:10px; overflow:hidden; }
-  #mc iframe { width:100%; height:100%; border:0; }
-  .mc-leg { display:flex; flex-wrap:wrap; gap:12px; font-size:11px; color:var(--dim); margin:5px 0 10px; } .mc-leg i { display:inline-block; width:12px; height:0; border-top:2px solid; vertical-align:middle; margin-right:5px; }
-  .btbox { border-top:1px solid var(--line); margin-top:6px; padding-top:14px; }
-  .btbox h4 { margin:0 0 2px; font-size:13.5px; } .btbox .bsub { font-size:11.5px; color:var(--dim); margin:0 0 10px; line-height:1.5; }
-  .bt-in { display:grid; grid-template-columns:repeat(4,1fr); gap:9px; margin-bottom:9px; }
-  @media (max-width:700px){ .bt-in { grid-template-columns:1fr 1fr; } }
-  .bt-in label { font-size:10px; text-transform:uppercase; letter-spacing:.03em; color:var(--dim); display:block; }
-  .bt-in input, .bt-reason { width:100%; margin-top:4px; padding:7px 9px; font:600 12.5px "IBM Plex Mono",monospace; color:var(--text); background:var(--bg); border:1px solid var(--line); border-radius:7px; }
-  .bt-reason { font:500 12.5px "IBM Plex Sans",sans-serif; max-width:420px; margin:6px 0 10px; }
-  .bt-hint { font-size:10.5px; color:var(--dim); text-transform:none; letter-spacing:0; font-weight:400; margin-top:3px; }
-  .bt-chips, .bt-rules { display:flex; flex-wrap:wrap; gap:6px; margin:5px 0 10px; }
-  .bt-chip { font-size:11.5px; font-weight:600; padding:4px 10px; border-radius:99px; border:1px solid var(--line); background:var(--bg); color:var(--dim); cursor:pointer; user-select:none; }
-  .bt-chip.on { background:var(--accent); border-color:var(--accent); color:#fff; }
-  .bt-rule { display:flex; align-items:center; gap:6px; font-size:12px; padding:6px 10px; border:1px solid var(--line); border-radius:8px; background:var(--bg); cursor:pointer; }
-  .bt-rule.on { border-color:var(--accent); background:rgba(37,99,235,.10); }
-  .bt-rule i { width:9px; height:9px; border-radius:50%; display:inline-block; }
-  .bt-rule small { font-size:9px; font-weight:800; color:var(--violet); background:rgba(124,58,237,.14); padding:1px 6px; border-radius:99px; }
-  #bt-chart { height:340px; margin:6px 0 16px; overflow:hidden; position:relative; }
-  .bt-tbl { width:100%; border-collapse:collapse; font-size:12px; }
-  .bt-tbl th { text-align:left; font-size:9.5px; color:var(--dim); text-transform:uppercase; padding:5px 7px; border-bottom:1px solid var(--line); white-space:nowrap; }
-  .bt-tbl td { padding:7px; border-bottom:1px solid var(--line); } .bt-tbl .r { text-align:right; }
-  .bt-tbl tr.res { cursor:pointer; } .bt-tbl tr.res:hover td, .bt-tbl tr.res.sel td { background:rgba(37,99,235,.10); } .bt-tbl tr.best td { background:rgba(46,204,113,.12); }
-  .bt-verdict { font-size:12px; color:var(--dim); line-height:1.55; border:1px dashed var(--line); border-radius:8px; padding:8px 11px; margin:9px 0; }
-  .sheet h3 { margin:0 0 2px; font-size:15px; }
-  .sheet .meta { font-size:11.5px; color:var(--dim); margin-bottom:14px; }
-  .frow { display:flex; flex-direction:column; gap:4px; margin-bottom:11px; }
-  .frow label { font-size:10px; text-transform:uppercase; letter-spacing:.03em; color:var(--dim); }
-  .frow select, .frow input, .frow textarea { width:100%; }
-  .ctx-grid { display:grid; grid-template-columns:1fr 1fr; gap:7px; margin-bottom:13px; }
-  .sheet-actions { display:flex; gap:8px; justify-content:space-between; align-items:center; flex-wrap:wrap; }
-  a.nlink { color:var(--accent); font-size:11.5px; text-decoration:none; }
-</style>
-</head>
-<body>
-<div class="wrap">
-  <div class="toprow">
-    <div>
-      <h1>Setups Database</h1>
-      <p class="sub">A curated pattern library: one deliberate entry at a time. Pick a setup, look up the name, set the buy date &mdash; the objective context for that date fills itself in.</p>
-    </div>
-    <div class="seg" id="country-seg">
-      <button class="active" data-c="US">&#127482;&#127480; US</button>
-      <button data-c="IN">&#127470;&#127475; India</button>
-    </div>
-  </div>
-  <div class="flow"><span class="d"></span>Setup folders &amp; entries live in Notion &mdash; TMLE score, market-environment score, sector/industry rank and % from 52-week high are read from the terminal's own history at the buy date, nothing typed.</div>
-
-  <div id="load-err" class="err" hidden></div>
-
-  <div class="tabs">
-    <button class="tab active" data-tab="log">Log a Setup</button>
-    <button class="tab" data-tab="browse">Browse &amp; Filter</button>
-    <button class="tab" data-tab="kpi">When It Works</button>
-  </div>
-
-  <!-- LOG -->
-  <div class="page active" id="page-log">
-    <div class="card">
-      <div class="card-desc">Folder first &mdash; same gallery as your Notion Setups Database.</div>
-      <div class="gallery" id="log-gallery"></div>
-      <div id="log-steps" hidden>
-        <div class="step done" id="ls1"><div class="snum">1</div><div style="flex:1">
-          <div class="slabel">Look up the ticker</div>
-          <div class="lookup"><input id="lookup-input" placeholder="Search a ticker&hellip;" autocomplete="off">
-            <div class="drop" id="lookup-drop"></div></div>
-          <div id="picked-wrap"></div>
-        </div></div>
-        <div class="step" id="ls2"><div class="snum">2</div><div style="flex:1">
-          <div class="slabel">Buy date &mdash; from the chart you're studying</div>
-          <input type="date" id="buy-date">
-        </div></div>
-        <div class="step" id="ls3"><div class="snum">3</div><div style="flex:1">
-          <div class="slabel">Context at that date &mdash; auto</div>
-          <div class="presets" id="presets"><div class="pv na">Pick a ticker and date&hellip;</div></div>
-        </div></div>
-        <div class="step" id="ls4"><div class="snum">4</div><div style="flex:1">
-          <div class="slabel">Exit rule</div>
-          <div class="exit-rules" id="exit-rules"></div>
-          <div class="newrule" id="newrule">
-            <input id="nr-name" placeholder="Rule name" style="flex:1;min-width:150px">
-            <button class="btn" id="nr-save" style="background:var(--violet)">Add</button>
-          </div>
-        </div></div>
-        <div class="step" id="ls5"><div class="snum">5</div><div style="flex:1">
-          <div class="slabel">Base length &amp; entry thesis</div>
-          <div style="margin-bottom:8px"><input type="number" id="base-len" placeholder="Base length (trading days)" style="max-width:230px"></div>
-          <textarea class="thesis" id="thesis" placeholder="Why is this a clean example?"></textarea>
-          <div style="margin-top:8px"><button class="btn" id="save-btn" disabled>Save to folder</button></div>
-          <div class="save-msg" id="save-msg" hidden></div>
-          <div id="log-chart-wrap" hidden style="margin-top:12px;max-width:660px">
-            <div class="slabel">Chart</div>
-            <div class="chart-box" id="log-chart"><div class="chart-empty">Paste the chart for this entry &mdash; it uploads straight to Notion.</div></div>
-            <div class="paste-zone" id="log-paste" tabindex="0">Paste a chart (Ctrl/Cmd+V) or click to choose an image</div>
-            <input type="file" id="log-file" accept="image/*" hidden>
-          </div>
-        </div></div>
-      </div>
-    </div>
-  </div>
-
-  <!-- BROWSE -->
-  <div class="page" id="page-browse">
-    <div class="card">
-      <div class="card-desc">Pick a folder, then filter on any field. A name logged several times shows one row per entry.</div>
-      <div class="gallery" id="browse-gallery"></div>
-      <div id="browse-body" hidden>
-        <div class="lookup" style="max-width:380px;margin-bottom:12px">
-          <input id="browse-search" placeholder="Search a stock in this folder&hellip;" autocomplete="off">
-          <div class="drop" id="browse-drop"></div>
-        </div>
-        <div class="filters" id="browse-filters"></div>
-        <div class="count-line" id="browse-count"></div>
-        <table><thead><tr>
-          <th>Ticker</th><th>Sector</th><th>Industry</th><th>Buy Date</th><th>TMLE</th>
-          <th>Mkt Env</th><th>Sec Rank</th><th>Ind Rank</th><th>Exit Rule</th>
-        </tr></thead><tbody id="browse-rows"></tbody></table>
-      </div>
-    </div>
-  </div>
-
-  <!-- KPI -->
-  <div class="page" id="page-kpi">
-    <div class="card">
-      <div class="card-title">Not "how did it do" &mdash; "when does it work"</div>
-      <div class="card-desc">Every entry is a name that already worked &mdash; you only log winners. So there's no win rate; what matters is where the winners <b>cluster</b>, and whether today's tape matches.</div>
-      <div class="gallery" id="kpi-gallery"></div>
-    </div>
-    <div id="kpi-body" hidden>
-      <div class="card lr">
-        <div class="lr-head">
-          <div><div class="card-title" style="margin-bottom:2px">Live read: probable to work right now?</div>
-            <div class="card-desc" style="margin-bottom:0">Auto-syncs to live market data once a folder crosses 50 logged winners.</div></div>
-          <div class="lr-thr"><label>Majority threshold</label><input type="number" id="lr-thr" value="50" min="1" max="99"></div>
-        </div>
-        <div id="lr-gate"><div class="lr-prog"><span id="lr-prog-lbl">0 / 50</span>
-          <div class="lr-ptrack"><div class="lr-pfill" id="lr-pfill"></div></div></div>
-          <div class="lr-note" id="lr-gate-note"></div></div>
-        <div id="lr-verdict" hidden>
-          <div class="lr-pill" id="lr-pill"></div>
-          <div class="lr-detail" id="lr-detail"></div>
-        </div>
-      </div>
-      <div class="cond-grid" id="cond-grid"></div>
-    </div>
-  </div>
-</div>
-
-<div class="overlay" id="overlay" hidden><div class="sheet" id="sheet"></div></div>
-
-<script>
-// Volume under a Lightweight chart: green/red bars in the bottom fifth plus the 30-day average line. Does nothing when there is no volume.
-function addVolume(chart, D, upCol, downCol, lineCol) {
-  if (!D || !D.volume || !D.volume.some(function (v) { return v != null; })) return;
-  chart.priceScale("right").applyOptions({ scaleMargins: { top: 0.06, bottom: 0.3 } });
-  var vs = chart.addHistogramSeries({ priceScaleId: "vol", priceFormat: { type: "volume" }, priceLineVisible: false, lastValueVisible: false });
-  chart.priceScale("vol").applyOptions({ scaleMargins: { top: 0.72, bottom: 0 } });
-  var run = 0, q = [], avg = [];
-  D.volume.forEach(function (v, i) { v = v || 0; q.push(v); run += v; if (q.length > 30) run -= q.shift(); avg.push(i >= 4 ? run / q.length : null); });
-  // One news-day spike would otherwise flatten every other bar to a hairline, so bars are capped at 3x the typical 30-day average.
-  var typ = avg.filter(function (x) { return x != null; }).sort(function (a, b) { return a - b; }), cap = 3 * (typ.length ? typ[Math.floor(typ.length / 2)] : 0) || Infinity;
-  vs.setData(D.dates.map(function (d, i) { return { time: d, value: Math.min(D.volume[i] || 0, cap), color: (D.close[i] >= (i ? D.close[i - 1] : D.open[i]) ? upCol : downCol) }; }));
-  var al = chart.addLineSeries({ priceScaleId: "vol", color: lineCol, lineWidth: 1.2, priceLineVisible: false, lastValueVisible: false, crosshairMarkerVisible: false });
-  al.setData(D.dates.map(function (d, i) { return avg[i] == null ? null : { time: d, value: Math.min(avg[i], cap) }; }).filter(Boolean));
-}
-
-var STATE = { country:"US", types:[], entries:[], envNow:{}, schema:{},
-  logSetup:null, browseSetup:null, kpiSetup:null, pick:null, exitRule:null };
-var EMOJI = { "VCP":0x1F4C9, "Cup Handle":0x2615, "Base Breakout":0x1F4C8,
-  "New High Breakout":0x1F680, "Launchpad + VCP":0x1F6F0, "Launchpad + Base":0x1F6F0,
-  "Basing":0x1F9F1, "MA Bounce":0x1F3D3, "Pyramid Add":0x1F53C, "New IPO":0x1F514 };
-function emoji(n){ return String.fromCodePoint(EMOJI[n] || 0x2728); }
-function esc(s){ var d=document.createElement("div"); d.textContent=(s==null?"":String(s)); return d.innerHTML; }
-function envFav(scoreStr){ if(!scoreStr) return null; var m=String(scoreStr).match(/(\d+)/); return m?+m[1]:null; }
-function fmtDate(d){ return d || "—"; }
-
-// ---- country + tabs ----
-document.querySelectorAll("#country-seg button").forEach(function(b){
-  b.onclick=function(){
-    document.querySelectorAll("#country-seg button").forEach(function(x){x.classList.remove("active");});
-    b.classList.add("active"); STATE.country=b.dataset.c;
-    STATE.logSetup=STATE.browseSetup=STATE.kpiSetup=STATE.pick=null;
-    renderAll();
-  };
-});
-document.querySelectorAll(".tab").forEach(function(t){
-  t.onclick=function(){
-    document.querySelectorAll(".tab").forEach(function(x){x.classList.remove("active");});
-    document.querySelectorAll(".page").forEach(function(x){x.classList.remove("active");});
-    t.classList.add("active"); document.getElementById("page-"+t.dataset.tab).classList.add("active");
-  };
-});
-
-// ---- gallery ----
-function countFor(name){
-  return STATE.entries.filter(function(e){ return e.setup===name && e.country===cc(); }).length;
-}
-function cc(){ return STATE.country==="US" ? "US" : "India"; }
-function renderGallery(elId, activeKey, onPick){
-  var el=document.getElementById(elId);
-  el.innerHTML = STATE.types.map(function(t){
-    var n=countFor(t.name);
-    return '<button class="fcard'+(STATE[activeKey]&&STATE[activeKey].name===t.name?' active':'')+'" data-id="'+esc(t.id)+'" data-nm="'+esc(t.name)+'">'
-      +'<span class="art">'+(t.cover?'<img src="'+esc(t.cover)+'" alt="" style="width:100%;height:100%;object-fit:cover;display:block"">':emoji(t.name))+'</span><span class="body"><span class="nm">'+esc(t.name)+'</span>'
-      +'<span class="ct">'+n+' logged</span></span></button>';
-  }).join("")
-  + '<button class="fcard newfolder" id="'+elId+'-new" style="border-style:dashed"><span class="art">+</span><span class="body"><span class="nm">New setup</span><span class="ct">create a folder</span></span></button>';
-  el.querySelectorAll(".art img").forEach(function(img){
-    img.onerror=function(){ var nm=img.closest(".fcard").dataset.nm; img.replaceWith(document.createTextNode(emoji(nm))); };
-  });
-  el.querySelectorAll(".fcard:not(.newfolder)").forEach(function(c){
-    c.onclick=function(){ onPick({ id:c.dataset.id, name:c.dataset.nm }); };
-  });
-  document.getElementById(elId+"-new").onclick=function(){
-    var name=(prompt("Name for the new setup (it becomes a folder in your Setups Database)")||"").trim();
-    if(!name) return;
-    fetch("/api/setups/type",{ method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({name:name}) })
-    .then(function(r){return r.json();}).then(function(res){
-      if(res.error){ alert(res.error); return; }
-      loadData().then(function(){ onPick({ id:res.id, name:res.name }); });
-    });
-  };
-}
-
-function pickLog(s){ STATE.logSetup=s; document.getElementById("log-steps").hidden=false;
-  renderGallery("log-gallery","logSetup",pickLog); }
-function pickBrowse(s){ STATE.browseSetup=s; document.getElementById("browse-body").hidden=false;
-  renderGallery("browse-gallery","browseSetup",pickBrowse);
-  document.getElementById("browse-filters").dataset.built=""; renderBrowse(); }
-function pickKpi(s){ STATE.kpiSetup=s; document.getElementById("kpi-body").hidden=false;
-  renderGallery("kpi-gallery","kpiSetup",pickKpi); renderKpi(); }
-function renderAll(){
-  document.querySelectorAll("#country-seg button").forEach(function(x){
-    x.classList.toggle("active", x.dataset.c===STATE.country); });
-  renderGallery("log-gallery","logSetup",pickLog);
-  renderGallery("browse-gallery","browseSetup",pickBrowse);
-  renderGallery("kpi-gallery","kpiSetup",pickKpi);
-  renderExitRules();
-  document.getElementById("log-steps").hidden = !STATE.logSetup;
-  if (STATE.browseSetup) { document.getElementById("browse-body").hidden=false;
-    document.getElementById("browse-filters").dataset.built=""; renderBrowse(); }
-  else document.getElementById("browse-body").hidden=true;
-  if (STATE.kpiSetup) { document.getElementById("kpi-body").hidden=false; renderKpi(); }
-  else document.getElementById("kpi-body").hidden=true;
-}
-
-// ---- LOG: ticker lookup ----
-var lookT=null;
-document.getElementById("lookup-input").addEventListener("input", function(e){
-  var q=e.target.value.trim(); clearTimeout(lookT);
-  if(q.length<1){ document.getElementById("lookup-drop").classList.remove("show"); return; }
-  lookT=setTimeout(function(){
-    fetch("/api/setups/lookup?country="+STATE.country+"&q="+encodeURIComponent(q))
-    .then(function(r){return r.json();}).then(function(hits){
-      var d=document.getElementById("lookup-drop");
-      if(!hits.length){ d.classList.remove("show"); return; }
-      d.innerHTML = hits.map(function(h){
-        return '<div class="hit" data-sy="'+esc(h.ticker)+'" data-se="'+esc(h.sector||"")+'" data-in="'+esc(h.industry||"")+'" data-lo="'+esc(h.logoid||"")+'">'
-          +'<span class="lg" style="background:'+barColor(h.ticker)+'">'+(h.logoid?'<img src="https://s3-symbol-logo.tradingview.com/'+esc(h.logoid)+'.svg">':esc(h.ticker.slice(0,2)))+'</span>'
-          +'<span style="flex:1"><span class="sy">'+esc(h.ticker)+'</span><br><span class="mt">'+esc(h.sector||"")+(h.industry?' · '+esc(h.industry):'')+'</span></span></div>';
-      }).join("");
-      d.classList.add("show");
-      d.querySelectorAll(".hit").forEach(function(row){
-        row.onclick=function(){
-          STATE.pick={ ticker:row.dataset.sy, sector:row.dataset.se, industry:row.dataset.in, logoid:row.dataset.lo };
-          document.getElementById("lookup-input").value=row.dataset.sy;
-          d.classList.remove("show");
-          document.getElementById("picked-wrap").innerHTML=
-            '<div class="picked"><span class="lg" style="background:'+barColor(row.dataset.sy)+'">'
-            +(row.dataset.lo?'<img src="https://s3-symbol-logo.tradingview.com/'+esc(row.dataset.lo)+'.svg">':esc(row.dataset.sy.slice(0,2)))
-            +'</span><span><span class="nm">'+esc(row.dataset.sy)+'</span><br><span class="mt">'+esc(row.dataset.se||"")+(row.dataset.in?' · '+esc(row.dataset.in):'')+'</span></span></div>';
-          document.getElementById("ls2").classList.add("done");
-          maybeContext();
-        };
-      });
-    });
-  }, 200);
-});
-function barColor(s){ var h=0; for(var i=0;i<s.length;i++) h=(h*31+s.charCodeAt(i))%360; return "hsl("+h+",42%,45%)"; }
-function logoImg(sym, logoid, px){
-  px = px||18;
-  var init = esc((sym||"").slice(0,2));
-  var inner = logoid ? '<img src="https://s3-symbol-logo.tradingview.com/'+esc(logoid)+'.svg" onerror="this.replaceWith(document.createTextNode(\''+init+'\'))">' : init;
-  return '<span class="tk-logo" style="width:'+px+'px;height:'+px+'px;background:'+barColor(sym||"")+'">'+inner+'</span>';
-}
-
-document.getElementById("buy-date").addEventListener("change", function(){
-  document.getElementById("ls2").classList.toggle("done", !!this.value);
-  maybeContext();
-});
-
-function maybeContext(){
-  var t=STATE.pick && STATE.pick.ticker, d=document.getElementById("buy-date").value;
-  if(!t||!d){ return; }
-  var box=document.getElementById("presets");
-  box.innerHTML='<div class="pv na">Reading history…</div>';
-  fetch("/api/setups/context?country="+STATE.country+"&ticker="+encodeURIComponent(t)+"&date="+d)
-  .then(function(r){return r.json();}).then(function(ctx){
-    if(ctx.error){ box.innerHTML='<div class="pv na">'+esc(ctx.error)+'</div>'; return; }
-    STATE.ctx=ctx;
-    function tile(k,v,na){ return '<div class="ptile"><div class="pk">'+k+'</div><div class="pv'+(na?' na':'')+'">'+v+'</div></div>'; }
-    var rows=[
-      tile("TMLE Score", ctx.tmleScore!=null?ctx.tmleScore:"n/a", ctx.tmleScore==null),
-      tile("Market Env", ctx.marketEnvScore||"n/a", !ctx.marketEnvScore),
-      tile("Env Label", ctx.marketEnvLabel||"n/a", !ctx.marketEnvLabel),
-      tile("Sector Rank", ctx.sectorRank!=null?(ctx.sectorRank+(ctx.sectorRankDelta1w!=null?' ('+(ctx.sectorRankDelta1w>=0?'+':'')+ctx.sectorRankDelta1w+' 1w)':'')):"n/a", ctx.sectorRank==null),
-      tile("Industry Rank", ctx.industryRank!=null?(ctx.industryRank+(ctx.industryRankDelta1w!=null?' ('+(ctx.industryRankDelta1w>=0?'+':'')+ctx.industryRankDelta1w+' 1w)':'')):"n/a", ctx.industryRank==null),
-      tile("% From 52w High", ctx.pctFrom52wHigh!=null?('-'+ctx.pctFrom52wHigh+'%'):"n/a", ctx.pctFrom52wHigh==null),
-      tile("Price history", ctx.daysSinceIpo!=null?(ctx.daysSinceIpo+" sessions"):"n/a", ctx.daysSinceIpo==null)
-    ];
-    box.innerHTML=rows.join("");
-    document.getElementById("ls3").classList.add("done");
-    document.getElementById("save-btn").disabled=false;
-  });
-}
-
-// ---- exit rules ----
-function exitRuleOptions(){
-  var o=(STATE.schema && STATE.schema["Exit Rule"]) || [];
-  return o.length ? o : ["2 closes below 20 EMA","3x ATR from 50 EMA"];
-}
-function renderExitRules(){
-  var el=document.getElementById("exit-rules"); if(!el) return;
-  var opts=exitRuleOptions();
-  el.innerHTML = opts.map(function(o){
-    return '<div class="erule'+(STATE.exitRule===o?' active':'')+'" data-r="'+esc(o)+'"><div class="en">'+esc(o)+'</div></div>';
-  }).join("") + '<button class="erule-add" id="erule-add">+ Define a new rule…</button>';
-  el.querySelectorAll(".erule").forEach(function(c){
-    c.onclick=function(){ STATE.exitRule=c.dataset.r; renderExitRules(); };
-  });
-  document.getElementById("erule-add").onclick=function(){ document.getElementById("newrule").classList.toggle("show"); };
-}
-document.getElementById("nr-save").onclick=function(){
-  var v=document.getElementById("nr-name").value.trim(); if(!v) return;
-  STATE.schema["Exit Rule"]=exitRuleOptions().concat([v]); STATE.exitRule=v;
-  document.getElementById("nr-name").value=""; document.getElementById("newrule").classList.remove("show");
-  renderExitRules();
-};
-
-// ---- save ----
-document.getElementById("save-btn").onclick=function(){
-  var btn=this, msg=document.getElementById("save-msg");
-  if(!STATE.logSetup||!STATE.pick){ return; }
-  btn.disabled=true; msg.hidden=false; msg.className="save-msg"; msg.textContent="Saving…";
-  fetch("/api/setups/create",{ method:"POST", headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({ setupId:STATE.logSetup.id, country:STATE.country, ticker:STATE.pick.ticker,
-      buyDate:document.getElementById("buy-date").value, exitRule:STATE.exitRule,
-      entryThesis:document.getElementById("thesis").value||null,
-      baseLengthDays:document.getElementById("base-len").value?+document.getElementById("base-len").value:null })
-  }).then(function(r){return r.json();}).then(function(res){
-    if(res.error){ msg.className="save-msg bad"; msg.textContent=res.error; btn.disabled=false; return; }
-    var sym=STATE.pick.ticker, folder=STATE.logSetup.name;
-    msg.className="save-msg ok"; msg.textContent=sym+" added to "+folder+". Add its chart below ↓";
-    document.getElementById("thesis").value=""; document.getElementById("base-len").value="";
-    document.getElementById("lookup-input").value=""; document.getElementById("picked-wrap").innerHTML="";
-    document.getElementById("buy-date").value=""; document.getElementById("presets").innerHTML='<div class="pv na">Pick a ticker and date…</div>';
-    STATE.pick=null; btn.disabled=true;
-    LOG_CHART_PAGE=res.pageId;
-    var w=document.getElementById("log-chart-wrap"); w.hidden=false;
-    document.getElementById("log-chart").innerHTML='<div class="chart-empty">Paste the chart for '+esc(sym)+' — it uploads straight to Notion.</div>';
-    loadData();
-  }).catch(function(e){ msg.className="save-msg bad"; msg.textContent=String(e); btn.disabled=false; });
-};
-
-// chart paste for the entry just saved (Log tab)
-var LOG_CHART_PAGE=null;
-function uploadLogChart(blob){
-  if(!blob||!LOG_CHART_PAGE) return;
-  var msg=document.getElementById("save-msg"); msg.hidden=false; msg.className="save-msg"; msg.textContent="Uploading chart…";
-  var reader=new FileReader();
-  reader.onload=function(){
-    fetch("/api/setups/chart",{ method:"POST", headers:{"Content-Type":"application/json"},
-      body:JSON.stringify({ pageId:LOG_CHART_PAGE, filename:(blob.name||"chart.png"),
-        contentType:blob.type||"image/png", dataB64:reader.result }) })
-    .then(function(r){return r.json();}).then(function(res){
-      if(res.error){ msg.className="save-msg bad"; msg.textContent=res.error; return; }
-      msg.className="save-msg ok"; msg.textContent="Chart uploaded.";
-      var lc=document.getElementById("log-chart"); lc.style.position="relative";
-      lc.innerHTML=(res.files||[]).map(function(f){
-        return '<a href="'+esc(f.url)+'" target="_blank"><img class="chart-img" src="'+esc(f.url)+'"></a>'; }).join("")
-        + '<button class="chart-del" id="log-chart-del" title="Remove chart">&times;</button>';
-      document.getElementById("log-chart-del").onclick=function(){
-        fetch("/api/setups/chart",{ method:"POST", headers:{"Content-Type":"application/json"},
-          body:JSON.stringify({ pageId:LOG_CHART_PAGE, clear:true }) })
-        .then(function(r){return r.json();}).then(function(){
-          lc.innerHTML='<div class="chart-empty">Paste the chart for this entry — it uploads straight to Notion.</div>';
-          loadData();
-        });
-      };
-      loadData();
-    }).catch(function(err){ msg.className="save-msg bad"; msg.textContent=String(err); });
-  };
-  reader.readAsDataURL(blob);
-}
-(function(){
-  var pz=document.getElementById("log-paste");
-  pz.onclick=function(){ document.getElementById("log-file").click(); };
-  document.getElementById("log-file").onchange=function(){ uploadLogChart(this.files[0]); };
-  function onPaste(ev){
-    var items=(ev.clipboardData||{}).items||[];
-    for(var i=0;i<items.length;i++){
-      if(items[i].type && items[i].type.indexOf("image")===0){ ev.preventDefault(); uploadLogChart(items[i].getAsFile()); return; }
-    }
-  }
-  pz.addEventListener("paste", onPaste);
-  document.getElementById("page-log").addEventListener("paste", function(ev){ if(LOG_CHART_PAGE) onPaste(ev); });
-})();
-
-// ---- BROWSE ----
-function browseEntries(){
-  return STATE.entries.filter(function(e){
-    return e.country===cc() && STATE.browseSetup && e.setup===STATE.browseSetup.name;
-  });
-}
-function uniqueVals(rows,key){ var s={}; rows.forEach(function(r){ if(r[key]) s[r[key]]=1; }); return Object.keys(s).sort(); }
-function renderBrowse(){
-  if(!STATE.browseSetup) return;
-  var rows=browseEntries();
-  var f=document.getElementById("browse-filters");
-  if(!f.dataset.built || f.dataset.setup!==STATE.browseSetup.name){
-    f.dataset.built="1"; f.dataset.setup=STATE.browseSetup.name;
-    f.innerHTML =
-      ffSel("f-sector","Sector",uniqueVals(rows,"sector")) +
-      ffSel("f-industry","Industry",uniqueVals(rows,"industry")) +
-      ffSel("f-env","Market Env",["bullish","choppy","bearish"]) +
-      ffSel("f-exit","Exit Rule",uniqueVals(rows,"exitRule")) +
-      '<div class="ff"><label>Min TMLE</label><input type="number" id="f-tmle" style="width:80px"></div>' +
-      '<div class="ff"><label>Sector rank rising</label><select id="f-trend"><option value="">Any</option><option value="up">Rising</option><option value="down">Falling</option></select></div>';
-    f.querySelectorAll("select,input").forEach(function(x){ x.oninput=drawBrowseRows; });
-  }
-  drawBrowseRows();
-}
-function ffSel(id,label,vals){
-  return '<div class="ff"><label>'+label+'</label><select id="'+id+'"><option value="">Any</option>'
-    + vals.map(function(v){ return '<option>'+esc(v)+'</option>'; }).join("") + '</select></div>';
-}
-function gv(id){ var e=document.getElementById(id); return e?e.value:""; }
-function drawBrowseRows(){
-  var rows=browseEntries();
-  var se=gv("f-sector"), ind=gv("f-industry"), env=gv("f-env"), ex=gv("f-exit"),
-      tmle=gv("f-tmle"), trend=gv("f-trend"), q=(gv("browse-search")||"").trim().toUpperCase();
-  rows=rows.filter(function(r){
-    if(se && r.sector!==se) return false;
-    if(ind && r.industry!==ind) return false;
-    if(env && r.marketEnvLabel!==env) return false;
-    if(ex && r.exitRule!==ex) return false;
-    if(tmle && (r.tmleScore==null || r.tmleScore<+tmle)) return false;
-    if(trend==="up" && !(r.sectorRankDelta1w>0)) return false;
-    if(trend==="down" && !(r.sectorRankDelta1w<0)) return false;
-    if(q && (r.ticker||"").toUpperCase().indexOf(q)<0) return false;
-    return true;
-  });
-  rows.sort(function(a,b){ return (b.buyDate||"").localeCompare(a.buyDate||""); });
-  document.getElementById("browse-count").textContent = rows.length+" "+(rows.length===1?"entry":"entries");
-  document.getElementById("browse-rows").innerHTML = rows.map(function(r,i){
-    return '<tr data-i="'+i+'"><td style="font-weight:700"><span class="tk-cell">'+logoImg(r.ticker,r.logoid,16)+esc(r.ticker)
-      +(r.chartCount?' <span title="has a chart" style="opacity:.55">&#128206;</span>':'')+'</span></td>'
-      +'<td>'+esc(r.sector||"—")+'</td><td>'+esc(r.industry||"—")+'</td>'
-      +'<td>'+fmtDate(r.buyDate)+'</td><td>'+(r.tmleScore!=null?r.tmleScore:"—")+'</td>'
-      +'<td>'+(r.marketEnvScore||"—")+(r.marketEnvLabel?' <span class="chip '+r.marketEnvLabel+'">'+r.marketEnvLabel[0].toUpperCase()+'</span>':'')+'</td>'
-      +'<td class="'+(r.sectorRankDelta1w>0?'up':(r.sectorRankDelta1w<0?'down':''))+'">'+(r.sectorRank!=null?r.sectorRank:"—")+'</td>'
-      +'<td>'+(r.industryRank!=null?r.industryRank:"—")+'</td><td style="color:var(--dim);font-size:11px">'+esc(r.exitRule||"—")+'</td></tr>';
-  }).join("") || '<tr><td colspan="9" style="text-align:center;color:var(--dim);padding:18px">No entries match.</td></tr>';
-  document.getElementById("browse-rows").querySelectorAll("tr[data-i]").forEach(function(tr){
-    tr.onclick=function(){ openSheet(rows[+tr.dataset.i]); };
-  });
-}
-var bsT=null;
-document.getElementById("browse-search").addEventListener("input", function(e){
-  var q=e.target.value.trim().toUpperCase(); clearTimeout(bsT);
-  var d=document.getElementById("browse-drop");
-  if(q.length<1){ d.classList.remove("show"); drawBrowseRows(); return; }
-  var matches=browseEntries().filter(function(r){ return (r.ticker||"").toUpperCase().indexOf(q)>=0; });
-  if(matches.length){
-    d.innerHTML=matches.slice(0,12).map(function(m){
-      return '<div class="hit"><span style="flex:1"><span class="sy">'+esc(m.ticker)+'</span> <span class="mt">'+fmtDate(m.buyDate)+' · '+esc(m.marketEnvScore||"")+'</span></span></div>';
-    }).join(""); d.classList.add("show");
-  } else d.classList.remove("show");
-  drawBrowseRows();
-});
-
-// ---- backtest calculator (inside the detail sheet) ----
-var BT_RULES = [
-  {k:"ema20x2", label:"2 closes below 20 EMA", color:"#2563eb"},
-  {k:"combo",   label:"2 closes < 20 or close < 50", color:"#8b5cf6"},
-  {k:"e10",     label:"Close below 10 EMA", color:"#f59e0b"},
-  {k:"e50",     label:"Close below 50 EMA", color:"#0891b2"},
-  {k:"trail",   label:"10% trailing stop", color:"#db2777"},
-  {k:"hold",    label:"Hold to latest close", color:"#64748b"}
-];
-var BT_REASONS = ["Below the base low","Below the 20 EMA","Below the 50 EMA","Fixed % risk","Prior swing low","Gap fill"];
-function btEma(a,n){ var k=2/(n+1), o=[]; a.forEach(function(v,i){ o.push(i? v*k+o[i-1]*(1-k) : v); }); return o; }
-function mountBacktest(e, patch){
-  var host=document.getElementById("s-bt");
-  host.innerHTML='<h4>Backtest this setup</h4><p class="bsub">Set your own entry and stop, say why, tick the exit rules to compare, and it replays '+esc(e.ticker)+' day by day from that entry to the latest close. Stops fill intraday (or at the open if it gapped); rules sell at the close that triggers them.</p><div class="bsub">Loading prices…</div>';
-  var code = e.country==="India" ? "IN" : "US";
-  Promise.all([
-    fetch("/api/setups/prices?country="+code+"&ticker="+encodeURIComponent(e.ticker)).then(function(r){return r.json();}),
-    fetch("/api/setups/stop?pageId="+encodeURIComponent(e.pageId)).then(function(r){return r.json();}).catch(function(){return {};})
-  ]).then(function(res){
-    var D=res[0], saved=res[1]||{};
-    if(D.error){ host.innerHTML='<h4>Backtest this setup</h4><p class="bsub">'+esc(D.error)+' — the backtest needs the ticker in the terminal\'s price history.</p>'; return; }
-    var N=D.dates.length, E10=btEma(D.close,10), E20=btEma(D.close,20), E50=btEma(D.close,50);
-    var fire={
-      ema20x2:function(i,i0){ return i-1>i0 && D.close[i]<E20[i] && D.close[i-1]<E20[i-1] && D.close[i]<D.close[i-1]; },
-      combo:function(i,i0){ return D.close[i]<E50[i] || (i-1>i0 && D.close[i]<E20[i] && D.close[i-1]<E20[i-1]); },
-      e10:function(i){ return D.close[i]<E10[i]; },
-      e50:function(i){ return D.close[i]<E50[i]; }
-    };
-    var logged=e.exitRule||"";
-    var on={}; BT_RULES.forEach(function(r){ on[r.k]=(r.label===logged)||r.k==="hold"||r.k==="ema20x2"; });
-    var reason=saved.reason||BT_REASONS[0], LAST=null, sel=null;
-    function idxFor(d){ for(var i=0;i<N;i++){ if(D.dates[i]>=d) return i; } return N-1; }
-    var startDate = saved.entryDate || e.buyDate || D.dates[N-1];
-    host.innerHTML='<h4>Backtest this setup</h4><p class="bsub">Set your own entry and stop, say why, tick the exit rules to compare, and it replays '+esc(e.ticker)+' day by day from that entry to the latest close. Stops fill intraday (or at the open if it gapped); rules sell at the close that triggers them.</p>'
-      +'<div class="bt-in">'
-      +'<label>Entry date<input id="bt-date" type="date"><div class="bt-hint" id="bt-dh"></div></label>'
-      +'<label>Entry price<input id="bt-entry" type="number" step="0.01"><div class="bt-hint">defaults to that day\'s close</div></label>'
-      +'<label>Stop price<input id="bt-stop" type="number" step="0.01"><div class="bt-hint" id="bt-sh"></div></label>'
-      +'<label>Stop % below entry<input id="bt-pct" type="number" step="0.1"><div class="bt-hint">either box works</div></label></div>'
-      +'<label style="font-size:10px;text-transform:uppercase;letter-spacing:.03em;color:var(--dim)">Why that stop?</label><div class="bt-chips" id="bt-chips"></div>'
-      +'<input class="bt-reason" id="bt-reason" placeholder="or write your own reason">'
-      +'<label style="font-size:10px;text-transform:uppercase;letter-spacing:.03em;color:var(--dim)">Exit rules to compare</label><div class="bt-rules" id="bt-rules"></div>'
-      +'<div id="bt-chart"></div>'
-      +'<div style="overflow-x:auto"><table class="bt-tbl" id="bt-res"></table></div><div class="bt-verdict" id="bt-verdict"></div>'
-      +'<div style="display:flex;gap:8px;flex-wrap:wrap"><button class="btn" id="bt-save-rule">Save best rule as Exit Rule</button><button class="btn sec" id="bt-save-stop">Save stop &amp; reason</button></div>'
-      +'<div class="save-msg" id="bt-msg" hidden></div>';
-    var $=function(id){ return document.getElementById(id); };
-    $("bt-date").value=startDate;
-    $("bt-reason").value=BT_REASONS.indexOf(reason)<0 ? reason : "";
-    $("bt-chips").innerHTML=BT_REASONS.map(function(r){ return '<span class="bt-chip'+(r===reason?' on':'')+'">'+esc(r)+'</span>'; }).join("");
-    $("bt-rules").innerHTML=BT_RULES.map(function(r){ return '<label class="bt-rule'+(on[r.k]?' on':'')+'" data-k="'+r.k+'"><input type="checkbox"'+(on[r.k]?' checked':'')+'><i style="background:'+r.color+'"></i>'+esc(r.label)+(r.label===logged?' <small>YOUR LOGGED RULE</small>':'')+'</label>'; }).join("");
-    function fromDate(keepStop){
-      var i=idxFor($("bt-date").value); $("bt-dh").textContent = D.dates[i]===$("bt-date").value ? "real session" : "nearest session: "+D.dates[i];
-      $("bt-entry").value = (saved.entryPrice && D.dates[i]===saved.entryDate && !keepStop ? saved.entryPrice : D.close[i]).toFixed(2);
-      if(saved.stop && !keepStop){ $("bt-stop").value=(+saved.stop).toFixed(2); $("bt-pct").value=((1-saved.stop/+$("bt-entry").value)*100).toFixed(1); }
-      else { var p=+$("bt-pct").value||8; $("bt-pct").value=p.toFixed(1); $("bt-stop").value=(+$("bt-entry").value*(1-p/100)).toFixed(2); }
-    }
-    function simulate(rule,i0,entry,stop){
-      var peak=entry, top=entry;
-      for(var i=i0+1;i<N;i++){
-        if(stop && D.low[i]<=stop) return {i:i, px:Math.min(stop,D.open[i]), kind:"stop", peak:top};
-        top=Math.max(top,D.high[i]);
-        if(rule.k==="trail"){ peak=Math.max(peak,D.high[i]); var lv=peak*0.9; if(D.low[i]<=lv) return {i:i, px:Math.min(lv,D.open[i]), kind:"rule", peak:top}; }
-        else if(fire[rule.k] && fire[rule.k](i,i0)) return {i:i, px:D.close[i], kind:"rule", peak:top};
-      }
-      return {i:N-1, px:D.close[N-1], kind:"hold", peak:top};
-    }
-    var cs=getComputedStyle(document.documentElement), css=function(n){ return cs.getPropertyValue(n).trim(); };
-    var chart=null, cSeries=null, l20=null, lines=[];
-    if(window.LightweightCharts){
-      chart=LightweightCharts.createChart($("bt-chart"),{width:$("bt-chart").clientWidth,height:340,
-        layout:{background:{color:"transparent"},textColor:css("--dim"),fontSize:10},grid:{vertLines:{color:css("--line")},horzLines:{color:css("--line")}},
-        rightPriceScale:{borderColor:css("--line")},timeScale:{borderColor:css("--line")},crosshair:{mode:0}});
-      cSeries=chart.addCandlestickSeries({upColor:css("--up"),downColor:css("--down"),borderUpColor:css("--up"),borderDownColor:css("--down"),wickUpColor:css("--up"),wickDownColor:css("--down")});
-      cSeries.setData(D.dates.map(function(d,i){ return {time:d,open:D.open[i],high:D.high[i],low:D.low[i],close:D.close[i]}; }));
-      addVolume(chart, D, css("--up"), css("--down"), "#f59e0b");
-      l20=chart.addLineSeries({color:"#8b5cf6",lineWidth:1.3,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false});
-      l20.setData(D.dates.map(function(d,i){ return {time:d,value:E20[i]}; }));
-      // Follow the box: if the sheet had no width yet when the chart was built, or the window is resized, fit the chart to it.
-      if(window.ResizeObserver) new ResizeObserver(function(){ var w=$("bt-chart").clientWidth; if(w>0) chart.applyOptions({width:w}); }).observe($("bt-chart"));
-    }
-    function run(){
-      var i0=idxFor($("bt-date").value), entry=+$("bt-entry").value, stop=+$("bt-stop").value||null;
-      if(!entry) return;
-      $("bt-sh").textContent = stop ? "risk $"+(entry-stop).toFixed(2)+" ("+((entry-stop)/entry*100).toFixed(1)+"%)" : "no stop: rules only";
-      var rows=BT_RULES.filter(function(r){ return on[r.k]; }).map(function(r){
-        var s=simulate(r,i0,entry,stop); return {r:r,s:s,pct:s.px/entry-1,days:s.i-i0,mfe:s.peak/entry-1};
-      }).sort(function(a,b){ return b.pct-a.pct; });
-      LAST={rows:rows,i0:i0};
-      if(chart){
-        lines.forEach(function(l){ cSeries.removePriceLine(l); }); lines=[];
-        lines.push(cSeries.createPriceLine({price:entry,color:css("--accent"),lineWidth:1,lineStyle:2,title:"entry"}));
-        if(stop) lines.push(cSeries.createPriceLine({price:stop,color:css("--down"),lineWidth:1,lineStyle:2,title:"stop"}));
-        var marks=[{time:D.dates[i0],position:"belowBar",color:css("--accent"),shape:"arrowUp",text:"in"}];
-        rows.forEach(function(x){ marks.push({time:D.dates[x.s.i],position:"aboveBar",color:x.r.color,shape:"arrowDown",text:x.s.kind==="stop"?"S":x.r.k==="hold"?"H":x.r.label.charAt(0)}); });
-        marks.sort(function(a,b){ return a.time<b.time?-1:a.time>b.time?1:0; });
-        cSeries.setMarkers(marks);
-        chart.timeScale().setVisibleRange({from:D.dates[Math.max(0,i0-25)],to:D.dates[N-1]});
-      }
-      var f=function(v){ return (v>=0?"+":"")+(v*100).toFixed(1)+"%"; };
-      if(!rows.length){ $("bt-res").innerHTML=""; $("bt-verdict").textContent="Tick at least one exit rule."; return; }
-      $("bt-res").innerHTML='<thead><tr><th>Exit rule</th><th>Exit date</th><th class="r">Price</th><th class="r">P&amp;L</th><th class="r">$/share</th><th class="r">Days</th><th class="r">Peak</th><th class="r">Kept</th><th>Ended by</th></tr></thead><tbody>'
-        +rows.map(function(x,ix){ var up=x.pct>=0;
-          return '<tr class="res'+(ix===0?' best':'')+'" data-k="'+x.r.k+'"><td><i style="display:inline-block;width:8px;height:8px;border-radius:50%;background:'+x.r.color+';margin-right:6px"></i><b>'+esc(x.r.label)+'</b></td><td>'+D.dates[x.s.i]+'</td><td class="r">$'+x.s.px.toFixed(2)+'</td>'
-            +'<td class="r" style="font-weight:700;color:var(--'+(up?'up':'down')+')">'+f(x.pct)+'</td><td class="r" style="color:var(--'+(up?'up':'down')+')">'+(x.s.px-entry>=0?"+":"")+(x.s.px-entry).toFixed(2)+'</td><td class="r">'+x.days+'</td><td class="r" style="color:var(--up)">'+f(x.mfe)+'</td>'
-            +'<td class="r">'+(x.mfe>0.005&&x.pct>0?Math.round(x.pct/x.mfe*100)+"%":"—")+'</td><td>'+(x.s.kind==="stop"?"stop":x.s.kind==="hold"?"still holding":"rule")+'</td></tr>'; }).join("")+'</tbody>';
-      var best=rows[0], lg=rows.filter(function(x){ return x.r.label===logged; })[0], stopped=rows.filter(function(x){ return x.s.kind==="stop"; }).length;
-      $("bt-verdict").innerHTML='<b>'+esc(best.r.label)+'</b> is best: '+f(best.pct)+' ('+best.days+' days).'
-        +(lg && lg!==best ? ' Your logged rule gives '+f(lg.pct)+', '+((best.pct-lg.pct)*100).toFixed(1)+' points less.' : lg ? ' That is the rule you logged.' : '')
-        +(stopped ? ' '+stopped+' of '+rows.length+' runs ended at your stop before any rule fired.' : '');
-      LAST.best=best;
-    }
-    $("bt-res").onclick=function(ev){ var tr=ev.target.closest("tr.res"); if(!tr||!LAST||!chart) return;
-      Array.prototype.forEach.call(document.querySelectorAll("#bt-res tr.res"),function(x){ x.classList.remove("sel"); }); tr.classList.add("sel");
-      var x=LAST.rows.filter(function(r){ return r.r.k===tr.dataset.k; })[0];
-      chart.timeScale().setVisibleRange({from:D.dates[Math.max(0,LAST.i0-10)],to:D.dates[Math.min(N-1,x.s.i+25)]}); };
-    $("bt-date").onchange=function(){ fromDate(true); run(); };
-    $("bt-entry").oninput=function(){ var p=+$("bt-pct").value||8; $("bt-stop").value=(+$("bt-entry").value*(1-p/100)).toFixed(2); run(); };
-    $("bt-pct").oninput=function(){ $("bt-stop").value=(+$("bt-entry").value*(1-+$("bt-pct").value/100)).toFixed(2); run(); };
-    $("bt-stop").oninput=function(){ var en=+$("bt-entry").value; $("bt-pct").value=((1-+$("bt-stop").value/en)*100).toFixed(1); run(); };
-    $("bt-reason").oninput=function(){ reason=this.value; Array.prototype.forEach.call(document.querySelectorAll(".bt-chip"),function(c){ c.classList.remove("on"); }); };
-    $("bt-chips").onclick=function(ev){ var c=ev.target.closest(".bt-chip"); if(!c) return; reason=c.textContent; $("bt-reason").value=""; Array.prototype.forEach.call(document.querySelectorAll(".bt-chip"),function(x){ x.classList.toggle("on",x===c); }); };
-    $("bt-rules").onchange=function(ev){ var l=ev.target.closest(".bt-rule"); on[l.dataset.k]=ev.target.checked; l.classList.toggle("on",ev.target.checked); run(); };
-    function say(t,bad){ var m=$("bt-msg"); m.hidden=false; m.className="save-msg "+(bad?"bad":"ok"); m.textContent=t; }
-    $("bt-save-rule").onclick=function(){ if(!LAST||!LAST.best){ say("Nothing to save yet.",true); return; }
-      var name=LAST.best.r.label; patch({exitRule:name}); var sel2=$("s-exit"); if(sel2){ if(!Array.prototype.some.call(sel2.options,function(o){ return o.value===name; })){ var o=document.createElement("option"); o.textContent=name; sel2.appendChild(o); } sel2.value=name; } };
-    $("bt-save-stop").onclick=function(){
-      fetch("/api/setups/stop",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({pageId:e.pageId,stop:+$("bt-stop").value||null,reason:reason,entryDate:$("bt-date").value,entryPrice:+$("bt-entry").value||null})})
-        .then(function(r){return r.json();}).then(function(r){ r.error ? say(r.error,true) : say("Stop and reason saved on this machine."); });
-    };
-    fromDate(false); run();
-  }).catch(function(){ host.innerHTML='<h4>Backtest this setup</h4><p class="bsub">Could not load prices.</p>'; });
-}
-
-// ---- detail sheet header chart ----
-function hueOf(s){ var h=0; for(var i=0;i<(s||"").length;i++) h=(h*31+s.charCodeAt(i))%360; return "hsl("+h+",42%,45%)"; }
-var MC = { chart:null };
-function mountMainChart(e){
-  var code = e.country==="India" ? "IN" : "US", box=document.getElementById("mc");
-  if(MC.chart){ try{ MC.chart.remove(); }catch(x){} MC.chart=null; }
-  Promise.all([
-    fetch("/api/setups/info?country="+code+"&ticker="+encodeURIComponent(e.ticker)).then(function(r){return r.json();}).catch(function(){return {};}),
-    fetch("/api/setups/prices?country="+code+"&ticker="+encodeURIComponent(e.ticker)).then(function(r){return r.json();}),
-    fetch("/api/setups/stop?pageId="+encodeURIComponent(e.pageId)).then(function(r){return r.json();}).catch(function(){return {};})
-  ]).then(function(res){
-    var I=res[0]||{}, D=res[1], S=res[2]||{};
-    if(I.name) document.getElementById("sh-nm").textContent=I.name;
-    if(I.mcap){ var m=document.getElementById("sh-mc"); m.hidden=false; m.textContent="mkt cap "+(I.mcap>=1e12?(I.mcap/1e12).toFixed(2)+"T":(I.mcap/1e9).toFixed(1)+"B"); }
-    var tvSym = I.tv || e.ticker;
-    document.getElementById("sh-tv").href="https://www.tradingview.com/chart/?symbol="+encodeURIComponent(tvSym);
-    if(D.error){ box.innerHTML='<div class="chart-empty" style="padding:20px">'+esc(D.error)+'</div>'; return; }
-    var N=D.dates.length, cs=getComputedStyle(document.documentElement), css=function(n){ return cs.getPropertyValue(n).trim(); };
-    function ema(a,n){ var k=2/(n+1), o=[]; a.forEach(function(v,i){ o.push(i? v*k+o[i-1]*(1-k) : v); }); return o; }
-    var view="t", tf="buy";
-    function idxFor(d){ for(var i=0;i<N;i++){ if(D.dates[i]>=d) return i; } return N-1; }
-    function drawTerminal(){
-      box.innerHTML="";
-      var chart=LightweightCharts.createChart(box,{width:box.clientWidth,height:400,
-        layout:{background:{color:"transparent"},textColor:css("--dim"),fontSize:10},grid:{vertLines:{color:css("--line")},horzLines:{color:css("--line")}},
-        rightPriceScale:{borderColor:css("--line")},timeScale:{borderColor:css("--line")},crosshair:{mode:0}});
-      MC.chart=chart;
-      var c=chart.addCandlestickSeries({upColor:css("--up"),downColor:css("--down"),borderUpColor:css("--up"),borderDownColor:css("--down"),wickUpColor:css("--up"),wickDownColor:css("--down")});
-      c.setData(D.dates.map(function(d,i){ return {time:d,open:D.open[i],high:D.high[i],low:D.low[i],close:D.close[i]}; }));
-      addVolume(chart, D, css("--up"), css("--down"), "#f59e0b");
-      [["#f0b429",10],["#8b5cf6",20],["#38bdf8",50]].forEach(function(p){
-        var l=chart.addLineSeries({color:p[0],lineWidth:1.3,priceLineVisible:false,lastValueVisible:false,crosshairMarkerVisible:false}), v=ema(D.close,p[1]);
-        l.setData(D.dates.map(function(d,i){ return {time:d,value:v[i]}; })); });
-      var bi=e.buyDate?idxFor(e.buyDate):null;
-      if(bi!=null){
-        var entry=S.entryPrice||D.close[bi];
-        c.createPriceLine({price:entry,color:"#2563eb",lineWidth:1,lineStyle:2,title:"entry"});
-        if(S.stop) c.createPriceLine({price:+S.stop,color:"#dc2626",lineWidth:1,lineStyle:2,title:"stop"});
-        c.setMarkers([{time:D.dates[bi],position:"belowBar",color:"#2563eb",shape:"arrowUp",text:"buy"}]);
-      }
-      var last=N-1, bars={"1M":22,"3M":63,"6M":126,"1Y":252,"2Y":504}[tf];
-      var from = tf==="all" ? 0 : tf==="buy" ? Math.max(0,(bi!=null?bi:last-126)-25) : Math.max(0,last-bars);
-      chart.timeScale().setVisibleRange({from:D.dates[from],to:D.dates[last]});
-      new ResizeObserver(function(en){ if(MC.chart===chart) chart.applyOptions({width:en[0].contentRect.width}); }).observe(box);
-    }
-    function drawTV(){
-      if(MC.chart){ try{ MC.chart.remove(); }catch(x){} MC.chart=null; }
-      TVE.mount(box, tvOk, 430);   // candles + volume + EMA 10/20/50, the same chart everywhere
-    }
-    function drawStd(){
-      if(MC.chart){ try{ MC.chart.remove(); }catch(x){} MC.chart=null; }
-      var bi=e.buyDate?idxFor(e.buyDate):null, entry=S.entryPrice||(bi!=null?D.close[bi]:null), lines=[];
-      if(S.stop) lines.push({p:+S.stop,color:"#dc2626",title:"stop"});
-      TVE.mountStd(box,{t:e.ticker,name:I.name||e.ticker,d:D.dates,o:D.open,h:D.high,l:D.low,c:D.close,v:D.volume||null,
-        logoUrl:e.logoid?"/api/logo/"+encodeURIComponent(e.logoid):"",entryDate:bi!=null?e.buyDate:undefined,lines:lines,
-        trades:(bi!=null&&entry)?[{d:e.buyDate,a:"Buy",p:entry}]:[]},{ht:400,tf:bi!=null?"Trade":"6M"});
-    }
-    var tfs=[["buy","Since buy"],["1M","1M"],["3M","3M"],["6M","6M"],["1Y","1Y"],["2Y","2Y"],["all","All"]];
-    var bar=document.getElementById("mc-tf");
-    function drawBar(){ bar.innerHTML=tfs.map(function(t){ return '<button data-t="'+t[0]+'"'+(t[0]===tf?' class="on"':'')+'>'+t[1]+'</button>'; }).join(""); bar.style.display=view==="t"?"":"none"; }
-    function redraw(){ view==="t" ? drawTerminal() : view==="tv" ? drawTV() : drawStd(); }
-    bar.onclick=function(ev){ var b=ev.target.closest("button"); if(!b) return; tf=b.dataset.t; drawBar(); drawTerminal(); };
-    document.getElementById("mc-view").onclick=function(ev){ var b=ev.target.closest("button"); if(!b||b.disabled) return; view=b.dataset.v;
-      if(window.TVE) TVE.setEngine(view==="tv"?"tv":view==="s"?"std":"terminal", box.clientWidth);
-      Array.prototype.forEach.call(document.querySelectorAll("#mc-view button"),function(x){ x.classList.toggle("on",x===b); });
-      drawBar(); redraw(); };
-    // TradingView is the default chart. NSE data cannot be embedded, so India entries stay on the Terminal chart.
-    var tvOk = window.TVE ? TVE.stockSymbol(e.ticker, code, I.tv) : null;
-    var tvBtn = document.querySelector('#mc-view [data-v="tv"]');
-    if(!tvOk){ tvBtn.disabled=true; tvBtn.title="TradingView does not allow NSE data in embedded charts"; }
-    var eng = window.TVE ? TVE.engine(box.clientWidth) : "terminal";
-    if(eng==="tv" && !tvOk) eng = "std";
-    view = eng==="tv" ? "tv" : eng==="std" ? "s" : "t";
-    Array.prototype.forEach.call(document.querySelectorAll("#mc-view button"),function(x){ x.classList.toggle("on",x.dataset.v===view); });
-    drawBar(); redraw();
-  }).catch(function(){ box.innerHTML='<div class="chart-empty" style="padding:20px">Could not load the chart.</div>'; });
-}
-
-// ---- detail sheet ----
-function openSheet(e){
-  var opts=exitRuleOptions();
-  document.getElementById("sheet").innerHTML =
-    '<div class="sh-head"><span class="sh-logo" style="background:'+hueOf(e.ticker)+'">'+esc((e.ticker||"").slice(0,2))
-      +(e.logoid?'<img src="/api/logo/'+encodeURIComponent(e.logoid)+'" alt="" onerror="this.remove()">':'')+'</span>'
-      +'<div style="flex:1;min-width:0"><div class="sh-tk" id="sh-tk">'+esc(e.ticker)+'</div><div class="sh-nm" id="sh-nm">&nbsp;</div></div>'
-      +'<a class="nlink" id="sh-tv" href="https://www.tradingview.com/chart/?symbol='+encodeURIComponent(e.ticker)+'" target="_blank" rel="noopener">Open in TradingView ↗</a></div>'
-    +'<div class="sh-tags"><span>'+esc(e.setup||"")+'</span><span>bought '+fmtDate(e.buyDate)+'</span><span>'+esc(e.country||"")+'</span>'
-      +(e.sector?'<span>'+esc(e.sector)+'</span>':'')+(e.industry?'<span>'+esc(e.industry)+'</span>':'')+'<span id="sh-mc" hidden></span></div>'
-    +'<div class="mc-bar"><div class="mc-seg" id="mc-tf"></div><div class="mc-seg" id="mc-view"><button data-v="s">Chart</button><button data-v="t">Terminal chart</button><button data-v="tv">TradingView</button></div></div>'
-    +'<div id="mc"></div>'
-    +'<div class="mc-leg"><span><i style="border-color:#f0b429"></i>EMA 10</span><span><i style="border-color:#8b5cf6"></i>EMA 20</span><span><i style="border-color:#38bdf8"></i>EMA 50</span><span><i style="border-color:#2563eb"></i>entry</span><span><i style="border-color:#dc2626"></i>stop</span></div>'
-    +'<div class="meta" style="margin:8px 0 4px">Your annotated chart</div>'
-    +'<div class="chart-box" id="s-chart"><div class="chart-loading">Loading chart…</div></div>'
-    +'<div class="paste-zone" id="s-paste" tabindex="0">Paste a chart (Ctrl/Cmd+V) or click to choose an image</div>'
-    +'<input type="file" id="s-file" accept="image/*" hidden>'
-    +'<div class="ctx-grid">'
-      +ctxTile("TMLE",e.tmleScore) + ctxTile("Mkt Env",e.marketEnvScore) + ctxTile("Env label",e.marketEnvLabel)
-      +ctxTile("Sector rank",e.sectorRank) + ctxTile("Industry rank",e.industryRank)
-      +ctxTile("% from 52w high", e.pctFrom52wHigh!=null?('-'+e.pctFrom52wHigh+'%'):null)
-    +'</div>'
-    +'<div class="frow"><label>Setup folder</label><select id="s-setup">'
-      + STATE.types.map(function(t){ return '<option value="'+esc(t.id)+'"'+(t.name===e.setup?' selected':'')+'>'+esc(t.name)+'</option>'; }).join("")
-      +'</select></div>'
-    +'<div class="frow"><label>Exit rule</label><select id="s-exit"><option value="">—</option>'
-      + opts.map(function(o){ return '<option'+(o===e.exitRule?' selected':'')+'>'+esc(o)+'</option>'; }).join("")+'</select></div>'
-    +'<div class="frow"><label>Base length (days)</label><input type="number" id="s-base" value="'+(e.baseLengthDays!=null?e.baseLengthDays:'')+'"></div>'
-    +'<div class="frow"><label>Entry thesis</label><textarea id="s-thesis" style="min-height:70px">'+esc(e.entryThesis||"")+'</textarea></div>'
-    +'<div class="btbox" id="s-bt"></div>'
-    +'<div class="sheet-actions">'
-      +'<a class="nlink" href="'+esc(e.notionUrl||"#")+'" target="_blank">Open in Notion ↗</a>'
-      +'<span><button class="btn sec" id="s-resync">Re-sync context</button> <button class="btn" id="s-close">Done</button></span>'
-    +'</div><div class="save-msg" id="s-msg" hidden></div>';
-  document.getElementById("overlay").hidden=false;
-  function patch(fields, resync){
-    var msg=document.getElementById("s-msg"); msg.hidden=false; msg.className="save-msg"; msg.textContent="Saving…";
-    var body={ pageId:e.pageId, fields:fields };
-    if(resync){ body.resync=true; body.entry={ country:e.country==="India"?"India":"US", ticker:e.ticker, buyDate:e.buyDate }; }
-    fetch("/api/setups/update",{ method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(body) })
-    .then(function(r){return r.json();}).then(function(res){
-      if(res.error){ msg.className="save-msg bad"; msg.textContent=res.error; return; }
-      msg.className="save-msg ok"; msg.textContent="Saved."; loadData();
-    });
-  }
-  document.getElementById("s-setup").onchange=function(){ patch({ setupId:this.value }); };
-  document.getElementById("s-exit").onchange=function(){ patch({ exitRule:this.value||null }); };
-  document.getElementById("s-base").onblur=function(){ patch({ baseLengthDays:this.value?+this.value:null }); };
-  document.getElementById("s-thesis").onblur=function(){ patch({ entryThesis:this.value||null }); };
-  document.getElementById("s-resync").onclick=function(){ patch({ entryThesis:document.getElementById("s-thesis").value||null }, true); };
-  document.getElementById("s-close").onclick=function(){ document.getElementById("overlay").hidden=true; };
-  mountBacktest(e, patch);
-  mountMainChart(e);
-
-  // ---- chart: load, then paste / pick to upload ----
-  function renderCharts(files){
-    var box=document.getElementById("s-chart");
-    if(!files || !files.length){ box.innerHTML='<div class="chart-empty">No chart yet — paste one below. It uploads to this entry in Notion.</div>'; return; }
-    box.innerHTML = files.map(function(f){ return '<a href="'+esc(f.url)+'" target="_blank"><img class="chart-img" src="'+esc(f.url)+'"></a>'; }).join("")
-      + '<button class="chart-del" title="Remove chart" id="s-chart-del">&times;</button>';
-    box.style.position="relative";
-    document.getElementById("s-chart-del").onclick=function(){
-      if(!confirm("Remove this chart from the entry in Notion?")) return;
-      var msg=document.getElementById("s-msg"); msg.hidden=false; msg.className="save-msg"; msg.textContent="Removing…";
-      fetch("/api/setups/chart",{ method:"POST", headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({ pageId:e.pageId, clear:true }) })
-      .then(function(r){return r.json();}).then(function(res){
-        if(res.error){ msg.className="save-msg bad"; msg.textContent=res.error; return; }
-        msg.className="save-msg ok"; msg.textContent="Chart removed."; renderCharts([]); loadData();
-      });
-    };
-  }
-  fetch("/api/setups/chart?pageId="+encodeURIComponent(e.pageId)).then(function(r){return r.json();})
-    .then(function(files){ renderCharts(files.error?[]:files); })
-    .catch(function(){ renderCharts([]); });
-
-  function uploadBlob(blob){
-    if(!blob){ return; }
-    var msg=document.getElementById("s-msg"); msg.hidden=false; msg.className="save-msg"; msg.textContent="Uploading chart…";
-    var reader=new FileReader();
-    reader.onload=function(){
-      fetch("/api/setups/chart",{ method:"POST", headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({ pageId:e.pageId, filename:(blob.name||"chart.png"),
-          contentType:blob.type||"image/png", dataB64:reader.result }) })
-      .then(function(r){return r.json();}).then(function(res){
-        if(res.error){ msg.className="save-msg bad"; msg.textContent=res.error; return; }
-        msg.className="save-msg ok"; msg.textContent="Chart uploaded."; renderCharts(res.files); loadData();
-      }).catch(function(err){ msg.className="save-msg bad"; msg.textContent=String(err); });
-    };
-    reader.readAsDataURL(blob);
-  }
-  var pz=document.getElementById("s-paste");
-  pz.onclick=function(){ document.getElementById("s-file").click(); };
-  document.getElementById("s-file").onchange=function(){ uploadBlob(this.files[0]); };
-  pz.addEventListener("paste", onPaste);
-  document.getElementById("sheet").addEventListener("paste", onPaste);
-  function onPaste(ev){
-    var items=(ev.clipboardData||{}).items||[];
-    for(var i=0;i<items.length;i++){
-      if(items[i].type && items[i].type.indexOf("image")===0){ ev.preventDefault(); uploadBlob(items[i].getAsFile()); return; }
-    }
-  }
-}
-function ctxTile(k,v){ return '<div class="ptile"><div class="pk">'+k+'</div><div class="pv'+(v==null||v===""?' na':'')+'">'+esc(v==null||v===""?"n/a":v)+'</div></div>'; }
-document.getElementById("overlay").onclick=function(e){ if(e.target.id==="overlay") e.target.hidden=true; };
-document.addEventListener("keydown", function(e){
-  if(e.key==="Escape" && !document.getElementById("overlay").hidden) document.getElementById("overlay").hidden=true;
-});
-
-// ---- KPI ----
-function kpiEntries(){
-  return STATE.entries.filter(function(e){
-    return e.country===cc() && STATE.kpiSetup && e.setup===STATE.kpiSetup.name;
-  });
-}
-function bucketRows(elBuckets){
-  var total=elBuckets.reduce(function(s,b){ return s+b.n; },0)||1;
-  return elBuckets.map(function(b){
-    var pct=Math.round(b.n/total*100);
-    return '<div class="brow"><div class="blabel">'+esc(b.label)+(b.today?'<span class="today-tag">TODAY</span>':'')+'</div>'
-      +'<div class="btrack"><div class="bfill" style="width:'+pct+'%"></div></div>'
-      +'<div class="bstat"><b>'+pct+'%</b> · n='+b.n+'</div></div>';
-  }).join("");
-}
-function groupBy(rows, fn, order){
-  var m={}; rows.forEach(function(r){ var k=fn(r); if(k==null) return; m[k]=(m[k]||0)+1; });
-  var keys = order || Object.keys(m).sort(function(a,b){ return m[b]-m[a]; });
-  return keys.filter(function(k){ return m[k]; }).map(function(k){ return { label:k, n:m[k] }; });
-}
-function renderKpi(){
-  if(!STATE.kpiSetup) return;
-  var rows=kpiEntries(), n=rows.length;
-  var env=STATE.envNow[STATE.country]||{}, todayFav=env.favourable, todayTotal=env.total;
-  var thr=+document.getElementById("lr-thr").value||50;
-
-  // live read
-  var gate=document.getElementById("lr-gate"), verdict=document.getElementById("lr-verdict");
-  if(n<50){
-    gate.hidden=false; verdict.hidden=true;
-    document.getElementById("lr-prog-lbl").textContent=n+" / 50";
-    document.getElementById("lr-pfill").style.width=Math.round(n/50*100)+"%";
-    document.getElementById("lr-gate-note").textContent=
-      "Not enough sample yet — auto-sync to live market data arms at 50 logged winners in this folder.";
-  } else {
-    gate.hidden=true; verdict.hidden=false;
-    var atOr = rows.filter(function(r){ var f=envFav(r.marketEnvScore); return f!=null && todayFav!=null && f>=todayFav; }).length;
-    var pct=Math.round(atOr/n*100);
-    var cls = pct>=thr ? "probable" : (pct>=thr-10 ? "marginal" : "improbable");
-    var lbl = pct>=thr ? "Probable to work now" : (pct>=thr-10 ? "Marginal" : "Improbable right now");
-    document.getElementById("lr-pill").className="lr-pill "+cls;
-    document.getElementById("lr-pill").textContent=lbl;
-    document.getElementById("lr-detail").innerHTML =
-      "Today's Market Environment score is <b>"+(todayFav!=null?todayFav+" / "+todayTotal:"n/a")
-      +"</b>. <b>"+pct+"%</b> of this folder's <b>"+n+"</b> logged winners entered at that score or higher — "
-      +(pct>=thr?"above":"below")+" the "+thr+"% majority threshold.";
-  }
-
-  // condition cards
-  var envBuckets = groupBy(rows, function(r){ return envFav(r.marketEnvScore); },
-    (todayTotal? Array.from({length:todayTotal+1},function(_,i){return String(i);}) : null))
-    .map(function(b){ b.today = todayFav!=null && +b.label===todayFav; return b; });
-  var regime = groupBy(rows, function(r){ return r.marketEnvLabel; }, ["bullish","choppy","bearish"]);
-  var sectors = groupBy(rows, function(r){ return r.sector; }).slice(0,6);
-  var industries = groupBy(rows, function(r){ return r.industry; }).slice(0,6);
-  var ipo = groupBy(rows, function(r){
-    var d=r.daysSinceIpo; if(d==null) return null;
-    return d<126?"< 6 months":(d<252?"6–12 months":(d<756?"1–3 years":"3+ years"));
-  }, ["< 6 months","6–12 months","1–3 years","3+ years"]);
-  var base = groupBy(rows, function(r){
-    var d=r.baseLengthDays; if(d==null) return null;
-    return d<15?"< 3 weeks":(d<30?"3–6 weeks":(d<50?"6–10 weeks":"10+ weeks"));
-  }, ["< 3 weeks","3–6 weeks","6–10 weeks","10+ weeks"]);
-  var w52 = groupBy(rows, function(r){
-    var p=r.pctFrom52wHigh; if(p==null) return null;
-    return p<10?"0–10%":(p<20?"10–20%":(p<35?"20–35%":"35%+"));
-  }, ["0–10%","10–20%","20–35%","35%+"]);
-  var srank = groupBy(rows, function(r){
-    var d=r.sectorRankDelta1w; if(d==null) return null;
-    return d<=0?"flat / fell":(d<5?"rose 1–4":(d<10?"rose 5–9":"rose 10+"));
-  }, ["flat / fell","rose 1–4","rose 5–9","rose 10+"]);
-
-  var cards=[
-    condCard("wide","Market Environment score at entry",
-      "Where this folder's winners sat on the "+ (todayTotal||9) +"-factor environment score — the reading the live verdict checks.",
-      envBuckets.length?bucketRows(envBuckets):empty()),
-    condCard("","Index regime at entry","Overall environment label on the buy date.", regime.length?bucketRows(regime):empty()),
-    condCard("","Sector concentration","Which sectors these winners came from.", sectors.length?bucketRows(sectors):empty()),
-    condCard("","Industry concentration","Which industries these winners came from.", industries.length?bucketRows(industries):empty()),
-    condCard("","Sector rank move into entry","Places the sector climbed over the trailing week.", srank.length?bucketRows(srank):empty()),
-    condCard("","Time since first price","Sessions of history before the buy date (proxy for listing age).", ipo.length?bucketRows(ipo):empty()),
-    condCard("","Base length","Manual field — fill it in the detail view to populate this.", base.length?bucketRows(base):empty()),
-    condCard("","Distance from 52-week high","How far below the high the name sat when bought.", w52.length?bucketRows(w52):empty())
-  ];
-  document.getElementById("cond-grid").innerHTML=cards.join("");
-}
-function empty(){ return '<div class="cs" style="margin:0">No entries with this field yet.</div>'; }
-function condCard(cls,q,s,body){
-  return '<div class="cond '+cls+'"><div class="cq">'+esc(q)+'</div><div class="cs">'+esc(s)+'</div>'+body+'</div>';
-}
-document.getElementById("lr-thr").addEventListener("input", function(){ if(STATE.kpiSetup) renderKpi(); });
-
-// ---- load ----
-function loadData(){
-  return Promise.all([
-    fetch("/api/setups/data").then(function(r){return r.json();}),
-    fetch("/api/setups/schema").then(function(r){return r.json();}).catch(function(){return {};})
-  ]).then(function(res){
-    var data=res[0], schema=res[1];
-    if(data.error) throw new Error(data.error);
-    STATE.types = (data.types||[]).slice().sort(function(a,b){ return a.name.localeCompare(b.name); });
-    STATE.entries = data.entries||[];
-    STATE.envNow = data.envNow||{};
-    STATE.schema = (schema && !schema.error) ? schema : {};
-    renderAll();
-  }).catch(function(err){
-    var el=document.getElementById("load-err"); el.hidden=false;
-    el.innerHTML="<b>Could not load the Setups Database.</b> "+esc(err.message)
-      +'<br>If this is the first run, connect the Notion integration to the <code>Setups Database</code> page (••• &rarr; Connections), same step as the Trade Journal.';
-  });
-}
-loadData().then(function(){ if (window.__mbtOpen) openFromHub(window.__mbtOpen); });
-// The Monthly review (and anything else) can ask for a setup by name: show it in Browse & Filter.
-function openFromHub(o){
-  if (!o || !o.setup) return;
-  var s = STATE.types.find(function(x){ return x.name === o.setup; });
-  if (!s) {                                   // the setups are still loading: try again shortly (up to ~12 s)
-    o.tries = (o.tries || 0) + 1; window.__mbtOpen = o;
-    if (o.tries < 20) setTimeout(function(){ if (window.__mbtOpen) openFromHub(window.__mbtOpen); }, 600);
-    return;
-  }
-  var tab = document.querySelector('.tab[data-tab="browse"]'); if (tab) tab.click();
-  pickBrowse(s); window.__mbtOpen = null;
-}
-window.addEventListener("message", function(e){
-  if (e.origin !== location.origin || !e.data || !e.data.mbtOpen) return;
-  openFromHub(e.data.mbtOpen);
-});
 </script>
 </body></html>"""
 
