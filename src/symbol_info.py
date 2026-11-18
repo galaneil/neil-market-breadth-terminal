@@ -9,6 +9,36 @@ import movers
 _CACHE = {}
 
 
+_RESOLVED = {}
+
+
+def resolve(country, ticker):
+    """Sector, industry, logo and name for a listed ticker the nightly universe leaves out (ADRs such as ARM, ASML,
+    TSM). None when TradingView has no such stock on the market's exchanges."""
+    ticker = "".join(ch for ch in (ticker or "").upper().split(":")[-1] if ch.isalnum() or ch in ".-_")[:16]
+    if not ticker:
+        return None
+    key = (country, ticker)
+    if key in _RESOLVED:
+        return _RESOLVED[key]
+    cfg = config.COUNTRIES[country]
+    out = None
+    try:
+        from tradingview_screener import Query, col
+        _, df = (Query().set_markets(cfg["tv_market"])
+                 .select("name", "description", "sector", "industry", "logoid", "exchange", "type")
+                 .where(col("name") == ticker, col("exchange").isin(cfg["exchanges"])).limit(3)
+                 .get_scanner_data())
+        if len(df):
+            row = df.iloc[0]
+            out = {"ticker": ticker, "name": row.get("description"), "sector": row.get("sector"), "industry": row.get("industry"),
+                   "logoid": row.get("logoid"), "exchange": row.get("exchange"), "tv": row.get("ticker"), "kind": row.get("type")}
+    except Exception:
+        return None                          # a network hiccup is not cached, so the next search tries again
+    _RESOLVED[key] = out
+    return out
+
+
 def info(country, ticker):
     ticker = "".join(ch for ch in (ticker or "").upper() if ch.isalnum() or ch in ".-_")[:16]
     key = (country, ticker)

@@ -63,7 +63,19 @@ def index_on(dates, d):
     return len(dates) - 1
 
 
+def ensure_history(country, ticker):
+    """Names outside the terminal's list get ten years of prices from Yahoo the first time they are used here."""
+    try:
+        import setup_context
+        import ticker_topup
+        if ticker and not setup_context.classify(country, ticker)[0]:
+            ticker_topup.ensure_long(country, ticker, log=lambda *a: None)
+    except Exception:
+        pass
+
+
 def series(country, ticker):
+    ensure_history(country, ticker)
     hist = journal_mfe._history(country, ticker)
     if not hist or not hist.get("dates"):
         return None

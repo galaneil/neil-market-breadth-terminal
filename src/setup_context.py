@@ -181,9 +181,11 @@ def ticker_stats(country, ticker, on_date=None):
     return {"days_since_ipo": idx + 1, "pct_from_52w_high": pct}
 
 
-def context_at(country, ticker, buy_date):
-    """Every auto-filled field for one logged entry, as of its buy date."""
-    sector, industry, logoid, mktcap = classify(country, ticker)
+def context_at(country, ticker, buy_date, sector=None, industry=None, logoid=None):
+    """Every auto-filled field for one logged entry, as of its buy date. For a name outside the terminal's list
+    (ARM, ASML, TSM), the caller passes the sector and industry TradingView reports, so the ranks still fill."""
+    c_sector, c_industry, c_logoid, mktcap = classify(country, ticker)
+    sector, industry, logoid = c_sector or sector, c_industry or industry, c_logoid or logoid
     env = market_env(country, buy_date) or {}
     sr = sector_rank(country, sector, buy_date)
     ir = industry_rank(country, industry, buy_date)

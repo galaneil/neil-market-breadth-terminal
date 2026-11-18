@@ -345,6 +345,7 @@ textarea.inp{height:auto;min-height:88px;padding:8px 10px;resize:vertical;line-h
         <div><span>In the form: entry day</span><span><kbd>←</kbd> <kbd>→</kbd></span></div>
         <div><span>In the form: save</span><span><kbd>Ctrl</kbd> <kbd>Enter</kbd></span></div>
         <div><span>Set the stop on the chart</span><span><kbd>Shift</kbd> click</span></div>
+        <div><span>Draw a trend line</span><kbd>L</kbd></div><div><span>Undo the last line</span><span><kbd>Ctrl</kbd> <kbd>Z</kbd></span></div>
       </div>
     </div>
     <button type="button" class="primary" id="logbtn">Log a setup <kbd>N</kbd></button>
@@ -369,13 +370,14 @@ textarea.inp{height:auto;min-height:88px;padding:8px 10px;resize:vertical;line-h
     <div class="ws-chart">
       <div class="ws-tk" id="ws-tk"></div>
       <div class="ctl">
-        <div class="seg" id="ws-mode" role="group" aria-label="What a click on the chart sets"><button type="button" data-m="entry" class="on">Click sets entry day</button><button type="button" data-m="stop">Click sets stop</button></div>
+        <div class="seg" id="ws-mode" role="group" aria-label="What a click on the chart sets"><button type="button" data-m="entry" class="on">Click sets entry day</button><button type="button" data-m="stop">Click sets stop</button><button type="button" data-m="line" title="Draw a trend line: click its start, then its end (L)">Draw line <kbd>L</kbd></button></div>
+        <span id="ws-linebtns" class="row" style="gap:6px" hidden><button type="button" class="btn" data-ws="undoline">Undo line</button><button type="button" class="btn" data-ws="clearlines">Clear lines</button></span>
         <span class="spacer"></span>
         <div class="tf" id="ws-tf"><button type="button" data-r="base">Base</button><button type="button" data-r="6m">6M</button><button type="button" data-r="1y">1Y</button><button type="button" data-r="all">All</button></div>
       </div>
       <div class="chartwrap"><div class="lwbox" id="ws-chart"></div><canvas class="ovl" id="ws-ovl"></canvas></div>
-      <div class="legend"><span><i style="border-color:#2962FF"></i>EMA 10</span><span><i style="border-color:#F23645"></i>EMA 20</span><span><i style="border-color:#FF9800"></i>EMA 50</span><span><i class="dash" style="border-color:var(--accent)"></i>entry</span><span><i class="dash" style="border-color:var(--down)"></i>stop</span><span><i class="box"></i>base</span><span><i style="border-color:var(--faint);border-top-style:dotted"></i>52-week high</span></div>
-      <p class="hint">Click a bar to set the entry day. Shift-click sets the stop. <kbd>←</kbd> <kbd>→</kbd> move the entry one session.</p>
+      <div class="legend"><span><i style="border-color:#2962FF"></i>EMA 10</span><span><i style="border-color:#F23645"></i>EMA 20</span><span><i style="border-color:#FF9800"></i>EMA 50</span><span><i class="dash" style="border-color:var(--accent)"></i>entry</span><span><i class="dash" style="border-color:var(--down)"></i>stop</span><span><i class="box"></i>base</span><span><i style="border-color:var(--faint);border-top-style:dotted"></i>52-week high</span><span><i style="border-color:var(--ink)"></i>your lines</span></div>
+      <p class="hint" id="ws-hint">Click a bar to set the entry day. Shift-click sets the stop. <kbd>L</kbd> draws a line: click its start, then its end. <kbd>←</kbd> <kbd>→</kbd> move the entry one session.</p>
     </div>
     <div class="ws-form" id="ws-form"></div>
   </div>
@@ -680,19 +682,37 @@ function drawOvl(st){
   var box = st.box, W = box.clientWidth, H = box.clientHeight, dpr = window.devicePixelRatio || 1;
   if (c.width !== Math.round(W * dpr) || c.height !== Math.round(H * dpr)){ c.width = Math.round(W * dpr); c.height = Math.round(H * dpr); c.style.width = W + "px"; c.style.height = H + "px"; }
   var g = c.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0); g.clearRect(0, 0, W, H);
-  var m = st.o.m, P = st.P;
+  var m = st.o.m, P = st.P, ts = st.chart.timeScale();
+  var pw = W - st.chart.priceScale("right").width(), ph = H - ts.height();
+  drawLines(st, g, pw, ph);
   if (!m || !m.baseStart || st.o.k == null) return;
-  var ts = st.chart.timeScale();
   var x1 = ts.timeToCoordinate(m.baseStart), x2 = ts.timeToCoordinate(P.d[st.o.k]);
   var y1 = st.cs.priceToCoordinate(m.baseHigh), y2 = st.cs.priceToCoordinate(m.baseLow);
   if (x1 == null || x2 == null || y1 == null || y2 == null) return;
-  var pw = W - st.chart.priceScale("right").width(), ph = H - ts.height(), v = cssv("--violet");
+  var v = cssv("--violet");
   g.save(); g.beginPath(); g.rect(0, 0, pw, ph); g.clip();
   g.fillStyle = hexA(v, 0.08); g.fillRect(x1, y1, x2 - x1, y2 - y1);
   g.setLineDash([4, 3]); g.strokeStyle = hexA(v, 0.75); g.lineWidth = 1;
   g.strokeRect(Math.round(x1) + 0.5, Math.round(y1) + 0.5, Math.round(x2 - x1), Math.round(y2 - y1));
   g.setLineDash([]); g.fillStyle = v; g.font = "600 11px IBM Plex Sans, system-ui, sans-serif";
   g.fillText("Base " + m.baseDays + " sessions, " + pct(m.depth, 1), Math.max(4, x1 + 4), y1 - 6 < 12 ? y1 + 14 : y1 - 6);
+  g.restore();
+}
+/* Trend lines: [date1, price1, date2, price2], drawn in the text colour with small end dots; the one being drawn is dashed. */
+function drawLines(st, g, pw, ph){
+  var L = st.o.lines || [], pv = st.o.preview, ts = st.chart.timeScale();
+  if (!L.length && !pv) return;
+  var col = cssv("--ink");
+  g.save(); g.beginPath(); g.rect(0, 0, pw, ph); g.clip();
+  g.strokeStyle = col; g.fillStyle = col; g.lineWidth = 1.6; g.lineCap = "round";
+  function seg(a, b, dashed){
+    var x1 = ts.timeToCoordinate(a[0]), y1 = st.cs.priceToCoordinate(a[1]), x2 = ts.timeToCoordinate(b[0]), y2 = st.cs.priceToCoordinate(b[1]);
+    if (x1 == null || y1 == null || x2 == null || y2 == null) return;
+    g.setLineDash(dashed ? [5, 4] : []); g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2); g.stroke(); g.setLineDash([]);
+    [[x1, y1], [x2, y2]].forEach(function(p){ g.beginPath(); g.arc(p[0], p[1], 2.4, 0, Math.PI * 2); g.fill(); });
+  }
+  L.forEach(function(l){ seg([l[0], l[1]], [l[2], l[3]], false); });
+  if (pv && pv.a) seg(pv.a, pv.b || pv.a, true);
   g.restore();
 }
 function clearOvl(c){ if (!c) return; var g = c.getContext("2d"); g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, c.width, c.height); }
@@ -970,7 +990,7 @@ function renderDetail(){
   chartInto("d", $("d-chart"), $("d-ovl"), e.code, e.ticker, function(P){
     var k = P.d.indexOf(e.D ? e.D.date : e.buyDate); if (k < 0) k = idxFrom(P, e.buyDate);
     var xm = exitMark(xe), xi = xm ? P.d.indexOf(xm.date) : -1;
-    return {k:k, entry:e.entryPx, stop:e.stop != null ? e.stop : (e.D && e.D.stopUsed), stopTitle:e.stop != null ? "stop" : "8% stop", m:e.m, after:80, range:S.drange,
+    return {k:k, entry:e.entryPx, stop:e.stop != null ? e.stop : (e.D && e.D.stopUsed), stopTitle:e.stop != null ? "stop" : "8% stop", m:e.m, after:80, range:S.drange, lines:e.lines || [],
       exit:xi >= 0 ? {i:xi, color:xm.color, text:xm.text} : null};
   }, function(){ return S.sel === id && S.view === "library" && S.scope !== "todo"; });
   if (!e.name && !e._nameAsked && e.ticker){
@@ -1102,18 +1122,19 @@ var W = null, SHIFT = false, DRAG = null, DT = null, DSEQ = 0, CT = null, CSEQ =
 var DRAFTS = (function(){ try { return JSON.parse(localStorage.getItem("setups-drafts-v1") || "{}") || {}; } catch (x) { return {}; } })();
 function saveDrafts(){ try { localStorage.setItem("setups-drafts-v1", JSON.stringify(DRAFTS)); } catch (x) {} }
 function draftKey(){ return W.mode === "edit" ? "e:" + W.id : W.qid ? "q:" + W.qid : "new:" + W.code; }
-function draftOf(){ return {t:W.t, logoid:W.logoid, name:W.name, sector:W.sector, industry:W.industry, date:W.date, entry:W.entry, stop:W.stop, stopLocked:W.stopLocked, reason:W.reason, folder:W.folder, checks:W.checks.slice(), note:W.note, exitRule:W.exitRule, range:W.range}; }
+function draftOf(){ return {t:W.t, logoid:W.logoid, name:W.name, sector:W.sector, industry:W.industry, date:W.date, entry:W.entry, stop:W.stop, stopLocked:W.stopLocked, reason:W.reason, folder:W.folder, checks:W.checks.slice(), note:W.note, exitRule:W.exitRule, range:W.range, lines:W.lines.map(function(l){ return l.slice(); }), outside:W.outside}; }
 function touch(){ if (!W) return; W.dirty = true; DRAFTS[draftKey()] = draftOf(); saveDrafts(); var d = $("draft"); if (d) d.textContent = "Draft kept"; }
 
 function openWS(opts){
   closeMenu();
   var w = {mode:opts.mode, id:opts.id || null, qid:opts.qid || null, code:S.country, t:null, logoid:null, name:null, sector:null, industry:null, P:null, k:null, date:null,
     entry:null, stop:null, stopLocked:false, reason:"Fixed % risk", folder:null, checks:[], note:"", exitRule:null, img:null, D:null, ctx:null, errors:{},
-    range:"base", clickMode:"entry", dirty:false, restored:false, dupOk:false, order:folderOrder()};
+    range:"base", clickMode:"entry", dirty:false, restored:false, dupOk:false, order:folderOrder(), lines:[], lineStart:null, outside:false};
   if (opts.mode === "edit"){
     var e = byId(opts.id); if (!e || e._pending) return;
     Object.assign(w, {code:e.code, t:e.ticker, logoid:e.logoid, name:e.name, sector:e.sector, industry:e.industry, date:e.buyDate, entry:e.entryPx, stop:e.stop,
-      stopLocked:e.stop != null, reason:e.stopReason || "Fixed % risk", folder:e.setup, checks:e.checklist.slice(), note:e.entryThesis || "", exitRule:e.exitRule, D:e.D, ctx:e});
+      stopLocked:e.stop != null, reason:e.stopReason || "Fixed % risk", folder:e.setup, checks:e.checklist.slice(), note:e.entryThesis || "", exitRule:e.exitRule, D:e.D, ctx:e,
+      lines:(e.lines || []).map(function(l){ return l.slice(); }), outside:!!e.outside});
     if (w.stop == null && w.entry) w.stop = +(w.entry * 0.92).toFixed(2);
   } else if (opts.mode === "queue"){
     var q = qById(opts.qid); if (!q) return;
@@ -1156,8 +1177,7 @@ function renderWS(){
   $("ws-skip").hidden = !q;
   $("ws-save2").hidden = !more;
   $("ws-save").innerHTML = (more ? "Save and next" : "Save") + ' <kbd>Ctrl Enter</kbd>';
-  Array.prototype.forEach.call(document.querySelectorAll("#ws-mode button"), function(b){ b.classList.toggle("on", b.dataset.m === W.clickMode); });
-  setWsTf(); renderTk(); renderForm();
+  setMode(W.clickMode); setWsTf(); renderTk(); renderForm();
 }
 function renderTk(){
   var el = $("ws-tk");
@@ -1246,7 +1266,24 @@ function checkDup(){
   el.innerHTML = '<span>Already logged: <b>' + esc(hit.e.ticker) + '</b> on ' + fd(hit.e.buyDate) + ' in ' + esc(hit.e.setup) + ', ' + (hit.gap === 0 ? "on the same day" : hit.gap + " sessions " + (hit.before ? "earlier" : "later")) + '. Probably the same move.</span>'
     + '<button type="button" class="btn" data-ws="dup-open" data-id="' + esc(hit.e.id) + '">Open it</button><button type="button" class="btn" data-ws="dup-ok">Log anyway</button>';
 }
-function wsOpts(){ return {k:W.k, entry:W.entry, stop:W.stop, m:(W.D && W.D.date === W.date) ? W.D.m : null, after:12, range:W.range}; }
+function wsOpts(){ return {k:W.k, entry:W.entry, stop:W.stop, m:(W.D && W.D.date === W.date) ? W.D.m : null, after:12, range:W.range, lines:W.lines, preview:W.lineStart ? {a:W.lineStart, b:W.linePreview} : null}; }
+/* Click modes: entry day, stop, or drawing a line (start, then end). */
+function setMode(m){
+  if (!W) return;
+  W.clickMode = m; if (m !== "line"){ W.lineStart = null; W.linePreview = null; }
+  Array.prototype.forEach.call(document.querySelectorAll("#ws-mode button"), function(b){ b.classList.toggle("on", b.dataset.m === m); });
+  lineBtns(); updWsMarks();
+}
+function lineBtns(){ var b = $("ws-linebtns"); if (b) b.hidden = !(W && (W.clickMode === "line" || W.lines.length)); }
+function addLinePoint(t, price){
+  var pt = [t, +(+price).toFixed(2)];
+  if (!W.lineStart){ W.lineStart = pt; W.linePreview = null; updWsMarks(); return; }
+  if (W.lineStart[0] === pt[0] && Math.abs(W.lineStart[1] - pt[1]) < 1e-9) return;
+  var a = W.lineStart, b = pt; if (b[0] < a[0]){ var x = a; a = b; b = x; }
+  W.lines.push([a[0], a[1], b[0], b[1]]); if (W.lines.length > 40) W.lines.shift();
+  W.lineStart = null; W.linePreview = null; touch(); lineBtns(); updWsMarks();
+}
+function undoLine(){ if (!W) return; if (W.lineStart){ W.lineStart = null; W.linePreview = null; updWsMarks(); return; } if (W.lines.length){ W.lines.pop(); touch(); lineBtns(); updWsMarks(); } }
 function setWsTf(){ Array.prototype.forEach.call(document.querySelectorAll("#ws-tf button"), function(b){ b.classList.toggle("on", !!W && b.dataset.r === W.range); }); }
 function wsChart(){
   if (!W || !W.P) return;
@@ -1256,10 +1293,16 @@ function wsChart(){
     if (!W || CH.w !== st || !p || p.time == null) return;
     var k = P.d.indexOf(timeStr(p.time));
     if (k < 0) return;
+    if (W.clickMode === "line"){ if (p.point){ var lp = st.cs.coordinateToPrice(p.point.y); if (lp != null && lp > 0) addLinePoint(P.d[k], lp); } return; }
     if (W.clickMode === "stop" || SHIFT){ if (p.point){ var price = st.cs.coordinateToPrice(p.point.y); if (price != null && price > 0) setStop(+(+price).toFixed(2)); } }
     else setEntryIdx(k);
   });
-  setWsTf();
+  st.chart.subscribeCrosshairMove(function(p){
+    if (!W || CH.w !== st || !W.lineStart || !p || p.time == null || !p.point) return;
+    var lp = st.cs.coordinateToPrice(p.point.y); if (lp == null) return;
+    W.linePreview = [timeStr(p.time), lp]; st.o.preview = {a:W.lineStart, b:W.linePreview}; drawOvl(st);
+  });
+  setWsTf(); lineBtns();
 }
 function updWsMarks(){ var st = CH.w; if (!st || !W) return; var o = wsOpts(); o.range = st.range; st.o = o; marks(st); requestAnimationFrame(function(){ drawOvl(st); }); }
 function requestDerived(){
@@ -1307,15 +1350,15 @@ function showTickerList(v){
     api("/api/setups/lookup?country=" + W.code + "&q=" + encodeURIComponent(q)).then(function(hits){
       if (!W || !$("ws-tl")) return;
       ul._hits = hits || [];
-      ul.innerHTML = (hits && hits.length) ? hits.slice(0, 12).map(function(h, i){ return '<li><button type="button" data-tk="' + i + '">' + logo(h.ticker, h.logoid) + '<span><b>' + esc(h.ticker) + '</b> <small>' + esc((h.sector || "") + (h.industry ? " › " + h.industry : "")) + '</small></span></button></li>'; }).join("")
-        : '<li class="dim" style="padding:6px 8px">No match in the terminal’s ' + (W.code === "IN" ? "India" : "US") + ' names.</li>';
+      ul.innerHTML = (hits && hits.length) ? hits.slice(0, 12).map(function(h, i){ return '<li><button type="button" data-tk="' + i + '">' + logo(h.ticker, h.logoid) + '<span><b>' + esc(h.ticker) + '</b> <small>' + esc(h.outside ? (co(h.name) || "") + " \u00b7 outside the terminal\u2019s list, prices from Yahoo" : (h.sector || "") + (h.industry ? " \u203a " + h.industry : "")) + '</small></span></button></li>'; }).join("")
+        : '<li class="dim" style="padding:6px 8px">No listed stock found for that ticker.</li>';
       ul.hidden = false;
     });
   }, 120);
 }
 function pickTicker(h){
   if (!h || !h.ticker) return;
-  W.t = h.ticker; W.logoid = h.logoid || null; W.sector = h.sector || null; W.industry = h.industry || null; W.name = null;
+  W.t = h.ticker; W.logoid = h.logoid || null; W.sector = h.sector || null; W.industry = h.industry || null; W.name = h.name || null; W.outside = !!h.outside; W.lines = []; W.lineStart = null;
   W.P = null; W.k = null; W.date = null; W.entry = null; W.stop = null; W.stopLocked = false; W.D = null; W.ctx = null; W.range = "1y"; W.dupOk = false; W.errors = {};
   touch(); renderWS(); loadWsPrices();
 }
@@ -1366,7 +1409,7 @@ function save(next){
   var type = typeByName(W.folder); if (!type){ toast("That folder is not in the Setups Database."); return; }
   var q = W.qid ? qById(W.qid) : null, dk = draftKey(), img = W.img;
   var fields = {setupId:type.id, entryPrice:+(+W.entry).toFixed(2), stop:W.stop != null ? +(+W.stop).toFixed(2) : null, stopReason:W.reason,
-    checklist:W.checks.slice(), exitRule:W.exitRule, entryThesis:(W.note || "").trim() || null};
+    checklist:W.checks.slice(), exitRule:W.exitRule, entryThesis:(W.note || "").trim() || null, lines:W.lines.map(function(l){ return l.slice(); })};
   var D = W.D && W.D.date === W.date ? W.D : null, ctx = W.ctx || {};
   if (W.mode === "edit") return saveEdit(type, fields, D, img, dk);
   var shot = !img && CH.w ? snapshot(CH.w) : null;
@@ -1374,11 +1417,11 @@ function save(next){
     entryPrice:fields.entryPrice, stop:fields.stop, stopReason:W.reason, checklist:fields.checklist, exitRule:W.exitRule, entryThesis:fields.entryThesis,
     logoid:W.logoid, name:W.name, sector:W.sector, industry:W.industry, logged:new Date().toISOString(), D:D,
     marketEnvScore:ctx.marketEnvScore, marketEnvLabel:ctx.marketEnvLabel, sectorRank:ctx.sectorRank, industryRank:ctx.industryRank,
-    sectorRankDelta1w:ctx.sectorRankDelta1w, industryRankDelta1w:ctx.industryRankDelta1w, chartCount:0});
+    sectorRankDelta1w:ctx.sectorRankDelta1w, industryRankDelta1w:ctx.industryRankDelta1w, chartCount:0, lines:fields.lines, outside:W.outside});
   ENTRIES.unshift(tmp);
   delete DRAFTS[dk]; saveDrafts();
   if (q) q.status = "done";
-  createEntry(tmp, Object.assign({country:W.code, ticker:W.t, buyDate:W.date}, fields), img || shot, img ? "chart." + (ctypeOf(img).split("/")[1] || "png") : "system-chart.png", q);
+  createEntry(tmp, Object.assign({country:W.code, ticker:W.t, buyDate:W.date, sector:W.sector, industry:W.industry}, fields), img || shot, img ? "chart." + (ctypeOf(img).split("/")[1] || "png") : "system-chart.png", q);
   toast("Logged " + tmp.ticker + " in " + tmp.setup, function(){ undoCreate(tmp, q); });
   var nq = next && q ? todoList()[0] : null;
   if (nq){ openWS({mode:"queue", qid:nq.id}); renderAll(); return; }
@@ -1388,7 +1431,7 @@ function save(next){
 }
 function saveEdit(type, fields, D, img, dk){
   var e = byId(W.id); if (!e) return;
-  var before = {setup:e.setup, setupId:e.setupId, buyDate:e.buyDate, entryPrice:e.entryPrice, stop:e.stop, stopReason:e.stopReason, checklist:e.checklist.slice(), exitRule:e.exitRule, entryThesis:e.entryThesis, D:e.D};
+  var before = {setup:e.setup, setupId:e.setupId, buyDate:e.buyDate, entryPrice:e.entryPrice, stop:e.stop, stopReason:e.stopReason, checklist:e.checklist.slice(), exitRule:e.exitRule, entryThesis:e.entryThesis, D:e.D, lines:(e.lines || []).slice()};
   var changed = {};
   if (e.setupId !== type.id) changed.setupId = type.id;
   if (e.buyDate !== W.date) changed.buyDate = W.date;
@@ -1398,14 +1441,15 @@ function saveEdit(type, fields, D, img, dk){
   if (JSON.stringify(e.checklist) !== JSON.stringify(fields.checklist)) changed.checklist = fields.checklist;
   if ((e.exitRule || null) !== (fields.exitRule || null)) changed.exitRule = fields.exitRule;
   if ((e.entryThesis || null) !== (fields.entryThesis || null)) changed.entryThesis = fields.entryThesis;
+  if (JSON.stringify(e.lines || []) !== JSON.stringify(fields.lines)) changed.lines = fields.lines;
   delete DRAFTS[dk]; saveDrafts();
   closeWS();
   if (!Object.keys(changed).length && !img){ toast("No changes to save."); renderAll(); return; }
   Object.assign(e, {setup:W && W.folder || type.name, setupId:type.id, buyDate:changed.buyDate || e.buyDate, entryPrice:fields.entryPrice, stop:fields.stop, stopReason:fields.stopReason,
-    checklist:fields.checklist, exitRule:fields.exitRule, entryThesis:fields.entryThesis});
+    checklist:fields.checklist, exitRule:fields.exitRule, entryThesis:fields.entryThesis, lines:fields.lines});
   e.setup = type.name; if (D) e.D = D; prep(e);
   S.sel = e.id; S.exitView = null; renderAll();
-  var keyFields = {country:e.country, ticker:e.ticker, buyDate:before.buyDate, entryPrice:fields.entryPrice, stop:fields.stop};
+  var keyFields = {country:e.country, ticker:e.ticker, buyDate:before.buyDate, entryPrice:fields.entryPrice, stop:fields.stop, sector:e.sector, industry:e.industry};
   var p = Object.keys(changed).length ? send("/api/setups/update", {pageId:e.pageId, fields:changed, entry:keyFields}, "Could not save " + e.ticker) : Promise.resolve({});
   p.then(function(r){
     if (r && r.entry){ var i = ENTRIES.indexOf(e), fresh = prep(r.entry); if (i >= 0) ENTRIES[i] = fresh; if (S.sel === e.id) S.sel = fresh.id; renderAll(); }
@@ -1596,7 +1640,7 @@ $("ws").addEventListener("click", function(ev){
   if (t.closest("#ws-save")){ save(true); return; }
   if (t.closest("#ws-save2")){ save(false); return; }
   if (t.closest("#ws-skip")){ skipQ(); return; }
-  var m = t.closest("#ws-mode button"); if (m){ W.clickMode = m.dataset.m; Array.prototype.forEach.call(document.querySelectorAll("#ws-mode button"), function(b){ b.classList.toggle("on", b === m); }); return; }
+  var m = t.closest("#ws-mode button"); if (m){ setMode(m.dataset.m); return; }
   var r = t.closest("#ws-tf button"); if (r){ W.range = r.dataset.r; if (CH.w) view(CH.w, W.range); setWsTf(); return; }
   var tk = t.closest("[data-tk]"); if (tk){ var ul = $("ws-tl"); pickTicker(ul && ul._hits ? ul._hits[+tk.dataset.tk] : null); return; }
   var f = t.closest("[data-f]"); if (f){ W.folder = f.dataset.f; W.errors.folder = false; touch(); renderForm(); return; }
@@ -1618,6 +1662,8 @@ $("ws").addEventListener("click", function(ev){
     return;
   }
   if (a === "noimg"){ W.img = null; touch(); renderForm(); return; }
+  if (a === "undoline"){ undoLine(); return; }
+  if (a === "clearlines"){ if (W.lines.length){ var kept = W.lines.slice(); W.lines = []; W.lineStart = null; touch(); lineBtns(); updWsMarks(); toast("Lines cleared.", function(){ if (W){ W.lines = kept; touch(); lineBtns(); updWsMarks(); } }); } return; }
   if (a === "paste"){ var fi = $("ws-file"); if (fi) fi.click(); return; }
   if (a === "dup-ok"){ W.dupOk = true; checkDup(); return; }
   if (a === "dup-open"){ var id = w.dataset.id; closeWS(); openEntry(id); return; }
@@ -1682,7 +1728,10 @@ document.addEventListener("keydown", function(ev){
     if (/^[1-9]$/.test(ev.key)){ var mt = ($("menu")._order || [])[+ev.key - 1]; if (mt){ ev.preventDefault(); var ids0 = $("menu")._ids || []; closeMenu(); moveEntries(ids0, mt); } return; }
   }
   if (W){
+    if (ev.key === "Escape" && W.lineStart){ ev.preventDefault(); undoLine(); return; }
     if (ev.key === "Escape"){ ev.preventDefault(); closeWS(); renderAll(); return; }
+    if ((ev.key === "z" || ev.key === "Z") && (ev.ctrlKey || ev.metaKey) && !typing){ ev.preventDefault(); undoLine(); return; }
+    if ((ev.key === "l" || ev.key === "L") && !typing && !ev.ctrlKey && !ev.metaKey){ ev.preventDefault(); setMode(W.clickMode === "line" ? "entry" : "line"); return; }
     if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)){ ev.preventDefault(); save(true); return; }
     if (typing) return;
     if (/^[1-9]$/.test(ev.key)){ var f = W.order[+ev.key - 1]; if (f){ ev.preventDefault(); W.folder = f; W.errors.folder = false; touch(); renderForm(); } return; }

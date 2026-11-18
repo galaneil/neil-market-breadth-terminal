@@ -210,6 +210,18 @@ def _select_of(prop):
     return value.get("name") if value else None
 
 
+def _lines_of(prop):
+    """Trend lines drawn on the Setups chart: [[date1, price1, date2, price2], ...], kept as JSON text."""
+    raw = _text_of(prop)
+    if not raw:
+        return []
+    try:
+        out = json.loads(raw)
+        return [l for l in out if isinstance(l, list) and len(l) == 4][:40]
+    except ValueError:
+        return []
+
+
 def _multi_of(prop):
     if not prop:
         return []
@@ -706,6 +718,7 @@ SETUP_ENTRY_EDITABLE = {
     "stop": ("Stop", number),
     "stopReason": ("Stop Reason", select),
     "checklist": ("Checklist", multi_select),
+    "lines": ("Chart Lines", lambda v: text(json.dumps(v, separators=(",", ":")) if v else None)),
 }
 # Columns the rebuilt Setups page needs; added to the databases once, the first time they are missing.
 SETUP_ENTRY_NEW_COLUMNS = {
@@ -718,6 +731,7 @@ SETUP_ENTRY_NEW_COLUMNS = {
     "Volume Dry-up x": {"number": {"format": "number"}},
     "Tightness %": {"number": {"format": "number"}},
     "Prior Run %": {"number": {"format": "number"}},
+    "Chart Lines": {"rich_text": {}},
 }
 SETUP_TYPE_NEW_COLUMNS = {"Checklist": {"rich_text": {}}}     # one criterion per line, editable here or in Notion
 _SCHEMA_READY = set()
@@ -842,6 +856,7 @@ def _setup_entry_from_page(page, types_by_id):
         "stop": _number_of(p.get("Stop")),
         "stopReason": _select_of(p.get("Stop Reason")),
         "checklist": _multi_of(p.get("Checklist")),
+        "lines": _lines_of(p.get("Chart Lines")),
     }
 
 
@@ -933,7 +948,7 @@ def update_setup_entry(page_id, fields, context=None, log=print):
                 props[name] = builder(context.get(key))
     if not props:
         return
-    if any(k in props for k in ("Entry Price", "Stop", "Stop Reason", "Checklist", "Base Depth %")):
+    if any(k in props for k in ("Entry Price", "Stop", "Stop Reason", "Checklist", "Base Depth %", "Chart Lines")):
         ensure_setup_schema(log=log)
     _call("PATCH", f"/pages/{page_id}", {"properties": props})
     log(f"  updated {', '.join(props)} on {page_id}")

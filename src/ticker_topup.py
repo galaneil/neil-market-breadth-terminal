@@ -27,6 +27,38 @@ def _last_date(path):
         return None
 
 
+_LONG_DONE = set()
+
+
+def ensure_long(country, symbol, years=10, log=print):
+    """A name outside the nightly universe that the Setups page logs (ARM, ASML, TSM): download up to `years` of daily
+    history once per run, merged into its ticker file, so moves from years back can be logged and measured."""
+    symbol = "".join(ch for ch in (symbol or "").upper() if ch.isalnum() or ch in ".-")[:16]
+    if not symbol:
+        return False
+    key = (country, symbol)
+    if key in _LONG_DONE:
+        return ensure_fresh(country, symbol, log=log)
+    _LONG_DONE.add(key)
+    try:
+        import yfinance as yf
+        import yf_client
+        ysym = symbol + ".NS" if country == "IN" else symbol
+        df = yf.download(ysym, period=f"{int(years)}y", auto_adjust=True, progress=False)
+        if hasattr(df.columns, "levels"):
+            df.columns = [c[0] for c in df.columns]
+        rows = yf_client._frame_to_rows(df.dropna(how="all"))
+        if not rows:
+            log(f"  ticker history: nothing from Yahoo for {ysym}")
+            return False
+        store.write_ticker_ohlc(country, symbol, rows)
+        log(f"  ticker history: {symbol} has {len(rows)} sessions from Yahoo")
+        return True
+    except Exception as error:
+        log(f"  ticker history failed for {symbol}: {error}")
+        return False
+
+
 def ensure_fresh(country, symbol, log=print, force=False):
     """Returns True when the ticker file is current (already, or after a top-up). `force` refreshes even a file that is
     only a day behind (a position opened today has no bar in yesterday's file), at most every ten minutes per name."""

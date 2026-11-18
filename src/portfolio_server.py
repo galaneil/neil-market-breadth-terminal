@@ -151,6 +151,8 @@ SETUPS_CACHE_FILE = os.path.join(OUTPUT_DIR, "setups_cache.json")
 # TradingView list "Setups to log" when Neil asks Claude to. Skipped ids live here too.
 SETUPS_QUEUE_FILE = os.path.join(OUTPUT_DIR, "setups_queue.json")
 SYMBOL_NAMES_FILE = os.path.join(OUTPUT_DIR, "symbol_names.json")
+# Sector, industry and logo for names the Setups page logs from outside the terminal's list (ARM, ASML, TSM...).
+SETUPS_SYMBOLS_FILE = os.path.join(OUTPUT_DIR, "setups_symbols.json")
 _SETUPS_LOCK = threading.Lock()
 
 
@@ -215,6 +217,11 @@ def _decorate_setup_entry(entry, names=None, stops=None):
     entry["logoid"] = setup_context.classify(code, ticker)[2] if ticker else None
     names = names if names is not None else _json_read(SYMBOL_NAMES_FILE, {})
     entry["name"] = names.get(code + ":" + ticker)
+    if ticker and not entry["logoid"]:
+        outside = _json_read(SETUPS_SYMBOLS_FILE, {}).get(code + ":" + ticker) or {}
+        entry["logoid"] = outside.get("logoid")
+        entry["name"] = entry["name"] or outside.get("name")
+        entry["outside"] = bool(outside)
     local = (stops if stops is not None else _setup_stops()).get(entry.get("pageId")) or {}
     if entry.get("stop") is None and local.get("stop"):
         entry["stop"], entry["stopLocal"] = local["stop"], True
@@ -1582,9 +1589,11 @@ class Handler(BaseHTTPRequestHandler):
             return
         if route.path == "/api/setups/prices":
             import journal_mfe
+            import setup_measure
             q = parse_qs(route.query)
             code = (q.get("country") or ["US"])[0].upper()
             code = "IN" if code in ("IN", "INDIA") else "US"
+            setup_measure.ensure_history(code, (q.get("ticker") or [""])[0])
             hist = journal_mfe._history(code, (q.get("ticker") or [""])[0])
             if not hist:
                 self._send(200, json.dumps({"error": "no price history for that ticker"}), "application/json")
@@ -1632,6 +1641,17 @@ class Handler(BaseHTTPRequestHandler):
                                          "logoid": row[2] if len(row) > 2 else None})
                     hits.sort(key=lambda h: (not h["ticker"].startswith(term), h["ticker"]))
                     hits = hits[:20]
+                    # Not in the terminal's list (ADRs such as ARM, ASML, TSM): ask TradingView, and offer it on top.
+                    if term.isalnum() and len(term) <= 6 and not any(h["ticker"] == term for h in hits):
+                        import symbol_info
+                        found = symbol_info.resolve(country, term)
+                        if found:
+                            with _SETUPS_LOCK:
+                                known = _json_read(SETUPS_SYMBOLS_FILE, {})
+                                known[country + ":" + term] = found
+                                _json_write(SETUPS_SYMBOLS_FILE, known)
+                            hits.insert(0, {"ticker": term, "sector": found.get("sector"), "industry": found.get("industry"),
+                                            "logoid": found.get("logoid"), "name": found.get("name"), "outside": True})
                 self._send(200, json.dumps(hits), "application/json")
             except Exception as error:
                 self._send(500, json.dumps({"error": str(error)}), "application/json")
@@ -1645,8 +1665,10 @@ class Handler(BaseHTTPRequestHandler):
                 buy_date = (q.get("date") or [""])[0]
                 if country not in config.COUNTRIES or not ticker or not buy_date:
                     raise ValueError("country, ticker and date are all required")
+                outside = _json_read(SETUPS_SYMBOLS_FILE, {}).get(country + ":" + ticker.upper()) or {}
                 self._send(200, json.dumps(
-                    setup_context.context_at(country, ticker, buy_date)),
+                    setup_context.context_at(country, ticker, buy_date, sector=outside.get("sector"),
+                                             industry=outside.get("industry"), logoid=outside.get("logoid"))),
                     "application/json")
             except Exception as error:
                 self._send(400, json.dumps({"error": str(error)}), "application/json")
@@ -1899,7 +1921,9 @@ class Handler(BaseHTTPRequestHandler):
                 der = setup_measure.derive(country, ticker, buy_date, body.get("entryPrice"), body.get("stop"))
                 if not der.get("error"):
                     buy_date = der["date"]          # a weekend or holiday date moves to the next session
-                ctx = setup_context.context_at(country, ticker, buy_date)
+                outside = _json_read(SETUPS_SYMBOLS_FILE, {}).get(country + ":" + ticker) or {}
+                ctx = setup_context.context_at(country, ticker, buy_date, sector=body.get("sector") or outside.get("sector"),
+                                               industry=body.get("industry") or outside.get("industry"), logoid=outside.get("logoid"))
                 if not der.get("error"):
                     ctx.update({k: v for k, v in setup_measure.notion_fields(der).items() if v is not None})
                 fields = {
@@ -1913,6 +1937,7 @@ class Handler(BaseHTTPRequestHandler):
                     "stop": body.get("stop"),
                     "stopReason": body.get("stopReason"),
                     "checklist": body.get("checklist") or None,
+                    "lines": body.get("lines") or None,
                 }
                 if body.get("baseLengthDays") is not None:
                     fields["baseLengthDays"] = body.get("baseLengthDays")
@@ -2111,7 +2136,7 @@ class Handler(BaseHTTPRequestHandler):
             try:
                 body = json.loads(self.rfile.read(length) or b"{}")
                 page_id = body.get("pageId")
-                allowed = {"setupId", "entryThesis", "exitRule", "baseLengthDays", "entryPrice", "stop", "stopReason", "checklist", "buyDate"}
+                allowed = {"setupId", "entryThesis", "exitRule", "baseLengthDays", "entryPrice", "stop", "stopReason", "checklist", "buyDate", "lines"}
                 fields = {k: v for k, v in (body.get("fields") or {}).items() if k in allowed}
                 if not page_id or not (fields or body.get("resync")):
                     raise ValueError("pageId and fields are both required")
@@ -2130,7 +2155,9 @@ class Handler(BaseHTTPRequestHandler):
                         if "buyDate" in fields:
                             fields["buyDate"] = bd
                             fields["title"] = f"{entry['ticker'].upper()} · {bd}"
-                        context = setup_context.context_at(code, entry["ticker"], bd)
+                        outside = _json_read(SETUPS_SYMBOLS_FILE, {}).get(code + ":" + entry["ticker"].upper()) or {}
+                        context = setup_context.context_at(code, entry["ticker"], bd, sector=entry.get("sector") or outside.get("sector"),
+                                                           industry=entry.get("industry") or outside.get("industry"), logoid=outside.get("logoid"))
                         if not der.get("error"):
                             context.update({k: v for k, v in setup_measure.notion_fields(der).items() if v is not None})
                 import notion_sync
