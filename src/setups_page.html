@@ -324,6 +324,14 @@ textarea.inp{height:auto;min-height:88px;padding:8px 10px;resize:vertical;line-h
 .tools select{max-width:180px}
 #sortf{max-width:170px}
 
+.readout{position:absolute;left:8px;top:6px;z-index:6;display:flex;gap:9px;flex-wrap:wrap;align-items:baseline;font-size:11.5px;color:var(--dim);background:color-mix(in srgb, var(--panel) 88%, transparent);padding:3px 7px;border-radius:6px;pointer-events:none;font-variant-numeric:tabular-nums;max-width:calc(100% - 80px)}
+.readout b{color:var(--ink);font-weight:600}
+.readout i{font-style:normal;color:var(--ink);font-family:IBM Plex Mono, ui-monospace, monospace}
+.readout .up{color:var(--up);font-weight:600}.readout .down{color:var(--down);font-weight:600}
+.readout i.hi{color:var(--accent);font-weight:600}.readout i.lo{color:var(--faint)}
+.pick.own{border-style:dashed}
+#ws-modehint{font-weight:500;color:var(--ink)}
+
 </style>
 </head>
 <body>
@@ -344,7 +352,8 @@ textarea.inp{height:auto;min-height:88px;padding:8px 10px;resize:vertical;line-h
         <div><span>In the form: folder</span><kbd>1</kbd>–<kbd>9</kbd></div>
         <div><span>In the form: entry day</span><span><kbd>←</kbd> <kbd>→</kbd></span></div>
         <div><span>In the form: save</span><span><kbd>Ctrl</kbd> <kbd>Enter</kbd></span></div>
-        <div><span>Set the stop on the chart</span><span><kbd>Shift</kbd> click</span></div>
+        <div><span>Measure a move on a chart</span><span><kbd>Shift</kbd> drag</span></div>
+        <div><span>Undo the last chart change</span><span><kbd>Ctrl</kbd> <kbd>Z</kbd></span></div>
         <div><span>Draw a trend line</span><kbd>L</kbd></div><div><span>Undo the last line</span><span><kbd>Ctrl</kbd> <kbd>Z</kbd></span></div>
       </div>
     </div>
@@ -370,14 +379,14 @@ textarea.inp{height:auto;min-height:88px;padding:8px 10px;resize:vertical;line-h
     <div class="ws-chart">
       <div class="ws-tk" id="ws-tk"></div>
       <div class="ctl">
-        <div class="seg" id="ws-mode" role="group" aria-label="What a click on the chart sets"><button type="button" data-m="entry" class="on">Click sets entry day</button><button type="button" data-m="stop">Click sets stop</button><button type="button" data-m="line" title="Draw a trend line: click its start, then its end (L)">Draw line <kbd>L</kbd></button></div>
-        <span id="ws-linebtns" class="row" style="gap:6px" hidden><button type="button" class="btn" data-ws="undoline">Undo line</button><button type="button" class="btn" data-ws="clearlines">Clear lines</button></span>
+        <div class="seg" id="ws-mode" role="group" aria-label="What a click on the chart does"><button type="button" data-m="look" class="on" title="Clicks change nothing">Look</button><button type="button" data-m="entry" title="The next click sets the entry day">Set entry day</button><button type="button" data-m="stop" title="The next click sets the stop">Set stop</button><button type="button" data-m="line" title="Draw a trend line: click its start, then its end. Shift keeps it flat. (L)">Draw line <kbd>L</kbd></button></div>
+        <span id="ws-linebtns" class="row" style="gap:6px" hidden><button type="button" class="btn" id="ws-delline" data-ws="delline" hidden>Delete line <kbd>Del</kbd></button><button type="button" class="btn" data-ws="clearlines">Clear lines</button></span>
         <span class="spacer"></span>
         <div class="tf" id="ws-tf"><button type="button" data-r="base">Base</button><button type="button" data-r="6m">6M</button><button type="button" data-r="1y">1Y</button><button type="button" data-r="all">All</button></div>
       </div>
       <div class="chartwrap"><div class="lwbox" id="ws-chart"></div><canvas class="ovl" id="ws-ovl"></canvas></div>
-      <div class="legend"><span><i style="border-color:#2962FF"></i>EMA 10</span><span><i style="border-color:#F23645"></i>EMA 20</span><span><i style="border-color:#FF9800"></i>EMA 50</span><span><i class="dash" style="border-color:var(--accent)"></i>entry</span><span><i class="dash" style="border-color:var(--down)"></i>stop</span><span><i class="box"></i>base</span><span><i style="border-color:var(--faint);border-top-style:dotted"></i>52-week high</span><span><i style="border-color:var(--ink)"></i>your lines</span></div>
-      <p class="hint" id="ws-hint">Click a bar to set the entry day. Shift-click sets the stop. <kbd>L</kbd> draws a line: click its start, then its end. <kbd>←</kbd> <kbd>→</kbd> move the entry one session.</p>
+      <div class="legend"><span><i style="border-color:#2962FF"></i>EMA 10</span><span><i style="border-color:#F23645"></i>EMA 20</span><span><i style="border-color:#FF9800"></i>EMA 50</span><span><i class="dash" style="border-color:var(--accent)"></i>entry</span><span><i class="dash" style="border-color:var(--down)"></i>stop</span><span><i class="box"></i>base</span><span><i style="border-color:var(--faint);border-top-style:dotted"></i>52-week high</span><span><i style="border-color:var(--ink)"></i>your lines</span><span><i style="border-color:#0ea5e9"></i>volume 30-day avg</span></div>
+      <p class="hint" id="ws-hint"><b id="ws-modehint"></b> <kbd>Shift</kbd> drag measures. <kbd>Ctrl</kbd> <kbd>Z</kbd> undoes the last chart change. <kbd>←</kbd> <kbd>→</kbd> nudge the entry while Set entry day is on.</p>
     </div>
     <div class="ws-form" id="ws-form"></div>
   </div>
@@ -446,9 +455,21 @@ function getPrices(code, t){
 
 /* ---------- the library ---------- */
 var TYPES = [], ENTRIES = [], QUEUE = [], ENV = {}, LOADED = false, SYNC_NOTE = "";
-var EXIT_RULES = ["2 closes below 20 EMA", "3x ATR from 50 EMA"];
+/* Exit rules replayed on prices by the hub (src/setup_measure.py); the label is what Notion stores. */
+var REPLAYED = [["ema20x2", "2 closes below 20 EMA"], ["combo", "2 closes < 20 or close < 50"], ["e10", "Close below 10 EMA"], ["e50", "Close below 50 EMA"],
+  ["trail", "10% trailing stop"], ["atr3", "3x ATR from 50 EMA"], ["ext25", "Extended 25% above the 50 EMA"], ["gap4", "Gap down 4% or more"],
+  ["dist", "Distribution day: down 2% on 1.5x volume"], ["kill", "Kill day: new low, closes at the bottom, heavy volume"]];
+var EXIT_OPTS = [];   // options already in the Notion "Exit Rule" column, including ones you typed
+var VOL_AVG = "#0ea5e9";
+function exitChoices(){
+  var out = REPLAYED.map(function(r){ return r[1]; });
+  EXIT_OPTS.concat(ENTRIES.map(function(e){ return e.exitRule; })).forEach(function(r){ if (r && out.indexOf(r) < 0) out.push(r); });
+  if (W && W.exitRule && out.indexOf(W.exitRule) < 0) out.push(W.exitRule);
+  return out;
+}
+function loadExitOpts(){ if (loadExitOpts.done) return; loadExitOpts.done = true; api("/api/setups/schema").then(function(s){ EXIT_OPTS = (s && s["Exit Rule"]) || []; if (W && $("ws-exits")) renderExits(); }); }
 var REASONS = ["Below the base low", "Below the 20 EMA", "Below the 50 EMA", "Fixed % risk", "Prior swing low", "Gap fill"];
-var RULE_KEY = {"2 closes below 20 EMA":"ema20x2"};
+var RULE_KEY = {}; REPLAYED.forEach(function(r){ RULE_KEY[r[1]] = r[0]; });
 /* Starting criteria per folder until you edit them; editing saves the list on that folder in Notion. */
 var DEFAULT_CRIT = {
   "VCP": ["Each pullback smaller than the last", "Volume dries up in the last contraction", "Tight closes near the pivot", "Breaks the pivot on volume", "Above a rising 50 EMA"],
@@ -612,7 +633,7 @@ function makeChart(key, box, ovl, P, o){
     width: box.clientWidth || 600, height: box.clientHeight || 320,
     layout: {background:{type:"solid", color:cssv("--panel")}, textColor:cssv("--dim"), fontFamily:"IBM Plex Sans, system-ui, sans-serif", fontSize:11},
     grid: {vertLines:{color:cssv("--grid")}, horzLines:{color:cssv("--grid")}},
-    rightPriceScale: {borderColor:cssv("--line"), scaleMargins:{top:0.08, bottom:0.26}},
+    rightPriceScale: {borderColor:cssv("--line"), scaleMargins:{top:0.06, bottom:0.3}},
     timeScale: {borderColor:cssv("--line"), rightOffset:4},
     crosshair: {mode:0},
     localization: {priceFormatter:function(p){ return fp(p); }}
@@ -623,21 +644,22 @@ function makeChart(key, box, ovl, P, o){
   cs.setData(bars);
   if (P.v.some(function(v){ return v; })){
     var vs = chart.addHistogramSeries({priceScaleId:"vol", priceFormat:{type:"volume"}, priceLineVisible:false, lastValueVisible:false});
-    chart.priceScale("vol").applyOptions({scaleMargins:{top:0.8, bottom:0}});
+    chart.priceScale("vol").applyOptions({scaleMargins:{top:0.73, bottom:0}});
     var run = 0, q = [], avg = [];
     P.v.forEach(function(v, i){ v = v || 0; q.push(v); run += v; if (q.length > 30) run -= q.shift(); avg.push(i >= 4 ? run / q.length : null); });
     var typ = avg.filter(function(x){ return x != null; }).sort(function(a, b){ return a - b; });
-    var cap = 3 * (typ.length ? typ[Math.floor(typ.length / 2)] : 0) || Infinity;   // one news-day spike must not flatten the rest
+    var cap = 6 * (typ.length ? typ[Math.floor(typ.length / 2)] : 0) || Infinity;   // only a freak spike (6x the usual) is trimmed, so breakout days still stand out
     vs.setData(P.d.map(function(d, i){ return {time:d, value:Math.min(P.v[i] || 0, cap), color:hexA(P.c[i] >= (i ? P.c[i - 1] : P.o[i]) ? up : dn, 0.45)}; }));
-    var al = chart.addLineSeries({priceScaleId:"vol", color:"#f59e0b", lineWidth:1, priceLineVisible:false, lastValueVisible:false, crosshairMarkerVisible:false});
+    var al = chart.addLineSeries({priceScaleId:"vol", color:VOL_AVG, lineWidth:2, priceLineVisible:false, lastValueVisible:false, crosshairMarkerVisible:false});
     al.setData(P.d.map(function(d, i){ return avg[i] == null ? null : {time:d, value:Math.min(avg[i], cap)}; }).filter(Boolean));
   }
   [[P.e10, "#2962FF"], [P.e20, "#F23645"], [P.e50, "#FF9800"]].forEach(function(s){
     var l = chart.addLineSeries({color:s[1], lineWidth:1, priceLineVisible:false, lastValueVisible:false, crosshairMarkerVisible:false});
     l.setData(P.d.map(function(d, i){ return s[0][i] == null ? null : {time:d, value:s[0][i]}; }).filter(Boolean));
   });
-  var st = {key:key, chart:chart, cs:cs, P:P, o:o, box:box, ovl:ovl, lines:[], range:o.range || "entry"};
+  var st = {key:key, chart:chart, cs:cs, P:P, o:o, box:box, ovl:ovl, lines:[], range:o.range || "entry", bars:bars, vavg:typeof avg !== "undefined" ? avg : null, meas:null};
   CH[key] = st;
+  readout(st); measureTool(st);
   marks(st);
   chart.timeScale().subscribeVisibleLogicalRangeChange(function(){ requestAnimationFrame(function(){ drawOvl(st); }); });
   st.ro = new ResizeObserver(function(){ var w = box.clientWidth, h = box.clientHeight; if (w > 0 && h > 0){ chart.applyOptions({width:w, height:h}); requestAnimationFrame(function(){ drawOvl(st); }); } });
@@ -685,6 +707,7 @@ function drawOvl(st){
   var m = st.o.m, P = st.P, ts = st.chart.timeScale();
   var pw = W - st.chart.priceScale("right").width(), ph = H - ts.height();
   drawLines(st, g, pw, ph);
+  drawMeas(st, g, pw, ph);
   if (!m || !m.baseStart || st.o.k == null) return;
   var x1 = ts.timeToCoordinate(m.baseStart), x2 = ts.timeToCoordinate(P.d[st.o.k]);
   var y1 = st.cs.priceToCoordinate(m.baseHigh), y2 = st.cs.priceToCoordinate(m.baseLow);
@@ -702,17 +725,101 @@ function drawOvl(st){
 function drawLines(st, g, pw, ph){
   var L = st.o.lines || [], pv = st.o.preview, ts = st.chart.timeScale();
   if (!L.length && !pv) return;
-  var col = cssv("--ink");
+  var col = cssv("--ink"), hot = cssv("--accent");
   g.save(); g.beginPath(); g.rect(0, 0, pw, ph); g.clip();
-  g.strokeStyle = col; g.fillStyle = col; g.lineWidth = 1.6; g.lineCap = "round";
-  function seg(a, b, dashed){
+  g.lineCap = "round";
+  function seg(a, b, dashed, sel){
     var x1 = ts.timeToCoordinate(a[0]), y1 = st.cs.priceToCoordinate(a[1]), x2 = ts.timeToCoordinate(b[0]), y2 = st.cs.priceToCoordinate(b[1]);
     if (x1 == null || y1 == null || x2 == null || y2 == null) return;
+    g.strokeStyle = sel ? hot : col; g.fillStyle = sel ? hot : col; g.lineWidth = sel ? 2.6 : 1.6;
     g.setLineDash(dashed ? [5, 4] : []); g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2); g.stroke(); g.setLineDash([]);
-    [[x1, y1], [x2, y2]].forEach(function(p){ g.beginPath(); g.arc(p[0], p[1], 2.4, 0, Math.PI * 2); g.fill(); });
+    [[x1, y1], [x2, y2]].forEach(function(p){ g.beginPath(); g.arc(p[0], p[1], sel ? 3.6 : 2.4, 0, Math.PI * 2); g.fill(); });
   }
-  L.forEach(function(l){ seg([l[0], l[1]], [l[2], l[3]], false); });
+  L.forEach(function(l, i){ seg([l[0], l[1]], [l[2], l[3]], false, st.o.sel === i); });
   if (pv && pv.a) seg(pv.a, pv.b || pv.a, true);
+  g.restore();
+}
+/* Which saved line sits under a click: index of the nearest one within 6 px, or -1. */
+function lineHit(st, x, y){
+  var L = st.o.lines || [], ts = st.chart.timeScale(), best = -1, bd = 6;
+  L.forEach(function(l, i){
+    var x1 = ts.timeToCoordinate(l[0]), y1 = st.cs.priceToCoordinate(l[1]), x2 = ts.timeToCoordinate(l[2]), y2 = st.cs.priceToCoordinate(l[3]);
+    if (x1 == null || y1 == null || x2 == null || y2 == null) return;
+    var dx = x2 - x1, dy = y2 - y1, len = dx * dx + dy * dy, t = len ? Math.max(0, Math.min(1, ((x - x1) * dx + (y - y1) * dy) / len)) : 0;
+    var d = Math.hypot(x - (x1 + t * dx), y - (y1 + t * dy));
+    if (d < bd){ bd = d; best = i; }
+  });
+  return best;
+}
+/* The bar under an x position (clamped to the data), as an index into st.bars. */
+function barAt(st, x){
+  var lg = st.chart.timeScale().coordinateToLogical(x);
+  if (lg == null || !st.bars.length) return null;
+  return Math.max(0, Math.min(st.bars.length - 1, Math.round(lg)));
+}
+/* Hover readout: the day under the cursor, its change from the prior close, and volume against its 30-day average. */
+function readout(st){
+  var wrap = st.box.parentNode, el = wrap.querySelector(".readout");
+  if (!el){ el = document.createElement("div"); el.className = "readout"; wrap.appendChild(el); }
+  el.hidden = true;
+  var P = st.P, idx = {};
+  P.d.forEach(function(d, i){ idx[d] = i; });
+  st.chart.subscribeCrosshairMove(function(p){
+    if (CH[st.key] !== st) return;
+    if (!p || p.time == null || !p.point){ el.hidden = true; return; }
+    var i = idx[timeStr(p.time)]; if (i == null || P.c[i] == null){ el.hidden = true; return; }
+    var pc = i ? P.c[i - 1] : null, ch = pc ? (P.c[i] / pc - 1) * 100 : null;
+    var va = st.vavg && st.vavg[i - 1 >= 0 ? i - 1 : i], vx = va && P.v[i] ? P.v[i] / va : null;
+    el.innerHTML = '<b>' + fds(P.d[i]) + '</b>'
+      + '<span>O <i>' + fp(P.o[i]) + '</i></span><span>H <i>' + fp(P.h[i]) + '</i></span><span>L <i>' + fp(P.l[i]) + '</i></span><span>C <i>' + fp(P.c[i]) + '</i></span>'
+      + (ch != null ? '<span class="' + (ch >= 0 ? "up" : "down") + '">' + pct(ch, 2) + '</span>' : "")
+      + (P.v[i] ? '<span>Vol <i>' + fv(P.v[i]) + '</i>' + (vx ? ' <i class="' + (vx >= 1.5 ? "hi" : vx < 0.7 ? "lo" : "") + '">' + vx.toFixed(1) + 'x avg</i>' : "") + '</span>' : "");
+    el.hidden = false;
+  });
+}
+function fv(v){ return v >= 1e9 ? (v / 1e9).toFixed(2) + "B" : v >= 1e6 ? (v / 1e6).toFixed(2) + "M" : v >= 1e3 ? (v / 1e3).toFixed(0) + "K" : String(Math.round(v)); }
+/* Shift-drag on any chart measures a move: % change and sessions between two points. A plain click clears it. */
+function measureTool(st){
+  var box = st.box; box._measSt = st;
+  if (box._measBound) return;
+  box._measBound = true;
+  var drag = null;
+  function pt(ev){
+    var s = box._measSt, r = box.getBoundingClientRect(), x = ev.clientX - r.left, y = ev.clientY - r.top, i = barAt(s, x), pr = s.cs.coordinateToPrice(y);
+    return i == null || pr == null ? null : {i:i, t:s.bars[i].time, p:pr};
+  }
+  box.addEventListener("pointerdown", function(ev){
+    var s = box._measSt; if (!s || CH[s.key] !== s) return;
+    if (!ev.shiftKey || s.o.lineMode){ if (s.meas && !ev.shiftKey){ s.meas = null; requestAnimationFrame(function(){ drawOvl(s); }); } return; }
+    var a = pt(ev); if (!a) return;
+    ev.preventDefault(); ev.stopPropagation();
+    drag = s; s.meas = {a:a, b:a}; s.measAt = Date.now();
+    try { box.setPointerCapture(ev.pointerId); } catch (x) {}
+    drawOvl(s);
+  }, true);
+  box.addEventListener("pointermove", function(ev){
+    if (!drag) return; ev.preventDefault(); ev.stopPropagation();
+    var b = pt(ev); if (b){ drag.meas.b = b; drawOvl(drag); }
+  }, true);
+  function end(ev){ if (!drag) return; ev.stopPropagation(); drag.measAt = Date.now(); drag = null; }
+  box.addEventListener("pointerup", end, true);
+  box.addEventListener("pointercancel", end, true);
+  ["mousedown", "mouseup", "click"].forEach(function(n){ box.addEventListener(n, function(ev){ var s = box._measSt; if (ev.shiftKey && s && !s.o.lineMode) ev.stopPropagation(); }, true); });
+}
+function drawMeas(st, g, pw, ph){
+  var M = st.meas; if (!M) return;
+  var ts = st.chart.timeScale(), x1 = ts.timeToCoordinate(M.a.t), x2 = ts.timeToCoordinate(M.b.t), y1 = st.cs.priceToCoordinate(M.a.p), y2 = st.cs.priceToCoordinate(M.b.p);
+  if (x1 == null || x2 == null || y1 == null || y2 == null) return;
+  var chg = (M.b.p / M.a.p - 1) * 100, n = M.b.i - M.a.i, c = chg >= 0 ? cssv("--up") : cssv("--down");
+  g.save(); g.beginPath(); g.rect(0, 0, pw, ph); g.clip();
+  g.fillStyle = hexA(c, 0.12); g.fillRect(Math.min(x1, x2), Math.min(y1, y2), Math.abs(x2 - x1), Math.abs(y2 - y1));
+  g.strokeStyle = c; g.lineWidth = 1.2; g.setLineDash([]);
+  g.beginPath(); g.moveTo(x1, y1); g.lineTo(x2, y2); g.stroke();
+  var lbl = pct(chg, 2) + "  \u00b7  " + Math.abs(n) + (Math.abs(n) === 1 ? " session" : " sessions"), sub = fp(M.a.p) + " \u2192 " + fp(M.b.p);
+  g.font = "600 12px IBM Plex Sans, system-ui, sans-serif";
+  var w = Math.max(g.measureText(lbl).width, g.measureText(sub).width) + 14, bx = Math.max(4, Math.min(x2 + 8, pw - w - 4)), by = Math.max(4, Math.min(y2 + (chg >= 0 ? -44 : 8), ph - 44));
+  g.fillStyle = c; g.fillRect(bx, by, w, 38);
+  g.fillStyle = "#fff"; g.fillText(lbl, bx + 7, by + 16); g.font = "11px IBM Plex Mono, ui-monospace, monospace"; g.fillText(sub, bx + 7, by + 31);
   g.restore();
 }
 function clearOvl(c){ if (!c) return; var g = c.getContext("2d"); g.setTransform(1, 0, 0, 1, 0, 0); g.clearRect(0, 0, c.width, c.height); }
@@ -742,6 +849,7 @@ function spark(cv, sp){
 /* The chart as it looks now, base box included, saved as the entry's chart in Notion when no image was pasted. */
 function snapshot(st){
   try {
+    if (st.meas){ st.meas = null; drawOvl(st); }
     var shot = st.chart.takeScreenshot(), c = document.createElement("canvas");
     c.width = shot.width; c.height = shot.height;
     var g = c.getContext("2d"); g.drawImage(shot, 0, 0);
@@ -836,7 +944,7 @@ function ctxTags(x){
 function legendHTML(withEntry){
   return '<div class="legend"><span><i style="border-color:#2962FF"></i>EMA 10</span><span><i style="border-color:#F23645"></i>EMA 20</span><span><i style="border-color:#FF9800"></i>EMA 50</span>'
     + (withEntry ? '<span><i class="dash" style="border-color:var(--accent)"></i>entry</span><span><i class="dash" style="border-color:var(--down)"></i>stop</span><span><i class="box"></i>base</span>' : "")
-    + '<span><i style="border-color:var(--faint);border-top-style:dotted"></i>52-week high</span></div>';
+    + '<span><i style="border-color:var(--faint);border-top-style:dotted"></i>52-week high</span><span><i style="border-color:#0ea5e9"></i>volume 30-day avg</span><span class="dim"><kbd>Shift</kbd> drag to measure</span></div>';
 }
 function exitKeyFor(e){ return S.exitView && S.exitView.id === e.id ? S.exitView.k : (RULE_KEY[e.exitRule] || null); }
 function exitMark(x){ return x ? {date:x.date, color:x.color, text:x.kind === "stop" ? "stopped" : x.kind === "hold" ? "open" : "exit"} : null; }
@@ -1129,7 +1237,7 @@ function openWS(opts){
   closeMenu();
   var w = {mode:opts.mode, id:opts.id || null, qid:opts.qid || null, code:S.country, t:null, logoid:null, name:null, sector:null, industry:null, P:null, k:null, date:null,
     entry:null, stop:null, stopLocked:false, reason:"Fixed % risk", folder:null, checks:[], note:"", exitRule:null, img:null, D:null, ctx:null, errors:{},
-    range:"base", clickMode:"entry", dirty:false, restored:false, dupOk:false, order:folderOrder(), lines:[], lineStart:null, outside:false};
+    range:"base", clickMode:"look", dirty:false, undo:[], selLine:-1, restored:false, dupOk:false, order:folderOrder(), lines:[], lineStart:null, outside:false};
   if (opts.mode === "edit"){
     var e = byId(opts.id); if (!e || e._pending) return;
     Object.assign(w, {code:e.code, t:e.ticker, logoid:e.logoid, name:e.name, sector:e.sector, industry:e.industry, date:e.buyDate, entry:e.entryPx, stop:e.stop,
@@ -1147,8 +1255,10 @@ function openWS(opts){
     if (!w.date) w.range = "1y";
   }
   W = w;
+  loadExitOpts();
   var dk = draftKey();
   if (DRAFTS[dk]){ Object.assign(W, DRAFTS[dk]); W.restored = true; W.dirty = true; W.D = null; }
+  if (!W.date) W.clickMode = "entry";   // nothing to protect yet: the first click picks the entry day
   $("ws").hidden = false; document.body.style.overflow = "hidden";
   renderWS();
   if (W.t) loadWsPrices(); else { killChart("w"); clearOvl($("ws-ovl")); $("ws-chart").innerHTML = '<div class="wsempty"><div>Pick a ticker and its chart appears here.<br>Then click the bar where you would have bought.</div></div>'; setTimeout(function(){ var i = $("ws-t"); if (i) i.focus(); }, 40); }
@@ -1210,7 +1320,7 @@ function renderForm(){
   var h = '<div class="field"><div class="flabel">Folder<span class="hint">press 1 to 9; your most-used folders come first</span></div><div class="picks">'
     + W.order.map(function(t, i){ return '<button type="button" class="pick' + (W.folder === t ? " on" : "") + '" data-f="' + esc(t) + '">' + (i < 9 ? "<kbd>" + (i + 1) + "</kbd>" : "") + esc(t) + '</button>'; }).join("") + '</div>'
     + (W.errors.folder ? '<div class="errmsg">Pick a folder for this example.</div>' : "") + '</div>';
-  h += '<div class="field"><div class="flabel"><label for="ws-date">Entry day</label><span class="hint">or click a bar on the chart</span></div><div id="ws-datesec">' + dateSecHTML() + '</div></div>';
+  h += '<div class="field"><div class="flabel"><label for="ws-date">Entry day</label><span class="hint">or Set entry day above the chart, then click a bar</span></div><div id="ws-datesec">' + dateSecHTML() + '</div></div>';
   h += '<div class="field"><div class="row3"><div><label for="ws-entry">Entry price</label><input class="inp mono" id="ws-entry" inputmode="decimal" value="' + (W.entry != null ? (+W.entry).toFixed(2) : "") + '"></div>'
     + '<div><label for="ws-stop">Stop</label><input class="inp mono" id="ws-stop" inputmode="decimal" value="' + (W.stop != null ? (+W.stop).toFixed(2) : "") + '"></div>'
     + '<div><label for="ws-pct">Stop % below</label><input class="inp mono" id="ws-pct" inputmode="decimal" value="' + (risk != null ? risk.toFixed(1) : "") + '"></div></div>'
@@ -1231,14 +1341,20 @@ function renderForm(){
     + (W.folder ? '<div class="cl">' + crit.map(function(c){ return '<label><input type="checkbox" data-crit="' + esc(c) + '"' + (W.checks.indexOf(c) >= 0 ? " checked" : "") + '>' + esc(c) + '</label>'; }).join("") + '</div>'
       + '<div class="addc"><label class="sr" for="ws-crit">New criterion</label><input class="inp" id="ws-crit" placeholder="Add a criterion to ' + esc(W.folder) + '"><button type="button" class="btn" data-ws="addcrit">Add</button></div>' : "") + '</div>';
   h += '<div class="field"><div class="flabel"><label for="ws-note">Note</label><span class="hint">why it is a clean example</span></div><textarea class="inp" id="ws-note" placeholder="What made this one clean? What would you look for next time?">' + esc(W.note) + '</textarea></div>';
-  h += '<div class="field"><div class="flabel">Exit rule<span class="hint">compare all six after saving</span></div><div class="picks">'
-    + EXIT_RULES.concat(["Decide later"]).map(function(r){ var on = r === "Decide later" ? !W.exitRule : W.exitRule === r; return '<button type="button" class="pick' + (on ? " on" : "") + '" data-exit="' + esc(r) + '">' + esc(r) + '</button>'; }).join("") + '</div></div>';
+  h += '<div class="field"><div class="flabel">Exit rule<span class="hint">solid ones are replayed on prices; compare them all after saving</span></div><div id="ws-exits">' + exitsHTML() + '</div></div>';
   h += '<div class="field"><div class="flabel">Your chart<span class="hint">optional: ' + (W.mode === "edit" ? "a pasted image replaces the chart in Notion" : "without one, the chart on the left is saved to Notion with entry, stop and base drawn") + '</span></div>'
     + (W.img ? '<div class="shot"><img src="' + W.img + '" alt="Your pasted chart"><button type="button" class="btn" data-ws="noimg">Remove</button></div>'
       : '<div class="paste" id="ws-paste" data-ws="paste" tabindex="0" role="button">Paste a chart image (Ctrl V) anywhere in this form, or click to choose a file</div><input type="file" id="ws-file" accept="image/*" hidden>') + '</div>';
   $("ws-form").innerHTML = h;
   updRisk(false); checkDup();
 }
+function exitsHTML(){
+  return '<div class="picks">' + exitChoices().concat(["Decide later"]).map(function(r){
+      var on = r === "Decide later" ? !W.exitRule : W.exitRule === r, own = r !== "Decide later" && !RULE_KEY[r];
+      return '<button type="button" class="pick' + (on ? " on" : "") + (own ? " own" : "") + '" data-exit="' + esc(r) + '"' + (own ? ' title="Your rule: saved to Notion, not replayed on prices"' : "") + '>' + esc(r) + '</button>'; }).join("") + '</div>'
+    + '<div class="addc"><label class="sr" for="ws-exitnew">Your own exit rule</label><input class="inp" id="ws-exitnew" placeholder="Add your own exit rule, e.g. Sell into the first climax run"><button type="button" class="btn" data-ws="addexit">Add</button></div>';
+}
+function renderExits(){ var el = $("ws-exits"); if (el) el.innerHTML = exitsHTML(); }
 function renderDateSec(){ var el = $("ws-datesec"); if (el) el.innerHTML = dateSecHTML(); }
 function renderMeasured(){ var el = $("ws-measured"); if (el) el.innerHTML = measuredHTML(); renderDateSec(); }
 function updRisk(setInputs){
@@ -1266,24 +1382,62 @@ function checkDup(){
   el.innerHTML = '<span>Already logged: <b>' + esc(hit.e.ticker) + '</b> on ' + fd(hit.e.buyDate) + ' in ' + esc(hit.e.setup) + ', ' + (hit.gap === 0 ? "on the same day" : hit.gap + " sessions " + (hit.before ? "earlier" : "later")) + '. Probably the same move.</span>'
     + '<button type="button" class="btn" data-ws="dup-open" data-id="' + esc(hit.e.id) + '">Open it</button><button type="button" class="btn" data-ws="dup-ok">Log anyway</button>';
 }
-function wsOpts(){ return {k:W.k, entry:W.entry, stop:W.stop, m:(W.D && W.D.date === W.date) ? W.D.m : null, after:12, range:W.range, lines:W.lines, preview:W.lineStart ? {a:W.lineStart, b:W.linePreview} : null}; }
-/* Click modes: entry day, stop, or drawing a line (start, then end). */
+function wsOpts(){ return {k:W.k, entry:W.entry, stop:W.stop, m:(W.D && W.D.date === W.date) ? W.D.m : null, after:12, range:W.range, lines:W.lines, preview:W.lineStart ? {a:W.lineStart, b:W.linePreview} : null, lineMode:W.clickMode === "line", sel:W.selLine}; }
+/* Click modes. "look" (the default when editing) ignores clicks, so panning can never move a saved entry.
+   "entry" and "stop" act on the next click only, then fall back to look. "line" stays on until you leave it. */
+var MODE_HINT = {
+  look:"Clicks on the chart change nothing, so drag and zoom freely. Shift-drag measures a move. Click a line to select it.",
+  entry:"Click the bar you would have bought. Only this click counts; the chart goes back to look after it.",
+  stop:"Click the price for the stop. Only this click counts; the chart goes back to look after it.",
+  line:"Click the start, then the end. Hold Shift for a flat line. Esc or L to stop drawing."
+};
 function setMode(m){
   if (!W) return;
   W.clickMode = m; if (m !== "line"){ W.lineStart = null; W.linePreview = null; }
+  if (m !== "look") W.selLine = -1;
   Array.prototype.forEach.call(document.querySelectorAll("#ws-mode button"), function(b){ b.classList.toggle("on", b.dataset.m === m); });
+  var hm = $("ws-modehint"); if (hm) hm.textContent = MODE_HINT[m] || "";
+  var cw = $("ws-chart"); if (cw) cw.style.cursor = m === "look" ? "" : "crosshair";
   lineBtns(); updWsMarks();
 }
-function lineBtns(){ var b = $("ws-linebtns"); if (b) b.hidden = !(W && (W.clickMode === "line" || W.lines.length)); }
-function addLinePoint(t, price){
+function lineBtns(){
+  var b = $("ws-linebtns"); if (b) b.hidden = !(W && (W.clickMode === "line" || W.lines.length));
+  var d = $("ws-delline"); if (d) d.hidden = !(W && W.selLine >= 0 && W.selLine < W.lines.length);
+}
+/* Chart undo: every change made on the chart (entry day, stop, lines) can be taken back with Ctrl+Z, newest first. */
+function pushUndo(label){
+  if (!W) return;
+  W.undo.push({label:label, k:W.k, date:W.date, entry:W.entry, stop:W.stop, stopLocked:W.stopLocked, lines:W.lines.map(function(l){ return l.slice(); })});
+  if (W.undo.length > 50) W.undo.shift();
+}
+function undoChart(){
+  if (!W) return;
+  if (W.lineStart){ W.lineStart = null; W.linePreview = null; updWsMarks(); toast("Line cancelled."); return; }
+  var u = W.undo.pop();
+  if (!u){ toast("Nothing on the chart to undo."); return; }
+  var dateMoved = u.date !== W.date;
+  W.k = u.k; W.date = u.date; W.entry = u.entry; W.stop = u.stop; W.stopLocked = u.stopLocked; W.lines = u.lines; W.selLine = -1;
+  touch(); updRisk(true); lineBtns(); updWsMarks(); requestDerived();
+  if (dateMoved){ renderMeasured(); checkDup(); requestCtx(); var di = $("ws-date"); if (di) di.value = W.date || ""; }
+  toast("Undid " + u.label + (dateMoved && W.date ? ". Entry day is back to " + fd(W.date) : "") + ".");
+}
+function addLinePoint(t, price, flat){
   var pt = [t, +(+price).toFixed(2)];
   if (!W.lineStart){ W.lineStart = pt; W.linePreview = null; updWsMarks(); return; }
+  if (flat) pt[1] = W.lineStart[1];
   if (W.lineStart[0] === pt[0] && Math.abs(W.lineStart[1] - pt[1]) < 1e-9) return;
   var a = W.lineStart, b = pt; if (b[0] < a[0]){ var x = a; a = b; b = x; }
+  pushUndo("the new line");
   W.lines.push([a[0], a[1], b[0], b[1]]); if (W.lines.length > 40) W.lines.shift();
   W.lineStart = null; W.linePreview = null; touch(); lineBtns(); updWsMarks();
 }
-function undoLine(){ if (!W) return; if (W.lineStart){ W.lineStart = null; W.linePreview = null; updWsMarks(); return; } if (W.lines.length){ W.lines.pop(); touch(); lineBtns(); updWsMarks(); } }
+function deleteLine(){
+  if (!W || W.selLine < 0 || W.selLine >= W.lines.length) return;
+  pushUndo("deleting a line");
+  W.lines.splice(W.selLine, 1); W.selLine = -1; touch(); lineBtns(); updWsMarks();
+  toast("Line deleted. Ctrl+Z brings it back.");
+}
+function undoLine(){ if (!W) return; if (W.lineStart){ W.lineStart = null; W.linePreview = null; updWsMarks(); return; } if (W.lines.length){ pushUndo("removing the last line"); W.lines.pop(); W.selLine = -1; touch(); lineBtns(); updWsMarks(); } }
 function setWsTf(){ Array.prototype.forEach.call(document.querySelectorAll("#ws-tf button"), function(b){ b.classList.toggle("on", !!W && b.dataset.r === W.range); }); }
 function wsChart(){
   if (!W || !W.P) return;
@@ -1291,15 +1445,27 @@ function wsChart(){
   if (!st) return;
   st.chart.subscribeClick(function(p){
     if (!W || CH.w !== st || !p || p.time == null) return;
+    if (st.measAt && Date.now() - st.measAt < 400) return;    // the end of a shift-drag measure is not a click
     var k = P.d.indexOf(timeStr(p.time));
     if (k < 0) return;
-    if (W.clickMode === "line"){ if (p.point){ var lp = st.cs.coordinateToPrice(p.point.y); if (lp != null && lp > 0) addLinePoint(P.d[k], lp); } return; }
-    if (W.clickMode === "stop" || SHIFT){ if (p.point){ var price = st.cs.coordinateToPrice(p.point.y); if (price != null && price > 0) setStop(+(+price).toFixed(2)); } }
-    else setEntryIdx(k);
+    if (W.clickMode === "look"){
+      var hit = p.point ? lineHit(st, p.point.x, p.point.y) : -1;
+      if (hit !== W.selLine){ W.selLine = hit; lineBtns(); updWsMarks(); }
+      return;
+    }
+    if (W.clickMode === "line"){ if (p.point){ var lp = st.cs.coordinateToPrice(p.point.y); if (lp != null && lp > 0) addLinePoint(P.d[k], lp, SHIFT); } return; }
+    if (W.clickMode === "stop"){
+      if (p.point){ var price = st.cs.coordinateToPrice(p.point.y); if (price != null && price > 0){ pushUndo("the stop change"); setStop(+(+price).toFixed(2)); toast("Stop set to " + fp(W.stop) + ". Ctrl+Z undoes it."); } }
+      setMode("look"); return;
+    }
+    if (W.clickMode === "entry"){
+      var had = W.date; pushUndo("the entry day change"); setEntryIdx(k); setMode("look");
+      if (had && had !== W.date) toast("Entry day moved to " + fd(W.date) + ". Ctrl+Z undoes it.");
+    }
   });
   st.chart.subscribeCrosshairMove(function(p){
     if (!W || CH.w !== st || !W.lineStart || !p || p.time == null || !p.point) return;
-    var lp = st.cs.coordinateToPrice(p.point.y); if (lp == null) return;
+    var lp = SHIFT ? W.lineStart[1] : st.cs.coordinateToPrice(p.point.y); if (lp == null) return;
     W.linePreview = [timeStr(p.time), lp]; st.o.preview = {a:W.lineStart, b:W.linePreview}; drawOvl(st);
   });
   setWsTf(); lineBtns();
@@ -1663,7 +1829,14 @@ $("ws").addEventListener("click", function(ev){
   }
   if (a === "noimg"){ W.img = null; touch(); renderForm(); return; }
   if (a === "undoline"){ undoLine(); return; }
-  if (a === "clearlines"){ if (W.lines.length){ var kept = W.lines.slice(); W.lines = []; W.lineStart = null; touch(); lineBtns(); updWsMarks(); toast("Lines cleared.", function(){ if (W){ W.lines = kept; touch(); lineBtns(); updWsMarks(); } }); } return; }
+  if (a === "delline"){ deleteLine(); return; }
+  if (a === "clearlines"){ if (W.lines.length){ pushUndo("clearing the lines"); W.lines = []; W.lineStart = null; W.selLine = -1; touch(); lineBtns(); updWsMarks(); toast("Lines cleared.", function(){ undoChart(); }); } return; }
+  if (a === "addexit"){
+    var xi = $("ws-exitnew"), xv = xi ? xi.value.trim().replace(/,/g, " /").slice(0, 90) : "";
+    if (xv){ if (EXIT_OPTS.indexOf(xv) < 0) EXIT_OPTS.push(xv); W.exitRule = xv; touch(); renderExits(); toast("Exit rule \u201c" + xv + "\u201d picked. It goes into Notion when you save."); }
+    else if (xi) xi.focus();
+    return;
+  }
   if (a === "paste"){ var fi = $("ws-file"); if (fi) fi.click(); return; }
   if (a === "dup-ok"){ W.dupOk = true; checkDup(); return; }
   if (a === "dup-open"){ var id = w.dataset.id; closeWS(); openEntry(id); return; }
@@ -1699,10 +1872,12 @@ $("ws").addEventListener("keydown", function(ev){
     }
     if (ev.key === "ArrowDown"){ var f = document.querySelector("#ws-tl button"); if (f){ ev.preventDefault(); f.focus(); } }
   }
+  if (id === "ws-exitnew" && ev.key === "Enter"){ ev.preventDefault(); var xb = document.querySelector('[data-ws="addexit"]'); if (xb) xb.click(); }
   if (id === "ws-crit" && ev.key === "Enter"){ ev.preventDefault(); var b = document.querySelector('[data-ws="addcrit"]'); if (b) b.click(); }
   if (id === "ws-paste" && (ev.key === "Enter" || ev.key === " ")){ ev.preventDefault(); var fi = $("ws-file"); if (fi) fi.click(); }
 });
 $("ws-chart").addEventListener("pointerdown", function(ev){ SHIFT = ev.shiftKey; }, true);
+$("ws-chart").addEventListener("pointermove", function(ev){ SHIFT = ev.shiftKey; }, true);
 document.addEventListener("paste", function(ev){
   if (!W) return;
   var items = (ev.clipboardData || {}).items || [];
@@ -1729,13 +1904,22 @@ document.addEventListener("keydown", function(ev){
   }
   if (W){
     if (ev.key === "Escape" && W.lineStart){ ev.preventDefault(); undoLine(); return; }
+    if (ev.key === "Escape" && W.clickMode !== "look" && W.date){ ev.preventDefault(); setMode("look"); return; }
+    if (ev.key === "Escape" && W.selLine >= 0){ ev.preventDefault(); W.selLine = -1; lineBtns(); updWsMarks(); return; }
     if (ev.key === "Escape"){ ev.preventDefault(); closeWS(); renderAll(); return; }
-    if ((ev.key === "z" || ev.key === "Z") && (ev.ctrlKey || ev.metaKey) && !typing){ ev.preventDefault(); undoLine(); return; }
-    if ((ev.key === "l" || ev.key === "L") && !typing && !ev.ctrlKey && !ev.metaKey){ ev.preventDefault(); setMode(W.clickMode === "line" ? "entry" : "line"); return; }
+    if ((ev.key === "z" || ev.key === "Z") && (ev.ctrlKey || ev.metaKey) && !typing){ ev.preventDefault(); undoChart(); return; }
+    if ((ev.key === "Delete" || ev.key === "Backspace") && !typing && W.selLine >= 0){ ev.preventDefault(); deleteLine(); return; }
+    if ((ev.key === "l" || ev.key === "L") && !typing && !ev.ctrlKey && !ev.metaKey){ ev.preventDefault(); setMode(W.clickMode === "line" ? "look" : "line"); return; }
     if (ev.key === "Enter" && (ev.ctrlKey || ev.metaKey)){ ev.preventDefault(); save(true); return; }
     if (typing) return;
     if (/^[1-9]$/.test(ev.key)){ var f = W.order[+ev.key - 1]; if (f){ ev.preventDefault(); W.folder = f; W.errors.folder = false; touch(); renderForm(); } return; }
-    if ((ev.key === "ArrowLeft" || ev.key === "ArrowRight") && W.P){ ev.preventDefault(); setEntryIdx(W.k == null ? W.P.n - 1 : W.k + (ev.key === "ArrowLeft" ? -1 : 1)); }
+    if ((ev.key === "ArrowLeft" || ev.key === "ArrowRight") && W.P && W.clickMode === "entry"){
+      ev.preventDefault();
+      var last = W.undo[W.undo.length - 1];
+      if (!(last && last.arrow && Date.now() - last.at < 4000)){ pushUndo("the entry day change"); W.undo[W.undo.length - 1].arrow = true; }
+      W.undo[W.undo.length - 1].at = Date.now();
+      setEntryIdx(W.k == null ? W.P.n - 1 : W.k + (ev.key === "ArrowLeft" ? -1 : 1));
+    }
     return;
   }
   if (typing){ if (ev.key === "Escape") tg.blur(); return; }

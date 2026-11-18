@@ -21,6 +21,11 @@ EXIT_RULES = [
     ("e10", "Close below 10 EMA", "#f59e0b"),
     ("e50", "Close below 50 EMA", "#0891b2"),
     ("trail", "10% trailing stop", "#db2777"),
+    ("atr3", "3x ATR from 50 EMA", "#ea580c"),
+    ("ext25", "Extended 25% above the 50 EMA", "#ca8a04"),
+    ("gap4", "Gap down 4% or more", "#dc2626"),
+    ("dist", "Distribution day: down 2% on 1.5x volume", "#9333ea"),
+    ("kill", "Kill day: new low, closes at the bottom, heavy volume", "#be123c"),
     ("hold", "Hold to latest close", "#64748b"),
 ]
 DEFAULT_STOP_PCT = 8.0
@@ -48,6 +53,29 @@ def _sma(vals, n):
             if len(q) > n:
                 s -= q.pop(0)
         out.append(s / n if len(q) == n else None)
+    return out
+
+
+def _atr(h, l, c, n):
+    """Average true range over n sessions (simple average of the true range)."""
+    out, tr = [None] * len(c), []
+    for i in range(len(c)):
+        if h[i] is None or l[i] is None:
+            tr.append(None)
+        else:
+            pc = c[i - 1] if i and c[i - 1] is not None else None
+            tr.append(max(h[i] - l[i], abs(h[i] - pc) if pc is not None else 0, abs(l[i] - pc) if pc is not None else 0))
+        w = [x for x in tr[max(0, i - n + 1):i + 1] if x is not None]
+        out[i] = sum(w) / len(w) if len(w) >= n // 2 else None
+    return out
+
+
+def _vavg(v, n):
+    """Average volume of the n sessions before each day (the day itself left out)."""
+    out = [None] * len(v)
+    for i in range(1, len(v)):
+        w = [x for x in v[max(0, i - n):i] if x]
+        out[i] = sum(w) / len(w) if len(w) >= 10 else None
     return out
 
 
@@ -89,6 +117,7 @@ def series(country, ticker):
     s = {"d": dates, "o": hist.get("open") or [], "h": hist.get("high") or [], "l": hist.get("low") or [], "c": c,
          "v": hist.get("volume") or [0] * len(dates)}
     s["e10"], s["e20"], s["e50"], s["s50"] = _ema(c, 10), _ema(c, 20), _ema(c, 50), _sma(c, 50)
+    s["atr"], s["v50"] = _atr(s["h"], s["l"], c, 14), _vavg(s["v"], 50)
     with _LOCK:
         if len(_SERIES) > 400:
             _SERIES.clear()
@@ -159,6 +188,7 @@ def outcome(S, k, entry):
 
 def simulate(S, key, i0, entry, stop):
     o, h, l, c, e10, e20, e50 = S["o"], S["h"], S["l"], S["c"], S["e10"], S["e20"], S["e50"]
+    v = S["v"]
     n = len(c)
 
     def fire(i):
@@ -170,11 +200,26 @@ def simulate(S, key, i0, entry, stop):
             return c[i] < e10[i]
         if key == "e50":
             return c[i] < e50[i]
+        if key == "atr3":
+            a = S["atr"][i]
+            return a is not None and e50[i] is not None and c[i] >= e50[i] + 3 * a
+        if key == "ext25":
+            return e50[i] is not None and c[i] >= e50[i] * 1.25
+        if key == "dist":
+            va = S["v50"][i]
+            return c[i - 1] is not None and va and v[i] and c[i] <= c[i - 1] * 0.98 and v[i] >= 1.5 * va
+        if key == "kill":
+            va = S["v50"][i]
+            rng = (h[i] - l[i]) if h[i] is not None else 0
+            return (l[i - 1] is not None and va and v[i] and rng > 0 and l[i] < l[i - 1]
+                    and (c[i] - l[i]) / rng <= 0.25 and v[i] >= 1.25 * va and c[i] < c[i - 1])
         return False
     peak = top = entry
     for i in range(i0 + 1, n):
         if l[i] is None or c[i] is None:
             continue
+        if key == "gap4" and o[i] is not None and c[i - 1] is not None and o[i] <= c[i - 1] * 0.96 and not (stop and o[i] <= stop):
+            return {"i": i, "px": o[i], "kind": "rule", "peak": top}   # sold at the open, before the stop could be hit
         if stop and l[i] <= stop:
             return {"i": i, "px": min(stop, o[i] if o[i] is not None else stop), "kind": "stop", "peak": top}
         top = max(top, h[i] if h[i] is not None else top)
@@ -183,7 +228,7 @@ def simulate(S, key, i0, entry, stop):
             lv = peak * 0.9
             if l[i] <= lv:
                 return {"i": i, "px": min(lv, o[i] if o[i] is not None else lv), "kind": "rule", "peak": top}
-        elif fire(i):
+        elif key != "gap4" and fire(i):
             return {"i": i, "px": c[i], "kind": "rule", "peak": top}
     return {"i": n - 1, "px": c[n - 1], "kind": "hold", "peak": top}
 
