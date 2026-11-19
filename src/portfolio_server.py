@@ -1210,6 +1210,8 @@ class Handler(BaseHTTPRequestHandler):
         pass                       # the access log is noise here
 
     def _send(self, code, body, content_type):
+        if content_type.startswith("text/html") and isinstance(body, str):
+            body = _with_theme(body)
         payload = body.encode("utf-8")
         self.send_response(code)
         self.send_header("Content-Type", content_type)
@@ -1230,6 +1232,8 @@ class Handler(BaseHTTPRequestHandler):
         }.get(os.path.splitext(path)[1].lower(), "application/octet-stream")
         with open(path, "rb") as f:
             blob = f.read()
+        if kind.startswith("text/html"):
+            blob = _with_theme(blob.decode("utf-8", "replace")).encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", kind)
         self.send_header("Content-Length", str(len(blob)))
@@ -2227,10 +2231,13 @@ JOURNAL_PAGE = r"""<!doctype html>
     --line:#e2e5ea; --up:#16a34a; --down:#dc2626; --warn:#ca8a04; --violet:#7c3aed;
     --accent:#2563eb; }
   @media (prefers-color-scheme: dark) {
-    :root { --bg:#10131a; --panel:#171b24; --text:#e7e9ee; --dim:#9096a3;
+    :root:not([data-theme="light"]) { --bg:#10131a; --panel:#171b24; --text:#e7e9ee; --dim:#9096a3;
       --line:#262b36; --up:#2ecc71; --down:#f0554b; --warn:#facc15; --violet:#a78bfa;
       --accent:#60a5fa; }
   }
+  :root[data-theme="dark"] { --bg:#10131a; --panel:#171b24; --text:#e7e9ee; --dim:#9096a3;
+      --line:#262b36; --up:#2ecc71; --down:#f0554b; --warn:#facc15; --violet:#a78bfa;
+      --accent:#60a5fa; }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--text); font-size:14px;
     font-family:"IBM Plex Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;
@@ -3606,10 +3613,13 @@ PORTFOLIO_PAGE = r"""<!doctype html>
     --line:#e2e5ea; --up:#16a34a; --down:#dc2626; --warn:#ca8a04;
     --accent:#2563eb; }
   @media (prefers-color-scheme: dark) {
-    :root { --bg:#10131a; --panel:#171b24; --text:#e7e9ee; --dim:#9096a3;
+    :root:not([data-theme="light"]) { --bg:#10131a; --panel:#171b24; --text:#e7e9ee; --dim:#9096a3;
       --line:#262b36; --up:#2ecc71; --down:#f0554b; --warn:#facc15;
       --accent:#60a5fa; }
   }
+  :root[data-theme="dark"] { --bg:#10131a; --panel:#171b24; --text:#e7e9ee; --dim:#9096a3;
+      --line:#262b36; --up:#2ecc71; --down:#f0554b; --warn:#facc15;
+      --accent:#60a5fa; }
   * { box-sizing:border-box; }
   body { margin:0; background:var(--bg); color:var(--text); font-size:14px;
     font-family:"IBM Plex Sans",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif; }
@@ -4553,26 +4563,56 @@ def _hub_nav_json():
     return json.dumps(countries)
 
 
+# Light / Dark / Auto: chosen in the hub sidebar, stored as localStorage "nts-theme" (same origin for
+# every page), applied to <html data-theme> before first paint. A change reloads open pages so charts
+# pick up the new colours too.
+THEME_HEAD = ('<script>(function(){var d=document.documentElement;try{var t=localStorage.getItem("nts-theme");'
+              'if(t==="light"||t==="dark")d.setAttribute("data-theme",t);}catch(e){}'
+              'addEventListener("storage",function(e){if(e.key==="nts-theme"&&window.top!==window)location.reload();});})();</script>')
+# Warm neutrals to match the logo, laid over every page's own tokens (html:root outranks :root);
+# accents (up, down, links, chart colours) stay each page's own.
+THEME_HEAD += ('<style id="nts-warm">html:root{--bg:#f6f5f1;--panel:#fffefb;--panel-bg:#fffefb;--line:#e6e3da;--border:#e6e3da;--text:#1f1e1c;--ink:#1f1e1c;--dim:#6f6c64;--text-dim:#6f6c64;--faint:#a19d93;--grid:#efede6;--grid-line:#efede6}'
+               '@media (prefers-color-scheme: dark){html:root:not([data-theme="light"]){--bg:#141311;--panel:#1c1b18;--panel-bg:#1c1b18;--line:#2e2c28;--border:#2e2c28;--text:#f1efe8;--ink:#f1efe8;--dim:#a19d93;--text-dim:#a19d93;--faint:#77736a;--grid:#23211e;--grid-line:#23211e}}'
+               'html:root[data-theme="dark"]{--bg:#141311;--panel:#1c1b18;--panel-bg:#1c1b18;--line:#2e2c28;--border:#2e2c28;--text:#f1efe8;--ink:#f1efe8;--dim:#a19d93;--text-dim:#a19d93;--faint:#77736a;--grid:#23211e;--grid-line:#23211e}</style>')
+_HEAD_RE = re.compile(r"<head[^>]*>", re.I)
+
+
+def _with_theme(html):
+    if "nts-theme" in html[:4000]:
+        return html
+    m = _HEAD_RE.search(html, 0, 4000)
+    return html[:m.end()] + THEME_HEAD + html[m.end():] if m else html
+
+
 HUB_PAGE = r"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Trading System</title>
-<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Crect width='24' height='24' rx='6' fill='%233b82f6'/%3E%3Cpath d='M6 16l4-6 3 4 5-8' stroke='white' stroke-width='2' fill='none' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+<title>Neil's Trading System</title>
+<link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 34 34'%3E%3Crect width='34' height='34' rx='9' fill='%232C2C2A'/%3E%3Cpath d='M8 25V13l10 10V12' fill='none' stroke='%23F1EFE8' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cline x1='25' y1='4.5' x2='25' y2='20' stroke='%23FAC775' stroke-width='1.4' stroke-linecap='round'/%3E%3Crect x='22.5' y='7.5' width='5' height='9.5' rx='1' fill='%23EF9F27'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap">
 <style>
-  :root { --bg:#0d0f14; --panel:#171b24; --line:#262b36; --text:#e7e9ee;
-    --dim:#9096a3; --accent:#3b82f6; --accent-dim:#1d4ed8;
-    --mb:#5b9dff; --sig:#e0a94e; --algo:#a78bfa; --port:#4ade80; --sys:#a1a1aa;
-    --icon-glow:rgba(91,157,255,.5);
+  /* Neil's Trading System: the A4 mark's charcoal and gold carry the chrome; section colours stay for wayfinding. */
+  :root { --bg:#f6f5f1; --panel:#fffefb; --line:#e6e3da; --text:#1f1e1c;
+    --dim:#6f6c64; --accent:#b7791f; --accent-dim:#fbefd9; --gold:#EF9F27; --gold-soft:#FAC775;
+    --tile:#2C2C2A; --tile-ink:#F1EFE8; --tile-ring:transparent;
+    --mb:#2563eb; --sig:#b45309; --algo:#7c3aed; --port:#15803d; --sys:#5f5e5a;
+    --icon-glow:rgba(183,121,31,.4); --down:#c62828; --warn:#a15c07; color-scheme:light;
   }
-  @media (prefers-color-scheme: light) {
-    :root { --bg:#f5f6f8; --panel:#fff; --line:#e2e5ea; --text:#1a1d24;
-      --dim:#6b7280; --accent:#2563eb; --accent-dim:#dbeafe;
-      --mb:#2563eb; --sig:#b45309; --algo:#7c3aed; --port:#15803d; --sys:#52525b;
-      --icon-glow:rgba(37,99,235,.45);
-    }
+  @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+    --bg:#141311; --panel:#1c1b18; --line:#2e2c28; --text:#f1efe8;
+    --dim:#a19d93; --accent:#EF9F27; --accent-dim:#3a2c12;
+    --tile:#2C2C2A; --tile-ink:#F1EFE8; --tile-ring:#4a4740;
+    --mb:#5b9dff; --sig:#e0a94e; --algo:#a78bfa; --port:#4ade80; --sys:#b4b2a9;
+    --icon-glow:rgba(239,159,39,.45); --down:#f26b63; --warn:#e3b04b; color-scheme:dark;
+  } }
+  :root[data-theme="dark"] {
+    --bg:#141311; --panel:#1c1b18; --line:#2e2c28; --text:#f1efe8;
+    --dim:#a19d93; --accent:#EF9F27; --accent-dim:#3a2c12;
+    --tile:#2C2C2A; --tile-ink:#F1EFE8; --tile-ring:#4a4740;
+    --mb:#5b9dff; --sig:#e0a94e; --algo:#a78bfa; --port:#4ade80; --sys:#b4b2a9;
+    --icon-glow:rgba(239,159,39,.45); --down:#f26b63; --warn:#e3b04b; color-scheme:dark;
   }
   * { box-sizing:border-box; }
   html, body { height:100%; margin:0; overflow:hidden; }
@@ -4583,16 +4623,23 @@ HUB_PAGE = r"""<!doctype html>
   #sidebar { width:230px; flex:none; background:var(--panel);
     border-right:1px solid var(--line); display:flex; flex-direction:column;
     overflow-y:auto; }
-  #brand { padding:16px 16px 10px; font-weight:700; font-size:15px;
-    display:flex; align-items:center; gap:8px; }
-  #brand .dot { width:8px; height:8px; border-radius:50%; background:var(--accent); }
+  #brand { padding:16px 14px 12px 16px; display:flex; align-items:center; gap:10px; }
+  #brand svg { flex:none; border-radius:9px; box-shadow:0 0 0 1px var(--tile-ring); }
+  #brand .bn { min-width:0; line-height:1.15; }
+  #brand .bn b { display:block; font-size:14.5px; font-weight:600; letter-spacing:-.01em; white-space:nowrap; }
+  #brand .bn small { display:block; font-size:11.5px; color:var(--dim); white-space:nowrap; margin-top:2px; }
+  #theme-switch { display:flex; gap:2px; margin:0 12px 12px; padding:2px; border:1px solid var(--line); border-radius:8px; background:var(--bg); }
+  #theme-switch button { flex:1; border:0; background:transparent; color:var(--dim); border-radius:6px; padding:4px 0;
+    font:500 11.5px "IBM Plex Sans",sans-serif; cursor:pointer; display:flex; align-items:center; justify-content:center; gap:5px; }
+  #theme-switch button svg { width:13px; height:13px; }
+  #theme-switch button.on { background:var(--panel); color:var(--text); box-shadow:0 0 0 1px var(--line); }
 
   #country-switch { display:flex; gap:5px; padding:0 12px 12px; }
   #country-switch button { flex:1; background:var(--bg); border:1px solid var(--line);
     color:var(--dim); border-radius:7px; padding:6px 4px; font-size:12px;
     font-family:inherit; cursor:pointer; }
-  #country-switch button.active { background:var(--accent); border-color:var(--accent);
-    color:#fff; }
+  #country-switch button.active { background:var(--tile); border-color:var(--tile);
+    color:var(--tile-ink); box-shadow:inset 0 -2px 0 var(--gold); }
 
   /* Each group carries its own accent (--row-c, set per #<x>-nav below) so
      the sidebar's 6 sections are tellable apart at a glance instead of all
@@ -4724,8 +4771,11 @@ HUB_PAGE = r"""<!doctype html>
 </style></head><body>
 
 <div id="sidebar">
-  <div id="brand"><span class="dot"></span> Trading System</div>
+  <div id="brand"><svg width="34" height="34" viewBox="0 0 34 34" aria-hidden="true"><rect width="34" height="34" rx="9" fill="var(--tile)"/><path d="M8 25 V13 L18 23 V12" fill="none" stroke="var(--tile-ink)" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/><line x1="25" y1="4.5" x2="25" y2="20" stroke="#FAC775" stroke-width="1.3" stroke-linecap="round"/><rect x="22.5" y="7.5" width="5" height="9.5" rx="1" fill="#EF9F27"/></svg><div class="bn"><b>Neil&rsquo;s Trading System</b><small id="greet"></small></div></div>
   <div id="country-switch"></div>
+  <div id="theme-switch" role="group" aria-label="Light or dark">
+    <button type="button" data-th="light" title="Light"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="4"/><path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M5.6 18.4 7 17M17 7l1.4-1.4"/></svg>Light</button><button type="button" data-th="dark" title="Dark"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 0 1 9.5 4a8 8 0 1 0 10.5 10.5z"/></svg>Dark</button><button type="button" data-th="" title="Follow Windows"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8"/><path d="M12 4a8 8 0 0 1 0 16z" fill="currentColor"/></svg>Auto</button>
+  </div>
   <div id="pinned-section" hidden>
     <div class="group-label">Pinned</div>
     <nav id="pinned-nav"></nav>
@@ -5181,6 +5231,31 @@ showTab(true);
 
 // Native pages (Market Environment) live inside the frame and cannot navigate the hub
 // themselves; they post {hubGo: "<panel label>"} and the hub opens it in the current tab.
+/* Greeting under the name, and the Light / Dark / Auto switch. The choice lives in localStorage
+   ("nts-theme"), which every page reads as it loads (see THEME_HEAD in the server); open pages reload on change. */
+(function () {
+  const g = document.getElementById("greet");
+  const tick = () => {
+    const d = new Date(), h = d.getHours();
+    g.textContent = (h < 12 ? "Good morning" : h < 17 ? "Good afternoon" : "Good evening") + " \u00b7 "
+      + d.toLocaleDateString("en-US", { weekday: "short", month: "short", day: "numeric" });
+  };
+  tick(); setInterval(tick, 60000);
+  const apply = t => {
+    if (t === "light" || t === "dark") document.documentElement.setAttribute("data-theme", t);
+    else document.documentElement.removeAttribute("data-theme");
+    document.querySelectorAll("#theme-switch button").forEach(b => b.classList.toggle("on", b.dataset.th === (t || "")));
+  };
+  let cur = ""; try { cur = localStorage.getItem("nts-theme") || ""; } catch (e) {}
+  apply(cur);
+  document.getElementById("theme-switch").addEventListener("click", e => {
+    const b = e.target.closest("button"); if (!b) return;
+    const t = b.dataset.th;
+    try { if (t) localStorage.setItem("nts-theme", t); else localStorage.removeItem("nts-theme"); } catch (err) {}
+    apply(t);
+  });
+})();
+
 window.addEventListener("message", e => {
   if (e.origin !== location.origin || !e.data || !e.data.hubGo) return;
   const item = topLevelItems().find(p => p.label === e.data.hubGo);
