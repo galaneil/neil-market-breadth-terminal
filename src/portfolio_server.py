@@ -1279,6 +1279,12 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         route = urlparse(self.path)
+        if route.path in ("/nts-icon.png", "/favicon.ico"):
+            # The app window and taskbar icon (Windows picks a PNG/ICO up more reliably than an SVG).
+            icon = os.path.join(OUTPUT_DIR, "neils_trading_system.png" if route.path.endswith(".png") else "neils_trading_system.ico")
+            if os.path.exists(icon):
+                self._serve_file(icon)
+                return
         if route.path in ("/", "/index.html"):
             page = HUB_PAGE.replace("%%NAV_JSON%%", _hub_nav_json())
             self._send(200, page, "text/html; charset=utf-8")
@@ -4637,6 +4643,8 @@ HUB_PAGE = r"""<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Neil's Trading System</title>
+<link rel="icon" type="image/png" sizes="256x256" href="/nts-icon.png">
+<link rel="apple-touch-icon" href="/nts-icon.png">
 <link rel="icon" type="image/svg+xml" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 34 34'%3E%3Crect width='34' height='34' rx='9' fill='%232C2C2A'/%3E%3Cpath d='M8 25V13l10 10V12' fill='none' stroke='%23F1EFE8' stroke-width='2.6' stroke-linecap='round' stroke-linejoin='round'/%3E%3Cline x1='25' y1='4.5' x2='25' y2='20' stroke='%23FAC775' stroke-width='1.4' stroke-linecap='round'/%3E%3Crect x='22.5' y='7.5' width='5' height='9.5' rx='1' fill='%23EF9F27'/%3E%3C/svg%3E">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
