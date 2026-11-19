@@ -76,6 +76,8 @@ DOCS_ROOT = config.DOCS_DIR
 # Signals / Algorithms are plain flat lists under their own header, same as
 # Portfolio and System already are.
 HUB_PANELS = [
+    # Native: the landing page. Today's verdict, what needs you, your watchlist, what's new in Signals.
+    {"label": "Home", "native": "/today"},
     # Native hub page (not a docs/ page): it shows the user's own book next to
     # the market data, which must never be published to GitHub Pages.
     {"label": "Market Environment", "native": "/home"},
@@ -117,7 +119,8 @@ HUB_PANELS = [
 ]
 
 SIGNALS_PANELS = [
-    {"label": "Signals", "path": "panel-signals.html"},
+    # Native: same data as the published panel-signals.html (read from it), laid out like the Setups page.
+    {"label": "Signals", "native": "/signals"},
     {"label": "Watchlist", "path": "panel-watchlist.html"},
     {"label": "Feedback Log", "path": "panel-feedback-log.html"},
 ]
@@ -144,6 +147,39 @@ STOPS_FILE = os.path.join(OUTPUT_DIR, "stops.json")
 # Stop price + reason a setup's backtest was run with. Kept locally (not in Notion)
 # until Stop Price / Stop Reason fields exist on the Setups database.
 SETUP_STOPS_FILE = os.path.join(OUTPUT_DIR, "setup_stops.json")
+TODAY_PAGE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "today_page.html")
+SIGNALS_PAGE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "signals_page.html")
+_SIGNALS_CACHE = {}
+
+
+def _signals_data(code):
+    """The Signals lists for one market, read from the published panel's embedded data (re-read when it changes)."""
+    cfg = config.COUNTRIES.get(code) or config.COUNTRIES["US"]
+    sub = cfg.get("docs_subdir", "")
+    path = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "docs", sub, "panel-signals.html") if sub \
+        else os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "docs", "panel-signals.html")
+    mt = os.path.getmtime(path)
+    hit = _SIGNALS_CACHE.get(code)
+    if hit and hit[0] == mt:
+        return hit[1]
+    with open(path, encoding="utf-8") as f:
+        html = f.read()
+    m = re.search(r'<script id="dashboard-data" type="application/json">(.*?)</script>', html, re.S)
+    d = json.loads(m.group(1))
+    keys = ("signals", "earningsSignals", "cupSignals", "vcpSignals", "breakdownSignals")
+    syms = {x.get("sym") for k in keys for x in (d.get(k) or [])}
+    cl = d.get("classification") or {}
+    prof = d.get("signalProfiles") or {}
+    log = d.get("signalsLog") or []
+    out = {k: d.get(k) or [] for k in keys}
+    out.update({"country": code, "classification": {k: cl[k] for k in syms if k in cl},
+                "profiles": {k: (prof.get(k) or {}).get("n") for k in syms if prof.get(k)},
+                "scanDate": log[-1]["date"] if log else None,
+                "tickerPrefix": "/docs/" + (sub + "/" if sub else "") + "tickers/"})
+    _SIGNALS_CACHE[code] = (mt, out)
+    return out
+
+
 SETUPS_PAGE_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "setups_page.html")
 # The Setups page opens from this saved copy at once and then checks Notion in the background.
 SETUPS_CACHE_FILE = os.path.join(OUTPUT_DIR, "setups_cache.json")
@@ -295,7 +331,7 @@ def _setups_queue(code):
         if (it.get("country") or "US") != code or ("list:" + it.get("t", "")) in skipped:
             continue
         items.append({"id": "list:" + it["t"], "src": it.get("src") or "manual", "t": it["t"], "entry": it.get("entry"),
-                      "folder": it.get("folder"), "list": it.get("list"), "added": it.get("added")})
+                      "folder": it.get("folder"), "list": it.get("list"), "added": it.get("added"), "note": it.get("note")})
     names = _json_read(SYMBOL_NAMES_FILE, {})
     for it in items:
         sec, ind, logo, _ = setup_context.classify(code, it["t"])
@@ -1369,6 +1405,17 @@ class Handler(BaseHTTPRequestHandler):
             except ValueError as error:
                 self._send(400, json.dumps({"error": str(error)}), "application/json")
             return
+        if route.path in ("/today", "/signals"):
+            with open(TODAY_PAGE_FILE if route.path == "/today" else SIGNALS_PAGE_FILE, encoding="utf-8") as f:
+                self._send(200, f.read(), "text/html; charset=utf-8")
+            return
+        if route.path == "/api/signals":
+            try:
+                code = (parse_qs(route.query).get("country") or ["US"])[0].upper()
+                self._send(200, json.dumps(_signals_data(code if code in config.COUNTRIES else "US")), "application/json")
+            except Exception as error:
+                self._send(500, json.dumps({"error": str(error)}), "application/json")
+            return
         if route.path == "/home":
             # Read per request so edits to the page show up on reload.
             with open(HOME_PAGE_FILE, encoding="utf-8") as f:
@@ -2024,7 +2071,9 @@ class Handler(BaseHTTPRequestHandler):
                         if not t:
                             raise ValueError("a ticker is required")
                         if not any(x.get("t") == t and (x.get("country") or "US") == code for x in q["listed"]):
-                            q["listed"].append({"t": t, "country": code, "src": "manual", "folder": body.get("folder"),
+                            q["listed"].append({"t": t, "country": code, "src": "signal" if body.get("src") == "signal" else "manual",
+                                                "folder": body.get("folder"), "entry": body.get("entry") or None,
+                                                "note": (body.get("note") or "").strip()[:400] or None,
                                                 "added": datetime.now().strftime("%Y-%m-%d")})
                         q["skipped"] = [x for x in q["skipped"] if x != "list:" + t]
                     elif action == "skip":
@@ -4839,6 +4888,8 @@ function icon(d) {
     + 'stroke-linejoin="round">' + d + '</svg></span>';
 }
 const ICONS = {
+  "Home": icon('<rect x="3.5" y="3.5" width="17" height="17" rx="4.5"/><path d="M8.5 16V9.5l5 5V8.5"/>'
+    + '<path d="M17 6.5v7" stroke-width="1.6"/>'),
   "Market Environment": icon('<path d="M2 17l4-1.2 3-8.8 4 7 3-4 3 2"/>'
     + '<circle cx="19" cy="12" r="1.3" fill="currentColor" stroke="none"/>'),
   "Indices": icon('<rect x="3" y="14" width="3.6" height="7" rx="1"/>'
