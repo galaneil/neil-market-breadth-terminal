@@ -87,6 +87,100 @@ footer { display: none; }
   </div>
   <div id="stock-body"></div>
 </div>
+<style id="screener-layout-css">
+html,body{height:100%}
+body.sx{display:flex;flex-direction:column;height:100vh;overflow:hidden}
+body.sx > header{flex:none}
+body.sx main{flex:1;min-height:0;max-width:none!important;width:100%;margin:0!important;padding:0!important;display:grid;
+  grid-template-columns:minmax(0,1fr) var(--sx-listw,400px);grid-template-rows:auto minmax(0,1fr);gap:0}
+body.sx.sx-collapsed main{--sx-listw:38px}
+/* things above the filters that are not needed here */
+body.sx main > .empty-note, body.sx .hilo-pair, body.sx .hilo-lead, body.sx #hilo-chart-view, body.sx #hilo-chart-verdict, body.sx main > .chart-wrap{display:none!important}
+/* top bar: every filter, in one band */
+.sx-top{grid-column:1/-1;display:flex;flex-wrap:wrap;align-items:center;gap:6px 10px;padding:8px 14px;border-bottom:1px solid var(--border);background:var(--panel-bg)}
+.sx-top .screener-controls,.sx-top .screener-filters{display:contents}
+.sx-top .tf-toggle{margin:0!important}
+.sx-top .sx-sep{width:1px;height:22px;background:var(--border)}
+.sx-top .sx-break{flex-basis:100%;height:0}
+.sx-top select{max-width:160px}
+.sx-top input[type=search],.sx-top input[type=text]{max-width:140px}
+/* centre: the stock exactly as before, just narrower */
+.sx-center{grid-column:1;grid-row:2;min-width:0;overflow:auto;padding:8px 14px 30px}
+.sx-center #stock-panel{margin:0!important}
+/* right: the names */
+.sx-list{grid-column:2;grid-row:2;min-width:0;display:flex;flex-direction:column;border-left:1px solid var(--border);background:var(--panel-bg)}
+.sx-lhead{display:flex;align-items:center;gap:8px;padding:8px 10px;border-bottom:1px solid var(--border);font-size:12px;color:var(--text-dim)}
+.sx-lhead b{color:var(--text);font-size:13px}
+.sx-lhead .sx-keys{margin-left:auto;font-size:11px;white-space:nowrap}
+.sx-lhead kbd{font:500 10px ui-monospace,monospace;border:1px solid var(--border);border-bottom-width:2px;border-radius:4px;padding:0 4px}
+.sx-btn{flex:none;width:26px;height:26px;border:1px solid var(--border);border-radius:6px;background:var(--panel-bg);color:var(--text-dim);cursor:pointer;font-size:15px;line-height:1}
+.sx-btn:hover{color:var(--text);border-color:var(--text-dim)}
+.sx-list .table-wrap{flex:1;min-height:0;overflow:auto!important;max-height:none!important;margin:0!important;border:0!important;border-radius:0!important}
+.sx-list table{font-size:12.5px;width:100%}
+.sx-list th:nth-child(2),.sx-list td:nth-child(2),.sx-list th:nth-child(3),.sx-list td:nth-child(3),
+.sx-list th:nth-child(8),.sx-list td:nth-child(8),.sx-list th:nth-child(10),.sx-list td:nth-child(10){display:none}
+.sx-list th{position:sticky;top:0;z-index:2;background:var(--panel-bg);font-size:11px;padding:6px 6px!important}
+.sx-list td{padding:5px 6px!important;white-space:nowrap}
+.sx-list tr.selected td{background:color-mix(in srgb, var(--accent) 14%, transparent)!important}
+.sx-list tr.selected td:first-child{box-shadow:inset 3px 0 0 var(--accent)}
+.sx-list tbody tr{cursor:pointer}
+/* collapsed: a slim strip with the expand button */
+.sx-collapsed .sx-list .table-wrap,.sx-collapsed .sx-lhead > :not(.sx-btn){display:none!important}
+.sx-collapsed .sx-lhead{flex-direction:column;padding:8px 5px;border:0}
+.sx-collapsed .sx-list{cursor:pointer}
+.sx-vlabel{display:none;writing-mode:vertical-rl;font-size:12px;color:var(--text-dim);margin:10px auto 0;letter-spacing:.04em}
+.sx-collapsed .sx-vlabel{display:block}
+</style>
+<script id="screener-layout-js">
+(function(){
+  document.body.classList.add("sx");
+  var main = document.querySelector("main");
+  var top = document.createElement("div"); top.className = "sx-top";
+  var ctr = document.createElement("div"); ctr.className = "sx-center";
+  var list = document.createElement("aside"); list.className = "sx-list"; list.setAttribute("aria-label", "Names");
+  var q = function(s){ return main.querySelector(s); };
+  // top band: index, window, highs/lows, period | ADR, cap, $ volume, sector, industry, ticker, presets
+  [q(".screener-controls"), q("#hilo-timeframe")].forEach(function(n){ if (n) top.appendChild(n); });
+  var sep = document.createElement("span"); sep.className = "sx-break"; top.appendChild(sep);
+  top.appendChild(q(".screener-filters"));
+  // right list
+  var head = document.createElement("div"); head.className = "sx-lhead";
+  head.innerHTML = '<button type="button" class="sx-btn" id="sx-toggle" title="Hide the list (\\)">\u203a</button><b>Names</b><span id="sx-count"></span><span class="sx-keys"><kbd>\u2191</kbd> <kbd>\u2193</kbd> to move</span><span class="sx-vlabel">Names</span>';
+  list.appendChild(head);
+  list.appendChild(q(".table-wrap"));
+  var rc = document.getElementById("hilo-result-count"); if (rc) head.querySelector("#sx-count").appendChild(rc);
+  ctr.appendChild(q("#stock-panel"));
+  main.insertBefore(top, main.firstChild);
+  main.appendChild(ctr); main.appendChild(list);
+
+  function setCollapsed(on){
+    document.body.classList.toggle("sx-collapsed", on);
+    var b = document.getElementById("sx-toggle"); b.textContent = on ? "\u2039" : "\u203a"; b.title = on ? "Show the list (\\)" : "Hide the list (\\)";
+    try { localStorage.setItem("sx-collapsed", on ? "1" : ""); } catch (e) {}
+  }
+  head.querySelector("#sx-toggle").addEventListener("click", function(e){ e.stopPropagation(); setCollapsed(!document.body.classList.contains("sx-collapsed")); });
+  list.addEventListener("click", function(){ if (document.body.classList.contains("sx-collapsed")) setCollapsed(false); });
+  try { if (localStorage.getItem("sx-collapsed")) setCollapsed(true); } catch (e) {}
+
+  function rows(){ return Array.prototype.filter.call(list.querySelectorAll("tbody tr[data-ticker]"), function(r){ return r.offsetParent !== null || document.body.classList.contains("sx-collapsed"); }); }
+  document.addEventListener("keydown", function(ev){
+    var t = ev.target || {}, typing = /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName || "");
+    if (typing || ev.ctrlKey || ev.metaKey || ev.altKey) return;
+    if (ev.key === "\\"){ ev.preventDefault(); setCollapsed(!document.body.classList.contains("sx-collapsed")); return; }
+    if (ev.key !== "ArrowDown" && ev.key !== "ArrowUp") return;
+    var rs = rows(); if (!rs.length) return;
+    ev.preventDefault();
+    var i = rs.findIndex(function(r){ return r.classList.contains("selected"); });
+    var j = i < 0 ? 0 : Math.max(0, Math.min(rs.length - 1, i + (ev.key === "ArrowDown" ? 1 : -1)));
+    if (j === i) return;
+    rs[j].click();
+    rs[j].scrollIntoView({block:"nearest"});
+  });
+  // when the list first fills, open the top name so the chart is never empty
+  var tb = list.querySelector("tbody");
+  new MutationObserver(function(){ if (!tb.querySelector("tr.selected") && !document.getElementById("stock-body").children.length){ var r = tb.querySelector("tr[data-ticker]"); if (r) r.click(); } }).observe(tb, {childList:true});
+})();
+</script>
 </main>
 
 <script src="../vendor/chart.umd.min.js"></script>
