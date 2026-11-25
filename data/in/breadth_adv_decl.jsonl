@@ -1593,7 +1593,7 @@
 {"date":"2026-06-23","advancers":250,"decliners":693,"net":-443}
 {"date":"2026-06-24","advancers":485,"decliners":458,"net":27}
 {"date":"2026-06-25","advancers":317,"decliners":626,"net":-309}
-{"date":"2026-06-26","advancers":133,"decliners":2,"net":131}
+{"date":"2026-06-26","advancers":133,"decliners":3,"net":130}
 {"date":"2026-06-29","advancers":338,"decliners":594,"net":-256}
 {"date":"2026-06-30","advancers":570,"decliners":373,"net":197}
 {"date":"2026-07-01","advancers":525,"decliners":415,"net":110}
@@ -1698,3 +1698,4 @@
 {"date":"2026-11-19","advancers":638,"decliners":347,"net":291}
 {"date":"2026-11-20","advancers":403,"decliners":587,"net":-184}
 {"date":"2026-11-23","advancers":264,"decliners":721,"net":-457}
+{"date":"2026-11-25","advancers":0,"decliners":1,"net":-1}
