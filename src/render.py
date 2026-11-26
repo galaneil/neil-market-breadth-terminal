@@ -793,7 +793,7 @@ def _compute_earnings_signals(country, lookback_days=5, min_gap=5.0, min_range=8
 
 
 def _compute_cup_signals(country, min_correction=15.0, max_correction=40.0,
-                          window=130, limit=60):
+                          window=130, limit=250):   # was 60: illiquid names filled the slots and pushed out BSE
     """A real reset, not a crack: price ran up, corrected 15-40% into a
     rounded low, and is on its way back. Same price-file scan as the
     earnings signal, needs no TMLE -- covers India the same way.
@@ -1001,7 +1001,7 @@ def _scan_price_setups(country, quotes=None):
             n0 = len(p["close"]) - 1 - off
             if n0 < 150:
                 continue
-            for key, fn in (("breakout", signal_scan.reclaim), ("vcp", signal_scan.vcp), ("breakdown", signal_scan.breakdown)):
+            for key, fn in (("breakout", signal_scan.reclaim), ("vcp", signal_scan.vcp_any), ("breakdown", signal_scan.breakdown)):
                 try:
                     if fn(p, n=n0):
                         state.setdefault(off, {}).setdefault(key, set()).add(ticker)
@@ -1013,7 +1013,7 @@ def _scan_price_setups(country, quotes=None):
                 "price": c[-1], "chg": round((c[-1] / c[-2] - 1) * 100, 2) if len(c) > 1 and c[-2] else None,
                 "turnover": (sum(vols) / len(vols)) * c[-1] if vols and c[-1] else None,
                 "indRankFrom": rank_of(past, industry), "indRankTo": rank_of(now, industry)}
-        for key, fn in (("breakout", signal_scan.reclaim), ("vcp", signal_scan.vcp), ("breakdown", signal_scan.breakdown)):
+        for key, fn in (("breakout", signal_scan.reclaim), ("vcp", signal_scan.vcp_any), ("breakdown", signal_scan.breakdown)):
             try:
                 r = fn(p)
             except Exception:
@@ -1027,9 +1027,9 @@ def _scan_price_setups(country, quotes=None):
             day = ref_dates[-1 - off]
             hist[day] = {k: sorted(state.get(off, {}).get(k, set()) - state.get(off + 1, {}).get(k, set())) for k in out}
     out["breakout"].sort(key=lambda x: x["daysAgo"])
-    out["vcp"].sort(key=lambda x: (x["sub"] != "Breakout", abs(x.get("distPct") or 0)))
+    out["vcp"].sort(key=lambda x: (x["sub"] != "Breakout", x.get("method") == "classic", abs(x.get("distPct") or 0)))
     out["breakdown"].sort(key=lambda x: x["daysAgo"])
-    return {k: v[:120] for k, v in out.items()}, hist
+    return {k: v[:250] for k, v in out.items()}, hist      # the page filters by liquidity; a tight cap dropped liquid names
 
 
 def _attach_stage(country, lists):

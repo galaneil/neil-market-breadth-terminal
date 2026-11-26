@@ -169,6 +169,68 @@ def vcp(p, n=None, thr=0.10, max_decline=0.40, grow=1.25, last_max=0.18, near=0.
             "firedDate": d[n] if broke else None, "daysAgo": 0 if broke else None}
 
 
+def contractions(h, l, top, n, confirm=0.05, min_depth=0.03):
+    """Classic VCP measuring, on daily highs and lows: from the base high to the lowest low after it; then from the next
+    rally top -- the highest high after that low that was followed by a pullback of at least `confirm` -- to the lowest
+    low after it; and so on. Returns [(top_i, low_i, depth), ...]."""
+    suf = [None] * (n + 2)                    # lowest low from i to n
+    m = 1e18
+    for i in range(n, -1, -1):
+        if l[i] is not None:
+            m = min(m, l[i])
+        suf[i] = m
+    out = []
+    while top is not None and top < n - 1:
+        lo = min(range(top, n + 1), key=lambda i: l[i] if l[i] is not None else 1e18)
+        dep = 1 - l[lo] / h[top]
+        if dep < min_depth or lo == top:
+            break
+        out.append((top, lo, dep))
+        nxt = None
+        for i in range(lo + 1, n):
+            if h[i] is not None and suf[i + 1] <= h[i] * (1 - confirm) and (nxt is None or h[i] > h[nxt]):
+                nxt = i
+        top = nxt
+    return out
+
+
+def vcp_classic(p, n=None, near=0.15, first_min=0.20, first_max=0.40, last_max=0.12, shrink=0.75):
+    """The same setup read the way a chart reader sees it (added Nov 26 2026 after BBOX and DIACABS were missed): the base
+    starts at the highest high of the last year (at least 15 sessions back); two or more pullbacks, each at most 3/4 of
+    the one before, the first 20-40%, the last 12% or less; above the 50 and 200 EMA; within 15% under the pivot (the
+    last rally top), or just through it."""
+    c, h, l, d = p["close"], p["high"], p["low"], p["dates"]
+    n = len(c) - 1 if n is None else n
+    if n < 250 or c[n] is None:
+        return None
+    a = max(0, n - 251)
+    top = max(range(a, n - 14), key=lambda i: h[i] if h[i] is not None else -1)
+    seq = contractions(h, l, top, n)
+    if len(seq) < 2:
+        return None
+    depths = [x[2] for x in seq]
+    if not (first_min <= depths[0] <= first_max) or depths[-1] > last_max:
+        return None
+    if any(y > x * shrink for x, y in zip(depths, depths[1:])):
+        return None
+    E50, E200 = ema(c, 50), ema(c, 200)
+    if c[n] < E50[n] or c[n] < E200[n]:
+        return None
+    pivot = h[seq[-1][0]]
+    dist = c[n] / pivot - 1
+    broke = c[n] > pivot and any(c[j] is not None and c[j] <= pivot for j in range(n - 10, n))
+    if not broke and not (-near <= dist <= 0):
+        return None
+    return {"kind": "vcp", "sub": "Breakout" if broke else "Forming (early)", "pivot": round(pivot, 2), "distPct": round(dist * 100, 1),
+            "contractions": [round(-x * 100, 1) for x in depths], "declinePct": round(-depths[0] * 100),
+            "firedDate": d[n] if broke else None, "daysAgo": 0 if broke else None, "method": "classic"}
+
+
+def vcp_any(p, n=None):
+    """The original weekly-swing VCP, or the classic reading when that misses it."""
+    return vcp(p, n=n) or vcp_classic(p, n=n)
+
+
 def _short_state(c, v, E20, E50, E200, n, ext_min=0.15, rally_min=0.08, band=0.10):
     """The short setup at index n: a downtrend that was extended to the downside, has rallied, and now sits within
     10% below (or up to 3% above) a DECLINING 20, 50 or 200 EMA, still under the 50 and not reclaimed over the 200."""
