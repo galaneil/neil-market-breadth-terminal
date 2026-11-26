@@ -2022,6 +2022,15 @@ def render_all_panels(country):
         trend = {"highs": [], "bounce": []}
     sig_extra["highsSignals"] = trend["highs"]
     sig_extra["bounceSignals"] = trend["bounce"]
+    # IPOs screen (src/ipo_scan.py), India only for now
+    try:
+        import ipo_scan
+        ipo = ipo_scan.scan(country)
+    except Exception as error:
+        print(f"  ipo scan failed: {error}")
+        ipo = {"rows": [], "index": []}
+    sig_extra["ipoSignals"] = ipo["rows"]
+    sig_extra["ipoIndex"] = ipo["index"]
     sig_lists = {"breakout": breakout_signals, "earnings": earnings_signals, "cup": cup_signals,
                  "vcp": vcp_signals, "breakdown": breakdown_signals}
     if cfg.get("run_tmle"):

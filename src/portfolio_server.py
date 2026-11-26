@@ -166,7 +166,7 @@ def _signals_data(code):
         html = f.read()
     m = re.search(r'<script id="dashboard-data" type="application/json">(.*?)</script>', html, re.S)
     d = json.loads(m.group(1))
-    keys = ("signals", "earningsSignals", "cupSignals", "vcpSignals", "breakdownSignals", "highsSignals", "bounceSignals")
+    keys = ("signals", "earningsSignals", "cupSignals", "vcpSignals", "breakdownSignals", "highsSignals", "bounceSignals", "ipoSignals")
     syms = {x.get("sym") for k in keys for x in (d.get(k) or [])}
     cl = d.get("classification") or {}
     prof = d.get("signalProfiles") or {}
@@ -175,6 +175,7 @@ def _signals_data(code):
     out.update({"country": code, "classification": {k: cl[k] for k in syms if k in cl},
                 "profiles": {k: (prof.get(k) or {}).get("n") for k in syms if prof.get(k)},
                 "scanDate": log[-1]["date"] if log else None,
+                "ipoIndex": d.get("ipoIndex") or [],
                 "tickerPrefix": "/docs/" + (sub + "/" if sub else "") + "tickers/"})
     _SIGNALS_CACHE[code] = (mt, out)
     return out

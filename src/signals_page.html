@@ -423,6 +423,13 @@ canvas.spark.wide{width:100%;height:46px}
 .srow{grid-template-columns:20px minmax(120px,1fr) minmax(112px,.8fr) 120px minmax(150px,1.25fr) minmax(96px,auto);gap:10px;padding-left:10px;padding-right:10px}
 .srow canvas.spark{width:120px}
 @media (max-width:1500px){.srow{grid-template-columns:20px minmax(120px,1fr) minmax(108px,.8fr) minmax(150px,1.3fr) minmax(96px,auto)}.srow canvas.spark{display:none}}
+.ipostrip{display:flex;align-items:center;gap:16px;flex-wrap:wrap;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:9px 13px;margin:0 0 10px}
+.ipostrip .k{font-size:11px;font-weight:600;letter-spacing:.05em;text-transform:uppercase;color:var(--dim)}
+.ipostrip small{font-size:11.5px}
+.ipostrip canvas{width:200px;height:40px}
+.ipostrip .ic{display:flex;flex-direction:column}
+.ipostrip .ic small{color:var(--dim)}
+.ipostrip .ic b{font-size:14px}
 </style>
 </head>
 <body>
@@ -837,6 +844,9 @@ function nearestPath(cv, mx, my){
 
 /* ---------- Signals demo: the Setups notebook layout (types, list with mini charts, docked detail) ---------- */
 var TYPES = [
+  {id:"ipo", fb:"ipo", src:"ipoSignals", title:"IPOs", color:"#7c3aed", side:"long",
+   segs:[["breakout", "Breaking out"], ["vcp", "VCP"], ["cup", "Cup with handle"], ["flat", "Flat base"], ["reclaim", "Reclaim after a fall"], ["new", "Just listed"], ["other", "No setup yet"]],
+   rule:"Every NSE stock that listed in the last 4 years with a market cap of \u20b9500 Cr or more, read from its listing day. Breaking out: a new post-IPO high after a base of 15+ sessions. VCP: three or more pullbacks from the post-IPO high, each smaller, the last 12% or less, within 15% of the high and above the 50 EMA. Cup with handle: a first pullback of 15 to 40%, every later dip 15% or less, back within 15% of the high. Flat base: 40+ sessions with closes inside a 25% range, in the upper half (15+ sessions when nothing else fits). Reclaim: fell 40% or more from the post-IPO high and is back above its 200 EMA (50 EMA under 200 sessions old). Base on base is noted when a tight 15-session base came before the run into the current base."},
   {id:"highs", fb:"highs", src:"highsSignals", title:"New highs", color:"#ca8a04", side:"long",
    segs:[["ath", "All-time highs"], ["52w", "52-week highs"], ["near", "Within 20% of the ATH"]],
    rule:"All-time highs: the high of one of the last 5 sessions reached the stock's all-time high (TradingView's full history). 52-week highs: a new 52-week high in the last 5 sessions, still below the all-time high. Within 20% of the ATH: closing 0 to 20% under its all-time high, no new high this week."},
@@ -865,18 +875,20 @@ var PRESETS = CODE === "IN" ? {
 };
 var D = null, CL = {}, PROF = {}, ROWS = {}, LAST = null;
 var S = {type:"highs", seg:"ath", day:"all", preset:"liquid", sector:"", q:"", sort:"fresh", sel:null, hideExt:true};
-var STARS = {}, SENT = {}, FB = {};
+var STARS = {}, SENT = {}, FB = {}, IPO_INDEX = [];
 try { var sv = JSON.parse(localStorage.getItem("signals-view-" + CODE) || "{}"); if (sv.type) S.type = sv.type; if (sv.preset && PRESETS[sv.preset]) S.preset = sv.preset; if (sv.sort) S.sort = sv.sort; if (sv.hideExt != null) S.hideExt = sv.hideExt; } catch (x) {}
 (function(){ var g = (tdef(S.type) || {}).segs; if (g && !g.some(function(x){ return x[0] === S.seg; })) S.seg = g[0][0]; })();
 function keepView(){ try { localStorage.setItem("signals-view-" + CODE, JSON.stringify({type:S.type, preset:S.preset, sort:S.sort, hideExt:S.hideExt})); } catch (x) {} }
 
 function load(){
   jget("/api/signals?country=" + CODE).then(function(d){
+    IPO_INDEX = d.ipoIndex || [];
+    if (!(d.ipoSignals || []).length){ TYPES = TYPES.filter(function(t){ return t.id !== "ipo"; }); if (S.type === "ipo"){ S.type = TYPES[0].id; S.seg = (TYPES[0].segs || [[""]])[0][0]; } }
     D = d; CL = d.classification || {}; PROF = d.profiles || {};
     TYPES.forEach(function(t){
       ROWS[t.id] = (d[t.src] || []).map(function(s){
         var c = CL[s.sym] || [];
-        return Object.assign({}, s, {type:t.id, logoid:c[2] || null, cap:s.marketCap || c[3] || null, name:PROF[s.sym] || null});
+        return Object.assign({}, s, {type:t.id, logoid:c[2] || s.logoid || null, cap:s.marketCap || c[3] || null, name:PROF[s.sym] || s.name || null});
       });
     });
     var all = [].concat.apply([], TYPES.map(function(t){ return ROWS[t.id]; })), fd0 = all.map(function(s){ return s.firedDate; }).filter(Boolean).sort();
@@ -940,6 +952,11 @@ function renderRail(){
 /* ---------- list ---------- */
 function facts(s){
   var a = "", b = "";
+  if (s.type === "ipo"){
+    a = esc(s.why || "");
+    b = 'Listed ' + fdd(s.listed) + ', <b class="' + (s.fromList >= 0 ? "up" : "down") + '">' + pct(s.fromList, 0) + '</b> since; ' + (s.age) + ' sessions';
+    return '<div class="facts"><span>' + a + '</span><span>' + b + '</span></div>';
+  }
   if (s.type === "highs"){
     a = s.seg === "near" ? '<b class="down">' + pct(s.offAth, 1) + '</b> from the all-time high' : s.seg === "ath" ? 'At the all-time high, <b>' + fp(s.ath) + '</b>' : 'New 52-week high, <b>' + fp(s.hi52) + '</b>';
     b = s.ath ? 'All-time high <b>' + fp(s.ath) + '</b>' + (s.seg === "52w" ? ', ' + pct(s.offAth, 1) + ' under it' : "") : "All-time high unknown";
@@ -966,6 +983,7 @@ function facts(s){
   return '<div class="facts"><span>' + a + '</span><span>' + b + '</span></div>';
 }
 function subTag(s){
+  if (s.type === "ipo"){ var g = (tdef("ipo").segs.filter(function(x){ return x[0] === s.seg; })[0] || [0, s.seg])[1]; return '<span class="tag ' + (s.seg === "other" ? "" : s.seg === "reclaim" ? "v" : "ok") + '">' + esc(g) + (s.bob && /vcp|cup|breakout/.test(s.seg) ? " \u00b7 base on base" : "") + '</span>'; }
   if (s.type === "highs") return '<span class="tag ' + (s.seg === "near" ? "" : "ok") + '">' + (s.seg === "ath" ? "All-time high" : s.seg === "52w" ? "52-week high" : "Near the ATH") + '</span>';
   if (s.type === "bounce") return '<span class="tag ' + (s.seg === "at" ? "ok" : s.seg === "near" ? "v" : "") + '">' + s.ema + ' EMA, ' + (s.seg === "at" ? "at it" : s.seg === "near" ? "pulling back" : "extended") + '</span>';
   var t = s.sub || (s.type === "earn" ? (s.gap >= 3 ? "Gap up" : "Wide-range day") : s.type === "cup" ? "Cup, " + (s.emaState || "") : "");
@@ -973,6 +991,7 @@ function subTag(s){
   return '<span class="tag ' + cls + '">' + esc(t) + '</span>';
 }
 function firedTxt(s){
+  if (s.type === "ipo") return "IPO " + fdd(s.listed) + " \u2019" + String(s.listed).slice(2, 4);
   if (s.type === "bounce") return "Move since " + fdd(s.start);
   if (s.type === "highs" && s.seg === "near") return "No new high this week";
   return s.daysAgo === 0 ? '<b class="newtxt">New today</b>' : s.daysAgo != null ? s.daysAgo + (s.daysAgo === 1 ? " session ago" : " sessions ago") : "Still forming"; }
@@ -987,6 +1006,7 @@ function renderList(){
     + dk.map(function(d){ return '<button type="button" data-day="' + d + '"' + (S.day === d ? ' class="on"' : "") + '>' + (d === LAST ? "Today" : fdd(d)) + ' <span class="dn">' + days[d] + '</span></button>'; }).join("") + '</div>')
     + '<span class="spacer"></span><label class="dim" for="sort" style="font-size:12px">Sort</label><select id="sort">'
     + [["fresh", "Newest signal first"], ["liquid", "Most liquid"], ["day", "Best day today"], ["sector", "By sector"]].map(function(o){ return '<option value="' + o[0] + '"' + (S.sort === o[0] ? " selected" : "") + '>' + o[1] + '</option>'; }).join("") + '</select></div>';
+  if (S.type === "ipo") h += ipoStrip();
   h += '<div class="count">' + rows.length + ' of ' + total + ' pass your filters' + (S.sector ? " in " + esc(S.sector) : "") + '. <kbd>J</kbd> <kbd>K</kbd> to move, <kbd>S</kbd> to watch, <kbd>T</kbd> to send to Setups.</div>';
   if (!rows.length) h += '<div class="empty">Nothing passes these filters. Try the Everything preset or another day.</div>';
   h += '<div class="rows">' + rows.map(function(s){
@@ -1000,13 +1020,15 @@ function renderList(){
       + '<div class="flags"><div class="since" data-since="' + esc(key) + '">…</div><small class="dim">' + money(s.cap) + ' · ' + money(s.turnover) + '/day</small></div></div>';
   }).join("") + '</div>';
   $("center").innerHTML = h;
+  drawIpoIdx();
   rows.forEach(function(s){
     var key = s.type + ":" + s.sym, cv = document.querySelector('[data-sp="' + key + '"]');
     lazy(cv, function(){
       getPx(s.sym).then(function(P){
-        var k = s.type === "bounce" ? idxOn(P, s.start) : s.firedDate ? idxOn(P, s.firedDate) : (s.daysAgo != null ? P.n - 1 - s.daysAgo : null);
-        miniChart(cv, P, k, {span:100, level:s.type === "vcp" ? s.pivot : null});
+        var k = s.type === "ipo" ? idxOn(P, s.listed) : s.type === "bounce" ? idxOn(P, s.start) : s.firedDate ? idxOn(P, s.firedDate) : (s.daysAgo != null ? P.n - 1 - s.daysAgo : null);
+        miniChart(cv, P, k, {span:s.type === "ipo" ? Math.min(250, (s.age || 100) + 5) : 100, level:s.type === "vcp" ? s.pivot : null});
         var el = document.querySelector('[data-since="' + key + '"]'); if (!el) return;
+        if (s.type === "ipo"){ el.innerHTML = '<b class="mono ' + (s.offHigh >= -5 ? "up" : "") + '">' + pct(s.offHigh, 1) + '</b> <span class="tag">vs post-IPO high</span>'; return; }
         if (s.type === "bounce"){ el.innerHTML = '<b class="mono">' + pct(s.dist, 1) + '</b> <span class="tag">vs ' + s.ema + ' EMA</span>'; return; }
         if (s.type === "highs" && s.seg === "near"){ el.innerHTML = '<b class="mono down">' + pct(s.offAth, 1) + '</b> <span class="tag">vs ATH</span>'; return; }
         if (k == null){ el.innerHTML = '<span class="tag">Watching</span>'; return; }
@@ -1017,9 +1039,30 @@ function renderList(){
   });
 }
 
+/* The IPO market: our own equal-weight index of every IPO above, from each one's second session. */
+function ipoStrip(){
+  var X = IPO_INDEX; if (!X.length) return "";
+  var last = X[X.length - 1], at = function(n){ var r = X[Math.max(0, X.length - 1 - n)]; return (last[1] / r[1] - 1) * 100; };
+  var hi = Math.max.apply(null, X.slice(-252).map(function(r){ return r[1]; }));
+  var cells = [["1 month", at(21)], ["3 months", at(63)], ["1 year", at(252)], ["From its 1-year high", (last[1] / hi - 1) * 100]];
+  return '<div class="ipostrip"><div><div class="k">IPO index</div><small class="dim">equal-weight, ' + last[2] + ' IPOs, as of ' + fdd(last[0]) + '</small></div><canvas id="ipoidx"></canvas>'
+    + cells.map(function(c){ return '<div class="ic"><small>' + c[0] + '</small><b class="mono ' + (c[1] >= 0 ? "up" : "down") + '">' + pct(c[1], 1) + '</b></div>'; }).join("") + '</div>';
+}
+function drawIpoIdx(){
+  var cv = $("ipoidx"); if (!cv || !IPO_INDEX.length) return;
+  var X = IPO_INDEX.slice(-252), W = cv.clientWidth || 220, H = cv.clientHeight || 40, dpr = window.devicePixelRatio || 1;
+  cv.width = W * dpr; cv.height = H * dpr; var g = cv.getContext("2d"); g.setTransform(dpr, 0, 0, dpr, 0, 0);
+  var mn = Math.min.apply(null, X.map(function(r){ return r[1]; })), mx = Math.max.apply(null, X.map(function(r){ return r[1]; }));
+  g.beginPath(); X.forEach(function(r, i){ var x = 2 + i / (X.length - 1) * (W - 4), y = H - 3 - (r[1] - mn) / (mx - mn || 1) * (H - 6); if (!i) g.moveTo(x, y); else g.lineTo(x, y); });
+  g.strokeStyle = X[X.length - 1][1] >= X[0][1] ? cssv("--up") : cssv("--down"); g.lineWidth = 1.5; g.stroke();
+}
+
 /* ---------- detail ---------- */
 function find(key){ var p = key.split(":"); return ROWS[p[0]].filter(function(s){ return s.sym === p[1]; })[0]; }
 function why(s){
+  if (s.type === "ipo") return [["Listed", fds(s.listed) + " at " + fp(s.listPx)], ["First two weeks", pct(s.run1, 0)], ["Post-IPO high", fp(s.postHigh) + ", " + fdd(s.postHighDate)], ["Deepest fall since", pct(s.depth, 0)],
+    ["Pullbacks in the base", (s.contractions || []).length ? s.contractions.map(function(x){ return Math.abs(x).toFixed(0) + "%"; }).join(" \u2192 ") : "none"], ["From the listing price", pct(s.fromList, 0)], ["From the post-IPO high", pct(s.offHigh, 1)],
+    ["Base on base", s.bob ? fdd(s.bob[0]) + " \u2013 " + fdd(s.bob[1]) : "no"]];
   if (s.type === "highs") return [["All-time high", s.ath ? fp(s.ath) : "unknown"], ["From the ATH", pct(s.offAth, 1)], ["52-week high", fp(s.hi52)], ["Last new 52-week high", s.firedDate ? fds(s.firedDate) : "not this week"]];
   if (s.type === "bounce") return [["EMA respected", s.ema + " EMA"], ["Move", pct(s.gain, 0) + " since " + fdd(s.start)], ["Sessions above it", s.run], ["Touches", s.touches], ["Slight undercuts", s.undercuts], ["Off the peak (" + fdd(s.peak) + ")", pct(s.pull, 1)], ["Distance to the " + s.ema + " EMA", pct(s.dist, 1)]];
   var t = tdef(s.type);
@@ -1040,7 +1083,7 @@ function openDetail(key){
     + '<span class="spacer"></span><button type="button" class="btn" data-star="' + esc(s.sym) + '">' + (STARS[s.sym] ? "★ Watching" : "☆ Watch") + ' <kbd>S</kbd></button>'
     + '<button type="button" class="btn' + (SENT[s.sym] ? " done" : "") + '" data-act="tolog">' + (SENT[s.sym] ? "In Setups \u00b7 open" : "Send to Setups") + ' <kbd>T</kbd></button>'
     + '<a class="ext" href="' + tvUrl(s.sym) + '" target="_blank" rel="noopener">TradingView \u2197</a></div>';
-  h += '<div class="ctl"><div class="tf" id="dtf"><button type="button" data-r="6m" class="on">6M</button><button type="button" data-r="1y">1Y</button><button type="button" data-r="all">All</button></div><span class="dim" style="font-size:12px">Purple arrow: ' + (s.type === "bounce" ? "where the move began. Thick line: the EMA it has respected." : s.type === "highs" ? "the latest new high. Gold dashes: the all-time high." : "the signal day.") + (s.type === "reclaim" || s.type === "short" ? " Navy line: 200 EMA." : "") + '</span></div>';
+  h += '<div class="ctl"><div class="tf" id="dtf"><button type="button" data-r="6m" class="on">6M</button><button type="button" data-r="1y">1Y</button><button type="button" data-r="all">All</button></div><span class="dim" style="font-size:12px">Purple arrow: ' + (s.type === "ipo" ? "the listing day. Purple dashes: the post-IPO high." : s.type === "bounce" ? "where the move began. Thick line: the EMA it has respected." : s.type === "highs" ? "the latest new high. Gold dashes: the all-time high." : "the signal day.") + (s.type === "reclaim" || s.type === "short" ? " Navy line: 200 EMA." : "") + '</span></div>';
   h += '<div class="chartwrap"><div class="lwbox" id="d-chart"></div><canvas class="ovl" id="d-ovl"></canvas></div>'
     + '<div class="legend"><span><i style="border-color:#2962FF"></i>EMA 10</span><span><i style="border-color:#F23645"></i>EMA 20</span><span><i style="border-color:#FF9800"></i>EMA 50</span><span><i style="border-color:#1e3a8a"></i>EMA 200</span><span><i style="border-color:#0ea5e9"></i>volume 30-day avg</span><span class="dim"><kbd>Shift</kbd> drag to measure</span></div>';
   h += '<div class="sec">Why it is on the list<span class="hint">the numbers the rule checked</span></div><div class="tiles">' + why(s).map(function(f){ return '<div class="tile"><div class="k">' + esc(f[0]) + '</div><div class="v">' + esc(f[1]) + '</div></div>'; }).join("") + '</div>';
@@ -1052,8 +1095,8 @@ function openDetail(key){
   $("detail").innerHTML = h;
   getPx(s.sym).then(function(P){
     if (S.sel !== key) return;
-    var k = s.type === "bounce" ? idxOn(P, s.start) : s.firedDate ? idxOn(P, s.firedDate) : (s.daysAgo != null ? P.n - 1 - s.daysAgo : P.n - 1);
-    var st = makeChart("d", $("d-chart"), $("d-ovl"), P, {k:k, kLabel:s.type === "bounce" ? "move start" : s.type === "highs" ? "new high" : "signal", after:200, range:s.type === "bounce" ? "1y" : "6m"});
+    var k = s.type === "ipo" ? idxOn(P, s.listed) : s.type === "bounce" ? idxOn(P, s.start) : s.firedDate ? idxOn(P, s.firedDate) : (s.daysAgo != null ? P.n - 1 - s.daysAgo : P.n - 1);
+    var st = makeChart("d", $("d-chart"), $("d-ovl"), P, {k:k, kLabel:s.type === "ipo" ? "listed" : s.type === "bounce" ? "move start" : s.type === "highs" ? "new high" : "signal", after:200, range:s.type === "bounce" ? "1y" : "6m"});
     if (st){
       var l = st.chart.addLineSeries({color:"#1e3a8a", lineWidth:2, priceLineVisible:false, lastValueVisible:false, crosshairMarkerVisible:false});
       l.setData(P.d.map(function(d, i){ return P.e200[i] == null || i < 150 ? null : {time:d, value:P.e200[i]}; }).filter(Boolean));
@@ -1062,10 +1105,14 @@ function openDetail(key){
         var ev = s.ema === 20 ? P.e20 : P.e50, k0 = idxOn(P, s.start);
         re.setData(P.d.map(function(d, i){ return i < k0 || ev[i] == null ? null : {time:d, value:ev[i]}; }).filter(Boolean));
       }
+      if (s.type === "ipo"){
+        st.cs.createPriceLine({price:s.postHigh, color:"#7c3aed", lineWidth:1, lineStyle:2, axisLabelVisible:true, title:"post-IPO high"});
+        var kl = idxOn(P, s.listed); st.chart.timeScale().setVisibleRange({from:P.d[Math.max(0, kl - 3)], to:P.d[P.n - 1]});
+      }
       if (s.type === "highs" && s.ath) st.cs.createPriceLine({price:s.ath, color:"#ca8a04", lineWidth:1, lineStyle:2, axisLabelVisible:true, title:"all-time high"});
       if (s.type === "vcp" && s.pivot) st.cs.createPriceLine({price:s.pivot, color:cssv("--violet"), lineWidth:1, lineStyle:2, axisLabelVisible:true, title:"pivot"});
       if (s.type === "bounce"){ var kk = idxOn(P, s.start); st.chart.timeScale().setVisibleRange({from:P.d[Math.max(0, kk - 40)], to:P.d[P.n - 1]}); }
-      else view(st, "6m");
+      else if (s.type !== "ipo") view(st, "6m");
     }
   }).catch(function(){ $("d-chart").innerHTML = '<p class="dim" style="padding:16px">No price file for ' + esc(s.sym) + '.</p>'; });
 }
