@@ -837,6 +837,12 @@ function nearestPath(cv, mx, my){
 
 /* ---------- Signals demo: the Setups notebook layout (types, list with mini charts, docked detail) ---------- */
 var TYPES = [
+  {id:"highs", fb:"highs", src:"highsSignals", title:"New highs", color:"#ca8a04", side:"long",
+   segs:[["ath", "All-time highs"], ["52w", "52-week highs"], ["near", "Within 20% of the ATH"]],
+   rule:"All-time highs: the high of one of the last 5 sessions reached the stock's all-time high (TradingView's full history). 52-week highs: a new 52-week high in the last 5 sessions, still below the all-time high. Within 20% of the ATH: closing 0 to 20% under its all-time high, no new high this week."},
+  {id:"bounce", fb:"bounce", src:"bounceSignals", title:"EMA bounce", color:"#0d9488", side:"long",
+   segs:[["at", "At the EMA"], ["near", "Pulling back to it"], ["ext", "Respecting, still extended"]],
+   rule:"An uptrend that has respected its 20 or 50 EMA for the whole move: no close more than 2% (20 EMA) or 3% (50 EMA) under it and never two closes running under it, for at least 25 / 40 sessions, a move of 25% or more, the average rising and price above the 200 EMA. At the EMA: within 4% of it. Pulling back: 4 to 8% above it and at least 3% off the peak. Still extended: respecting it but not pulled back yet."},
   {id:"reclaim", fb:"breakout", src:"signals", title:"Stage 4→1 reclaim", color:"#16a34a", side:"long",
    rule:"A liquid name closing back above its 200 EMA after a deep, long decline (about 40% or more off the high, mostly below the 200 for months), or a flat base on the 200 that breaks out on volume. Names that fail and re-cross show again as re-reclaim."},
   {id:"earn", fb:"earnings", src:"earningsSignals", title:"Earnings gap in an uptrend", color:"#d97706", side:"long",
@@ -858,9 +864,10 @@ var PRESETS = CODE === "IN" ? {
   all:{label:"Everything", adr:0, turn:0, cap:0, text:"no liquidity floor"}
 };
 var D = null, CL = {}, PROF = {}, ROWS = {}, LAST = null;
-var S = {type:"reclaim", day:"all", preset:"liquid", sector:"", q:"", sort:"fresh", sel:null, hideExt:true};
+var S = {type:"highs", seg:"ath", day:"all", preset:"liquid", sector:"", q:"", sort:"fresh", sel:null, hideExt:true};
 var STARS = {}, SENT = {}, FB = {};
 try { var sv = JSON.parse(localStorage.getItem("signals-view-" + CODE) || "{}"); if (sv.type) S.type = sv.type; if (sv.preset && PRESETS[sv.preset]) S.preset = sv.preset; if (sv.sort) S.sort = sv.sort; if (sv.hideExt != null) S.hideExt = sv.hideExt; } catch (x) {}
+(function(){ var g = (tdef(S.type) || {}).segs; if (g && !g.some(function(x){ return x[0] === S.seg; })) S.seg = g[0][0]; })();
 function keepView(){ try { localStorage.setItem("signals-view-" + CODE, JSON.stringify({type:S.type, preset:S.preset, sort:S.sort, hideExt:S.hideExt})); } catch (x) {} }
 
 function load(){
@@ -894,10 +901,14 @@ function listOf(type){
   return ROWS[type].filter(function(s){
     if (!passes(s)) return false;
     if (S.sector && s.sector !== S.sector) return false;
-    if (S.day !== "all" && s.firedDate !== S.day) return false;
+    var td = tdef(type);
+    if (td.segs){ if (s.seg !== S.seg) return false; }
+    else if (S.day !== "all" && s.firedDate !== S.day) return false;
     if (S.q){ var q = S.q.toUpperCase(); if (s.sym.indexOf(q) !== 0 && String(s.name || "").toUpperCase().indexOf(q) < 0) return false; }
     return true;
   }).sort(function(a, b){
+    if (S.sort === "fresh" && type === "bounce") return Math.abs(a.dist) - Math.abs(b.dist);
+    if (S.sort === "fresh" && type === "highs" && S.seg === "near") return (b.offAth || -99) - (a.offAth || -99);
     if (S.sort === "fresh") return (a.daysAgo == null ? 99 : a.daysAgo) - (b.daysAgo == null ? 99 : b.daysAgo) || (b.turnover || 0) - (a.turnover || 0);
     if (S.sort === "liquid") return (b.turnover || 0) - (a.turnover || 0);
     if (S.sort === "day") return (b.chg || 0) - (a.chg || 0);
@@ -905,7 +916,7 @@ function listOf(type){
     return 0;
   });
 }
-function newToday(type){ return ROWS[type].filter(function(s){ return passes(s) && s.daysAgo === 0; }).length; }
+function newToday(type){ return ROWS[type].filter(function(s){ return passes(s) && (type === "bounce" ? s.seg === "at" : type === "highs" ? s.seg !== "near" && s.daysAgo === 0 : s.daysAgo === 0); }).length; }
 
 /* ---------- rail ---------- */
 function renderRail(){
@@ -929,7 +940,13 @@ function renderRail(){
 /* ---------- list ---------- */
 function facts(s){
   var a = "", b = "";
-  if (s.type === "reclaim"){
+  if (s.type === "highs"){
+    a = s.seg === "near" ? '<b class="down">' + pct(s.offAth, 1) + '</b> from the all-time high' : s.seg === "ath" ? 'At the all-time high, <b>' + fp(s.ath) + '</b>' : 'New 52-week high, <b>' + fp(s.hi52) + '</b>';
+    b = s.ath ? 'All-time high <b>' + fp(s.ath) + '</b>' + (s.seg === "52w" ? ', ' + pct(s.offAth, 1) + ' under it' : "") : "All-time high unknown";
+  } else if (s.type === "bounce"){
+    a = 'Respected the <b>' + s.ema + ' EMA</b> for ' + s.run + ' sessions, <b class="up">' + pct(s.gain, 0) + '</b>';
+    b = '<b>' + s.touches + '</b> ' + (s.touches === 1 ? "touch" : "touches") + (s.undercuts ? ', ' + s.undercuts + ' slight ' + (s.undercuts === 1 ? "undercut" : "undercuts") : ", no undercuts") + ', ' + pct(s.pull, 1) + ' off the peak';
+  } else if (s.type === "reclaim"){
     a = s.declinePct != null ? 'Fell <b class="down">' + pct(s.declinePct, 0) + '</b>, ' + s.sessionsBelow + ' of 120 under the 200' : esc(s.sub);
     b = 'Now <b class="' + (s.extPct >= 0 ? "up" : "down") + '">' + pct(s.extPct, 1) + '</b> vs the 200 EMA';
   } else if (s.type === "earn"){
@@ -949,18 +966,25 @@ function facts(s){
   return '<div class="facts"><span>' + a + '</span><span>' + b + '</span></div>';
 }
 function subTag(s){
+  if (s.type === "highs") return '<span class="tag ' + (s.seg === "near" ? "" : "ok") + '">' + (s.seg === "ath" ? "All-time high" : s.seg === "52w" ? "52-week high" : "Near the ATH") + '</span>';
+  if (s.type === "bounce") return '<span class="tag ' + (s.seg === "at" ? "ok" : s.seg === "near" ? "v" : "") + '">' + s.ema + ' EMA, ' + (s.seg === "at" ? "at it" : s.seg === "near" ? "pulling back" : "extended") + '</span>';
   var t = s.sub || (s.type === "earn" ? (s.gap >= 3 ? "Gap up" : "Wide-range day") : s.type === "cup" ? "Cup, " + (s.emaState || "") : "");
   var cls = s.type === "short" ? "bear" : s.sub === "Breakout" || /breakout/i.test(t) ? "ok" : "";
   return '<span class="tag ' + cls + '">' + esc(t) + '</span>';
 }
-function firedTxt(s){ return s.daysAgo === 0 ? '<b class="newtxt">New today</b>' : s.daysAgo != null ? s.daysAgo + (s.daysAgo === 1 ? " session ago" : " sessions ago") : "Still forming"; }
+function firedTxt(s){
+  if (s.type === "bounce") return "Move since " + fdd(s.start);
+  if (s.type === "highs" && s.seg === "near") return "No new high this week";
+  return s.daysAgo === 0 ? '<b class="newtxt">New today</b>' : s.daysAgo != null ? s.daysAgo + (s.daysAgo === 1 ? " session ago" : " sessions ago") : "Still forming"; }
 function renderList(){
-  var t = tdef(S.type), rows = listOf(S.type), total = ROWS[S.type].length;
+  var t = tdef(S.type), rows = listOf(S.type), total = ROWS[S.type].filter(function(x){ return !t.segs || x.seg === S.seg; }).length;
   var days = {}; ROWS[S.type].forEach(function(s){ if (passes(s) && s.firedDate) days[s.firedDate] = (days[s.firedDate] || 0) + 1; });
   var dk = Object.keys(days).sort().reverse().slice(0, 5);
   var h = '<div class="qhead"><div><h2><span class="dot" style="background:' + t.color + '"></span>' + esc(t.title) + '</h2><p>' + esc(t.rule) + '</p></div></div>';
-  h += '<div class="tools"><div class="seg" id="days"><button type="button" data-day="all"' + (S.day === "all" ? ' class="on"' : "") + '>Any day</button>'
-    + dk.map(function(d){ return '<button type="button" data-day="' + d + '"' + (S.day === d ? ' class="on"' : "") + '>' + (d === LAST ? "Today" : fdd(d)) + ' <span class="dn">' + days[d] + '</span></button>'; }).join("") + '</div>'
+  var segc = {}; if (t.segs) ROWS[S.type].forEach(function(s){ if (passes(s) && (!S.sector || s.sector === S.sector)) segc[s.seg] = (segc[s.seg] || 0) + 1; });
+  h += '<div class="tools">' + (t.segs ? '<div class="seg" id="segs">' + t.segs.map(function(g){ return '<button type="button" data-seg="' + g[0] + '"' + (S.seg === g[0] ? ' class="on"' : "") + '>' + esc(g[1]) + ' <span class="dn">' + (segc[g[0]] || 0) + '</span></button>'; }).join("") + '</div>'
+    : '<div class="seg" id="days"><button type="button" data-day="all"' + (S.day === "all" ? ' class="on"' : "") + '>Any day</button>'
+    + dk.map(function(d){ return '<button type="button" data-day="' + d + '"' + (S.day === d ? ' class="on"' : "") + '>' + (d === LAST ? "Today" : fdd(d)) + ' <span class="dn">' + days[d] + '</span></button>'; }).join("") + '</div>')
     + '<span class="spacer"></span><label class="dim" for="sort" style="font-size:12px">Sort</label><select id="sort">'
     + [["fresh", "Newest signal first"], ["liquid", "Most liquid"], ["day", "Best day today"], ["sector", "By sector"]].map(function(o){ return '<option value="' + o[0] + '"' + (S.sort === o[0] ? " selected" : "") + '>' + o[1] + '</option>'; }).join("") + '</select></div>';
   h += '<div class="count">' + rows.length + ' of ' + total + ' pass your filters' + (S.sector ? " in " + esc(S.sector) : "") + '. <kbd>J</kbd> <kbd>K</kbd> to move, <kbd>S</kbd> to watch, <kbd>T</kbd> to send to Setups.</div>';
@@ -980,9 +1004,11 @@ function renderList(){
     var key = s.type + ":" + s.sym, cv = document.querySelector('[data-sp="' + key + '"]');
     lazy(cv, function(){
       getPx(s.sym).then(function(P){
-        var k = s.firedDate ? idxOn(P, s.firedDate) : (s.daysAgo != null ? P.n - 1 - s.daysAgo : null);
+        var k = s.type === "bounce" ? idxOn(P, s.start) : s.firedDate ? idxOn(P, s.firedDate) : (s.daysAgo != null ? P.n - 1 - s.daysAgo : null);
         miniChart(cv, P, k, {span:100, level:s.type === "vcp" ? s.pivot : null});
         var el = document.querySelector('[data-since="' + key + '"]'); if (!el) return;
+        if (s.type === "bounce"){ el.innerHTML = '<b class="mono">' + pct(s.dist, 1) + '</b> <span class="tag">vs ' + s.ema + ' EMA</span>'; return; }
+        if (s.type === "highs" && s.seg === "near"){ el.innerHTML = '<b class="mono down">' + pct(s.offAth, 1) + '</b> <span class="tag">vs ATH</span>'; return; }
         if (k == null){ el.innerHTML = '<span class="tag">Watching</span>'; return; }
         var ch = (P.c[P.n - 1] / P.c[k] - 1) * 100, good = s.type === "short" ? -ch : ch;
         el.innerHTML = '<b class="mono ' + (good >= 0 ? "up" : "down") + '">' + pct(ch, 1) + '</b> <span class="tag ' + (s.daysAgo === 0 ? "v" : good >= -3 ? "ok" : "warn") + '" title="Close today against the close on the signal day' + (s.type === "short" ? " (for a short, lower is better)" : "") + '">' + (s.daysAgo === 0 ? "New" : good >= -3 ? "Holding" : "Fading") + '</span>';
@@ -994,6 +1020,8 @@ function renderList(){
 /* ---------- detail ---------- */
 function find(key){ var p = key.split(":"); return ROWS[p[0]].filter(function(s){ return s.sym === p[1]; })[0]; }
 function why(s){
+  if (s.type === "highs") return [["All-time high", s.ath ? fp(s.ath) : "unknown"], ["From the ATH", pct(s.offAth, 1)], ["52-week high", fp(s.hi52)], ["Last new 52-week high", s.firedDate ? fds(s.firedDate) : "not this week"]];
+  if (s.type === "bounce") return [["EMA respected", s.ema + " EMA"], ["Move", pct(s.gain, 0) + " since " + fdd(s.start)], ["Sessions above it", s.run], ["Touches", s.touches], ["Slight undercuts", s.undercuts], ["Off the peak (" + fdd(s.peak) + ")", pct(s.pull, 1)], ["Distance to the " + s.ema + " EMA", pct(s.dist, 1)]];
   var t = tdef(s.type);
   if (s.type === "reclaim") return [["Prior decline", pct(s.declinePct, 0)], ["Sessions under the 200", s.sessionsBelow != null ? s.sessionsBelow + " of 120" : "—"], ["Vs the 200 EMA now", pct(s.extPct, 1)], ["Industry rank, 20 days", s.indRankFrom != null ? s.indRankFrom + " → " + s.indRankTo : "—"]];
   if (s.type === "earn") return [["Gap at the open", pct(s.gap, 1)], ["Volume vs 30-day average", (s.volMult || 0).toFixed(1) + "x"], ["Day range", (s.range || 0).toFixed(0) + "%"], ["Gave back of the range", (s.giveback || 0).toFixed(0) + "%"]];
@@ -1012,7 +1040,7 @@ function openDetail(key){
     + '<span class="spacer"></span><button type="button" class="btn" data-star="' + esc(s.sym) + '">' + (STARS[s.sym] ? "★ Watching" : "☆ Watch") + ' <kbd>S</kbd></button>'
     + '<button type="button" class="btn' + (SENT[s.sym] ? " done" : "") + '" data-act="tolog">' + (SENT[s.sym] ? "In Setups \u00b7 open" : "Send to Setups") + ' <kbd>T</kbd></button>'
     + '<a class="ext" href="' + tvUrl(s.sym) + '" target="_blank" rel="noopener">TradingView \u2197</a></div>';
-  h += '<div class="ctl"><div class="tf" id="dtf"><button type="button" data-r="6m" class="on">6M</button><button type="button" data-r="1y">1Y</button><button type="button" data-r="all">All</button></div><span class="dim" style="font-size:12px">Purple arrow: the signal day.' + (s.type === "reclaim" || s.type === "short" ? " Navy line: 200 EMA." : "") + '</span></div>';
+  h += '<div class="ctl"><div class="tf" id="dtf"><button type="button" data-r="6m" class="on">6M</button><button type="button" data-r="1y">1Y</button><button type="button" data-r="all">All</button></div><span class="dim" style="font-size:12px">Purple arrow: ' + (s.type === "bounce" ? "where the move began. Thick line: the EMA it has respected." : s.type === "highs" ? "the latest new high. Gold dashes: the all-time high." : "the signal day.") + (s.type === "reclaim" || s.type === "short" ? " Navy line: 200 EMA." : "") + '</span></div>';
   h += '<div class="chartwrap"><div class="lwbox" id="d-chart"></div><canvas class="ovl" id="d-ovl"></canvas></div>'
     + '<div class="legend"><span><i style="border-color:#2962FF"></i>EMA 10</span><span><i style="border-color:#F23645"></i>EMA 20</span><span><i style="border-color:#FF9800"></i>EMA 50</span><span><i style="border-color:#1e3a8a"></i>EMA 200</span><span><i style="border-color:#0ea5e9"></i>volume 30-day avg</span><span class="dim"><kbd>Shift</kbd> drag to measure</span></div>';
   h += '<div class="sec">Why it is on the list<span class="hint">the numbers the rule checked</span></div><div class="tiles">' + why(s).map(function(f){ return '<div class="tile"><div class="k">' + esc(f[0]) + '</div><div class="v">' + esc(f[1]) + '</div></div>'; }).join("") + '</div>';
@@ -1024,13 +1052,20 @@ function openDetail(key){
   $("detail").innerHTML = h;
   getPx(s.sym).then(function(P){
     if (S.sel !== key) return;
-    var k = s.firedDate ? idxOn(P, s.firedDate) : (s.daysAgo != null ? P.n - 1 - s.daysAgo : P.n - 1);
-    var st = makeChart("d", $("d-chart"), $("d-ovl"), P, {k:k, kLabel:"signal", after:200, range:"6m"});
+    var k = s.type === "bounce" ? idxOn(P, s.start) : s.firedDate ? idxOn(P, s.firedDate) : (s.daysAgo != null ? P.n - 1 - s.daysAgo : P.n - 1);
+    var st = makeChart("d", $("d-chart"), $("d-ovl"), P, {k:k, kLabel:s.type === "bounce" ? "move start" : s.type === "highs" ? "new high" : "signal", after:200, range:s.type === "bounce" ? "1y" : "6m"});
     if (st){
       var l = st.chart.addLineSeries({color:"#1e3a8a", lineWidth:2, priceLineVisible:false, lastValueVisible:false, crosshairMarkerVisible:false});
       l.setData(P.d.map(function(d, i){ return P.e200[i] == null || i < 150 ? null : {time:d, value:P.e200[i]}; }).filter(Boolean));
+      if (s.type === "bounce"){
+        var re = st.chart.addLineSeries({color:s.ema === 20 ? "#F23645" : "#FF9800", lineWidth:3, priceLineVisible:false, lastValueVisible:false, crosshairMarkerVisible:false});
+        var ev = s.ema === 20 ? P.e20 : P.e50, k0 = idxOn(P, s.start);
+        re.setData(P.d.map(function(d, i){ return i < k0 || ev[i] == null ? null : {time:d, value:ev[i]}; }).filter(Boolean));
+      }
+      if (s.type === "highs" && s.ath) st.cs.createPriceLine({price:s.ath, color:"#ca8a04", lineWidth:1, lineStyle:2, axisLabelVisible:true, title:"all-time high"});
       if (s.type === "vcp" && s.pivot) st.cs.createPriceLine({price:s.pivot, color:cssv("--violet"), lineWidth:1, lineStyle:2, axisLabelVisible:true, title:"pivot"});
-      view(st, "6m");
+      if (s.type === "bounce"){ var kk = idxOn(P, s.start); st.chart.timeScale().setVisibleRange({from:P.d[Math.max(0, kk - 40)], to:P.d[P.n - 1]}); }
+      else view(st, "6m");
     }
   }).catch(function(){ $("d-chart").innerHTML = '<p class="dim" style="padding:16px">No price file for ' + esc(s.sym) + '.</p>'; });
 }
@@ -1048,9 +1083,10 @@ document.addEventListener("click", function(ev){
       .catch(function(e){ if (on) delete STARS[sy]; else STARS[sy] = 1; renderList(); if (S.sel) openDetail(S.sel); toast("Could not update the watchlist: " + e.message); });
     return;
   }
-  var ty = t.closest("[data-type]"); if (ty){ S.type = ty.dataset.type; S.sector = ""; S.day = "all"; S.sel = null; keepView(); renderAll(); return; }
+  var ty = t.closest("[data-type]"); if (ty){ S.type = ty.dataset.type; S.seg = (tdef(S.type).segs || [[""]])[0][0]; S.sector = ""; S.day = "all"; S.sel = null; keepView(); renderAll(); return; }
   var pr = t.closest("[data-preset]"); if (pr){ S.preset = pr.dataset.preset; keepView(); renderAll(); return; }
   var se = t.closest("[data-sector]"); if (se){ S.sector = se.dataset.sector; renderAll(); return; }
+  var sg = t.closest("[data-seg]"); if (sg){ S.seg = sg.dataset.seg; S.sel = null; renderList(); var rr = listOf(S.type); if (rr.length){ S.sel = S.type + ":" + rr[0].sym; openDetail(S.sel); } return; }
   var dy = t.closest("[data-day]"); if (dy){ S.day = dy.dataset.day; renderList(); return; }
   var jp = t.closest("[data-jump]"); if (jp){ var k = jp.dataset.jump, ty2 = k.split(":")[0]; if (ty2 !== S.type){ S.type = ty2; S.sector = ""; S.day = "all"; renderRail(); renderList(); } openDetail(k); var r = document.querySelector('.srow[data-key="' + k + '"]'); if (r) r.scrollIntoView({block:"nearest"}); return; }
   var fb = t.closest("[data-fb]"); if (fb && S.sel){
@@ -1089,7 +1125,7 @@ document.addEventListener("keydown", function(ev){
   function go(j){ if (!rows.length) return; j = Math.max(0, Math.min(rows.length - 1, j)); var k = rows[j].type + ":" + rows[j].sym; openDetail(k); var r = document.querySelector('.srow[data-key="' + k + '"]'); if (r) r.scrollIntoView({block:"nearest"}); }
   if (ev.key === "j" || ev.key === "ArrowDown"){ ev.preventDefault(); go(i + 1); }
   else if (ev.key === "k" || ev.key === "ArrowUp"){ ev.preventDefault(); go(i - 1); }
-  else if (/^[1-5]$/.test(ev.key)){ S.type = TYPES[+ev.key - 1].id; S.sector = ""; S.day = "all"; S.sel = null; keepView(); renderAll(); }
+  else if (/^[1-7]$/.test(ev.key)){ S.type = TYPES[+ev.key - 1].id; S.seg = (tdef(S.type).segs || [[""]])[0][0]; S.sector = ""; S.day = "all"; S.sel = null; keepView(); renderAll(); }
   else if ((ev.key === "s" || ev.key === "S") && S.sel){ var b = document.querySelector('#detail [data-star]'); if (b) b.click(); }
   else if ((ev.key === "t" || ev.key === "T") && S.sel){ var b2 = document.querySelector('#detail [data-act="tolog"]'); if (b2) b2.click(); }
   else if (ev.key === "/"){ ev.preventDefault(); $("q").focus(); }

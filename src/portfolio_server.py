@@ -166,7 +166,7 @@ def _signals_data(code):
         html = f.read()
     m = re.search(r'<script id="dashboard-data" type="application/json">(.*?)</script>', html, re.S)
     d = json.loads(m.group(1))
-    keys = ("signals", "earningsSignals", "cupSignals", "vcpSignals", "breakdownSignals")
+    keys = ("signals", "earningsSignals", "cupSignals", "vcpSignals", "breakdownSignals", "highsSignals", "bounceSignals")
     syms = {x.get("sym") for k in keys for x in (d.get(k) or [])}
     cl = d.get("classification") or {}
     prof = d.get("signalProfiles") or {}

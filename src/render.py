@@ -2012,6 +2012,16 @@ def render_all_panels(country):
     sig_extra["cupSignals"] = cup_signals
     sig_extra["vcpSignals"] = vcp_signals
     sig_extra["breakdownSignals"] = breakdown_signals
+    # New highs and EMA bounces (src/trend_scans.py): trend screens rather than one trigger day, so they are
+    # not part of the dated signals log.
+    try:
+        import trend_scans
+        trend = trend_scans.scan(country)
+    except Exception as error:
+        print(f"  trend scans failed: {error}")
+        trend = {"highs": [], "bounce": []}
+    sig_extra["highsSignals"] = trend["highs"]
+    sig_extra["bounceSignals"] = trend["bounce"]
     sig_lists = {"breakout": breakout_signals, "earnings": earnings_signals, "cup": cup_signals,
                  "vcp": vcp_signals, "breakdown": breakdown_signals}
     if cfg.get("run_tmle"):
@@ -2024,6 +2034,8 @@ def render_all_panels(country):
     for day in sig_extra["signalsLog"]:
         for typ in SIGNAL_TYPES:
             seen_syms.update(day.get(typ) or [])
+    seen_syms.update(x["sym"] for x in sig_extra["bounceSignals"])
+    seen_syms.update(x["sym"] for x in sig_extra["highsSignals"] if x["seg"] != "near")
     sig_extra["signalProfiles"] = _signal_profiles(country, seen_syms)
     paths.append(_write_panel(
         country, "panel-signals.html", "Signals",
