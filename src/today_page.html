@@ -834,7 +834,9 @@ function nearestPath(cv, mx, my){
 
 /* ---------- Home: today's verdict, what needs you, your watchlist, what is new in Signals, groups this week ---------- */
 var H = {}, SIGS = [], SIG_LAST = null, WATCH = [];
-var TYPE_NAME = {signals:"Stage 4→1 reclaim", earningsSignals:"Earnings gap", cupSignals:"Cup", vcpSignals:"VCP", breakdownSignals:"Short: rally into resistance"};
+var TYPE_NAME = {signals:"Stage 4→1 reclaim", earningsSignals:"Earnings gap", cupSignals:"Cup", vcpSignals:"VCP", breakdownSignals:"Short: rally into resistance", highsSignals:"New high", bounceSignals:"EMA bounce"};
+var TREND = {highsSignals:1, bounceSignals:1}, HTAB = "new";
+try { HTAB = localStorage.getItem("home-sig-tab") || "new"; } catch (x) {}
 var LIQ = CODE === "IN" ? 20e7 : 20e6;
 
 /* The journal counts come from Notion and take several seconds, so they fill in after the page is up. */
@@ -897,7 +899,7 @@ function needs(){
   var items = [], J = H.journal.accounts || {};
   var q = H.queue.filter(function(x){ return !x.done; });
   if (q.length) items.push({n:q.length, t:q.length === 1 ? "setup waiting to log" : "setups waiting to log", s:"From the Setup Finder, Signals and your TradingView list.", chips:q.map(function(x){ return x.t; }), go:"Setups", sev:"v"});
-  var nw = SIGS.filter(function(s){ return s.daysAgo === 0; });
+  var nw = SIGS.filter(function(s){ return s.daysAgo === 0 && !TREND[s.src]; });
   if (nw.length){ var by = {}; nw.forEach(function(s){ by[TYPE_NAME[s.src]] = (by[TYPE_NAME[s.src]] || 0) + 1; }); items.push({n:nw.length, t:"new liquid signals today", s:Object.keys(by).map(function(k){ return k + " " + by[k]; }).join(" · "), go:"Signals", sev:"v"}); }
   var noSetup = 0, list = []; Object.keys(J).forEach(function(k){ noSetup += J[k].noSetup || 0; if (J[k].noSetup) list.push(k + " " + J[k].noSetup); });
   if (noSetup) items.push({n:noSetup, t:"open trades have no entry setup", s:list.join(" · "), go:"Trade Journal", sev:"warn"});
@@ -923,14 +925,41 @@ function watch(){
 
 /* ---------- 4. new in signals ---------- */
 function newSigs(){
-  var nw = SIGS.filter(function(s){ return s.daysAgo === 0 && s.src !== "breakdownSignals"; }).sort(function(a, b){ return (b.turnover || 0) - (a.turnover || 0); }).slice(0, 8);
-  var sh = SIGS.filter(function(s){ return s.daysAgo === 0 && s.src === "breakdownSignals"; }).length;
-  return '<section class="card"><div class="ch"><h3>New in Signals</h3><span class="q">the most liquid long setups that fired on ' + fds(SIG_LAST) + (sh ? ", plus " + sh + " shorts" : "") + '</span><span class="spacer"></span><button type="button" class="linkbtn" data-go="Signals">All signals →</button></div>'
-    + (nw.length ? '<div class="sgrid2">' + nw.map(function(s){
+  var tabs = [["new", "New signals"], ["highs", "New highs"], ["bounce", "EMA bounce"]];
+  var list, note, empty;
+  if (HTAB === "highs"){
+    list = SIGS.filter(function(s){ return s.src === "highsSignals" && s.seg !== "near" && s.daysAgo === 0; }).sort(function(a, b){ return (b.turnover || 0) - (a.turnover || 0); });
+    note = "the most liquid names that made an all-time or 52-week high on " + fds(SIG_LAST);
+    empty = "No liquid names made a new high in the last session.";
+  } else if (HTAB === "bounce"){
+    list = SIGS.filter(function(s){ return s.src === "bounceSignals" && s.seg === "at"; }).sort(function(a, b){ return (b.turnover || 0) - (a.turnover || 0); });
+    note = "the most liquid uptrends back at the 20 or 50 EMA they have respected";
+    empty = "No liquid uptrend is at its EMA right now.";
+  } else {
+    list = SIGS.filter(function(s){ return s.daysAgo === 0 && s.src !== "breakdownSignals" && !TREND[s.src]; }).sort(function(a, b){ return (b.turnover || 0) - (a.turnover || 0); });
+    var sh = SIGS.filter(function(s){ return s.daysAgo === 0 && s.src === "breakdownSignals"; }).length;
+    note = "the most liquid long setups that fired on " + fds(SIG_LAST) + (sh ? ", plus " + sh + " shorts" : "");
+    empty = "No new long signals in the last scan.";
+  }
+  var total = list.length; list = list.slice(0, 8);
+  function tag(s){
+    if (s.src === "highsSignals") return s.seg === "ath" ? "All-time high" : "52-week high";
+    if (s.src === "bounceSignals") return s.ema + " EMA, " + pct(s.dist, 1);
+    return TYPE_NAME[s.src];
+  }
+  return '<section class="card" id="newsigs"><div class="ch"><h3>New in Signals</h3><div class="seg" id="htabs">' + tabs.map(function(t){ return '<button type="button" data-htab="' + t[0] + '"' + (HTAB === t[0] ? ' class="on"' : "") + '>' + t[1] + '</button>'; }).join("") + '</div><span class="spacer"></span><button type="button" class="linkbtn" data-go="Signals">All signals \u2192</button></div>'
+    + '<p class="q" style="margin:-2px 0 8px">' + esc(note) + (total > 8 ? " \u00b7 top 8 of " + total : "") + '</p>'
+    + (list.length ? '<div class="sgrid2">' + list.map(function(s){
       return '<button type="button" class="scard" data-tk="' + esc(s.sym) + '" data-kind="sig" data-src="' + s.src + '"><span class="who">' + logo(s.sym, s.logoid) + '<span><b>' + esc(s.sym) + '</b><small>' + esc(co(s.name) || s.industry) + '</small></span></span>'
-        + '<span class="tag v">' + esc(TYPE_NAME[s.src]) + '</span><canvas class="spark wide" data-sig="' + esc(s.sym) + '"></canvas>'
+        + '<span class="tag v">' + esc(tag(s)) + '</span><canvas class="spark wide" data-sig="' + esc(s.sym) + '" data-src="' + s.src + '"></canvas>'
         + '<span class="sfoot"><b class="mono ' + (s.chg >= 0 ? "up" : "down") + '">' + pct(s.chg, 1) + '</b> today<span class="spacer"></span>' + money(s.turnover) + '/day</span></button>';
-    }).join("") + '</div>' : '<p class="dim" style="margin:0">No new long signals in the last scan.</p>') + '</section>';
+    }).join("") + '</div>' : '<p class="dim" style="margin:0">' + esc(empty) + '</p>') + '</section>';
+}
+function drawSigSparks(root){
+  Array.prototype.forEach.call((root || document).querySelectorAll("[data-sig]"), function(cv){
+    var s = SIGS.filter(function(x){ return x.sym === cv.dataset.sig && x.src === cv.dataset.src; })[0];
+    lazy(cv, function(){ getPx(cv.dataset.sig).then(function(P){ miniChart(cv, P, s && s.src === "bounceSignals" ? idxOn(P, s.start) : P.n - 1, {span:120}); }).catch(function(){}); });
+  });
 }
 
 /* ---------- 5. groups this week ---------- */
@@ -948,9 +977,7 @@ function render(){
   Array.prototype.forEach.call(document.querySelectorAll("[data-w]"), function(cv){
     lazy(cv, function(){ getPx(cv.dataset.w).then(function(P){ miniChart(cv, P, null, {span:60}); }).catch(function(){}); });
   });
-  Array.prototype.forEach.call(document.querySelectorAll("[data-sig]"), function(cv){
-    lazy(cv, function(){ getPx(cv.dataset.sig).then(function(P){ miniChart(cv, P, P.n - 1, {span:120}); }).catch(function(){}); });
-  });
+  drawSigSparks();
 }
 
 /* ---------- side panel: the same chart as everywhere ---------- */
@@ -961,12 +988,21 @@ function openDrawer(t, kind, src){
   var sub = w ? (w.sector + " › " + w.industry) : s ? (co(s.name) + " · " + s.sector + " › " + s.industry) : "";
   var h = '<div class="dhead">' + logo(t, lg, "big") + '<div style="min-width:0"><h2>' + esc(t) + '</h2><div class="dsub">' + esc(sub) + '</div></div><span class="spacer"></span><button type="button" class="icon" data-act="close" aria-label="Close">&times;</button></div>';
   if (w) h += '<div class="tiles" style="margin:10px 0"><div class="tile"><div class="k">Last</div><div class="v">' + fp(w.close) + '</div></div><div class="tile"><div class="k">Today</div><div class="v ' + ((w.d1 || 0) >= 0 ? "up" : "down") + '">' + pct(w.d1, 2) + '</div></div><div class="tile"><div class="k">21 sessions</div><div class="v ' + ((w.move || 0) >= 0 ? "up" : "down") + '">' + pct(w.move, 1) + '</div></div></div>';
-  if (s) h += '<div class="dbar"><span class="tag v">' + esc(TYPE_NAME[s.src]) + '</span>' + (s.sub ? '<span class="tag">' + esc(s.sub) + '</span>' : "") + '<span class="spacer"></span><button type="button" class="linkbtn" data-go="Signals">Open in Signals →</button></div>';
+  if (s) h += '<div class="dbar"><span class="tag v">' + esc(TYPE_NAME[s.src]) + '</span>' + (s.sub ? '<span class="tag">' + esc(s.sub) + '</span>' : s.src === "bounceSignals" ? '<span class="tag">' + s.ema + ' EMA respected ' + s.run + ' sessions, ' + s.touches + ' touches, ' + pct(s.dist, 1) + ' from it</span>' : s.src === "highsSignals" ? '<span class="tag">All-time high ' + fp(s.ath) + ', ' + pct(s.offAth, 1) + '</span>' : "") + '<span class="spacer"></span><button type="button" class="linkbtn" data-go="Signals">Open in Signals →</button></div>';
   h += '<div class="chartwrap"><div class="lwbox" id="dr-chart"></div><canvas class="ovl" id="dr-ovl"></canvas></div><div class="legend"><span><i style="border-color:#2962FF"></i>EMA 10</span><span><i style="border-color:#F23645"></i>EMA 20</span><span><i style="border-color:#FF9800"></i>EMA 50</span><span><i style="border-color:#0ea5e9"></i>volume 30-day avg</span><span class="dim"><kbd>Shift</kbd> drag to measure</span></div>'
     + '<div class="row" style="gap:12px"><a class="ext" href="' + tvUrl(t) + '" target="_blank" rel="noopener">TradingView ↗</a></div>';
   $("drawer").innerHTML = h; $("drawer").classList.add("open"); $("scrim").hidden = false;
   getPx(t).then(function(P){
-    makeChart("dr", $("dr-chart"), $("dr-ovl"), P, {k:s ? idxOn(P, s.firedDate || P.d[P.n - 1]) : null, kLabel:"signal", after:5, range:"6m"});
+    var bnc = s && s.src === "bounceSignals";
+    var st = makeChart("dr", $("dr-chart"), $("dr-ovl"), P, {k:s ? idxOn(P, bnc ? s.start : (s.firedDate || P.d[P.n - 1])) : null,
+      kLabel:bnc ? "move start" : s && s.src === "highsSignals" ? "new high" : "signal", after:5, range:"6m"});
+    if (st && bnc){
+      var ev = s.ema === 20 ? P.e20 : P.e50, k0 = idxOn(P, s.start);
+      st.chart.addLineSeries({color:s.ema === 20 ? "#F23645" : "#FF9800", lineWidth:3, priceLineVisible:false, lastValueVisible:false, crosshairMarkerVisible:false})
+        .setData(P.d.map(function(d, i){ return i < k0 || ev[i] == null ? null : {time:d, value:ev[i]}; }).filter(Boolean));
+      st.chart.timeScale().setVisibleRange({from:P.d[Math.max(0, k0 - 40)], to:P.d[P.n - 1]});
+    }
+    if (st && s && s.src === "highsSignals" && s.ath) st.cs.createPriceLine({price:s.ath, color:"#ca8a04", lineWidth:1, lineStyle:2, axisLabelVisible:true, title:"all-time high"});
   }).catch(function(){ $("dr-chart").innerHTML = '<p class="dim" style="padding:16px">No price file for ' + esc(t) + '.</p>'; });
 }
 function closeDrawer(){ $("drawer").classList.remove("open"); $("scrim").hidden = true; killChart("dr"); }
@@ -974,6 +1010,7 @@ function closeDrawer(){ $("drawer").classList.remove("open"); $("scrim").hidden 
 document.addEventListener("click", function(ev){
   var t = ev.target;
   var a = t.closest("[data-act]"); if (a){ if (a.dataset.act === "close") closeDrawer(); return; }
+  var ht = t.closest("[data-htab]"); if (ht){ HTAB = ht.dataset.htab; try { localStorage.setItem("home-sig-tab", HTAB); } catch (x) {} var el = $("newsigs"); if (el){ el.outerHTML = newSigs(); drawSigSparks($("newsigs")); } return; }
   var tk = t.closest("[data-tk]"); if (tk){ openDrawer(tk.dataset.tk, tk.dataset.kind, tk.dataset.src); return; }
   var g = t.closest("[data-go]"); if (g){ hubGo(g.dataset.go); return; }
   if (t.id === "scrim") closeDrawer();
